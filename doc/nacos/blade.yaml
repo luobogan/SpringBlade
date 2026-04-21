@@ -86,14 +86,14 @@ swagger:
 blade:
   auth:
     #使用 @org.springblade.test.Sm2KeyGenerator 获取,用于国密sm2验签,需和前端保持一致
-    public-key: ${BLADE_OAUTH2_PUBLIC_KEY}
+    public-key: 04ac02fe94f4cac62a57a2335cc96a075a1ee41cea3b211bd7acbb9cf579b7e601b9ece2b0cfab64dca268b6942bf556af67cfe226a5cf28d936039c43e4bb12c1
     #使用 @org.springblade.test.Sm2KeyGenerator 获取,用于国密sm2解密,前端无需配置
-    private-key: ${BLADE_OAUTH2_PRIVATE_KEY}
+    private-key: 00ac7fde22ecf5a764ea69b7ca8205383d98e7459e765bc1bd092f62c5f85267f9
   token:
     #使用 @org.springblade.test.SignKeyGenerator 获取
-    sign-key: ${BLADE_TOKEN_SIGN_KEY}
+    sign-key: qHJlcyzQ7YoGmHA7wZzvioTKYzYMaugG
     #使用 @org.springblade.test.SignKeyGenerator 获取
-    aes-key: ${BLADE_TOKEN_CRYPTO_KEY}
+    aes-key: hJtodEd1qzJX9UOB9RBFdWk9KrAb59fH
   xss:
     enabled: true
     skip-url:

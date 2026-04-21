@@ -64,6 +64,10 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-core-launch</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

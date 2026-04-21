@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: blade-mall
+
+---
+
+spring:
+  profiles:
+    active: dev

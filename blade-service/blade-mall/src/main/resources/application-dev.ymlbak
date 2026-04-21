@@ -1,0 +1,40 @@
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/blade?useSSL=false&useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    password:
+    database: 0
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+      config:
+        server-addr: 127.0.0.1:8848
+        file-extension: yml
+        shared-configs:
+          - data-id: blade-common.yml
+            refresh: true
+
+# 微信支付配置
+wechat:
+  pay:
+    app-id: your-app-id
+    mch-id: your-mch-id
+    private-key-path: classpath:cert/apiclient_key.pem
+    certificate-path: classpath:cert/apiclient_cert.pem
+    notify-url: http://your-domain/api/mall/pay/wechat/callback
+
+# 上传配置
+blade:
+  oss:
+    enable: true
+    type: local
+    local:
+      domain: http://localhost:8800
+      prefix: uploads
+      path: ./uploads

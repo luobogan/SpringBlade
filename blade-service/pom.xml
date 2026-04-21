@@ -16,10 +16,11 @@
     <description>SpringBlade 微服务集合</description>
 
     <modules>
+        <module>blade-demo</module>
         <module>blade-desk</module>
         <module>blade-log</module>
         <module>blade-system</module>
-        <module>blade-demo</module>
+        <module>blade-mall</module>
     </modules>
 
     <dependencies>

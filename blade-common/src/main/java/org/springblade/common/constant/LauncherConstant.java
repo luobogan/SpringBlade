@@ -22,7 +22,7 @@ public interface LauncherConstant {
 	/**
 	 * nacos namespace id
 	 */
-	String NACOS_NAMESPACE = "f447a694-519a-4255-95f9-bcbb5a5d636";
+	String NACOS_NAMESPACE = "1a1968dd-c688-4eae-8f3e-b41bb111b3b6";
 
 	/**
 	 * nacos dev 地址
@@ -42,12 +42,12 @@ public interface LauncherConstant {
 	/**
 	 * sentinel dev 地址
 	 */
-	String SENTINEL_DEV_ADDR = "127.0.0.1:8858";
+	String SENTINEL_DEV_ADDR = "127.0.0.1:80";
 
 	/**
 	 * sentinel prod 地址
 	 */
-	String SENTINEL_PROD_ADDR = "172.30.0.58:8858";
+	String SENTINEL_PROD_ADDR = "172.30.0.58:80";
 
 	/**
 	 * sentinel test 地址

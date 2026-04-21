@@ -78,6 +78,11 @@
                 <artifactId>blade-demo-api</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>org.springblade</groupId>
+                <artifactId>blade-mall-api</artifactId>
+                <version>${revision}</version>
+            </dependency>
             <!-- dynamic-datasource -->
             <dependency>
                 <groupId>com.baomidou</groupId>

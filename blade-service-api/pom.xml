@@ -15,12 +15,13 @@
     <description>SpringBlade 微服务API集合</description>
 
     <modules>
+        <module>blade-demo-api</module>
         <module>blade-desk-api</module>
         <module>blade-dict-api</module>
+        <module>blade-scope-api</module>
         <module>blade-system-api</module>
         <module>blade-user-api</module>
-        <module>blade-scope-api</module>
-        <module>blade-demo-api</module>
+        <module>blade-mall-api</module>
     </modules>
 
     <dependencies>

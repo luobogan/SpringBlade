@@ -5,7 +5,7 @@ spring:
       ##redis 单机环境配置
       host: 127.0.0.1
       port: 6379
-      password:
+      password: 123456
       database: 0
       ssl:
         enabled: false
@@ -21,4 +21,4 @@ blade:
     dev:
       url: jdbc:mysql://localhost:3306/blade?useSSL=false&useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&tinyInt1isBit=false&allowMultiQueries=true&serverTimezone=GMT%2B8
       username: root
-      password: root
+      password: 123456
