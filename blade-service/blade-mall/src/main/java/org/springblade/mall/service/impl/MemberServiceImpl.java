@@ -21,6 +21,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * <p>
@@ -32,6 +34,8 @@ import java.util.List;
  */
 @Service
 public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAccount> implements MemberService {
+
+    private static final Logger log = LoggerFactory.getLogger(MemberServiceImpl.class);
 
     @Autowired
     private MemberLevelMapper memberLevelMapper;
@@ -89,18 +93,18 @@ public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAc
 
         if (!levels.isEmpty()) {
             MemberLevel targetLevel = levels.get(0);
-            
+
             // 如果等级发生变化，更新等级
             if (!targetLevel.getId().equals(memberAccount.getLevelId())) {
                 memberAccount.setLevelId(targetLevel.getId());
-                
+
                 // 如果等级不是永久有效的，设置有效期
                 if (targetLevel.getDurationDays() > 0) {
                     LocalDateTime now = LocalDateTime.now();
                     memberAccount.setMembershipStart(now);
                     memberAccount.setMembershipEnd(now.plusDays(targetLevel.getDurationDays()));
                 }
-                
+
                 this.updateById(memberAccount);
             }
         }
@@ -219,7 +223,7 @@ public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAc
         }
 
         LocalDate today = LocalDate.now();
-        
+
         // 检查今天是否已签到
         if (today.equals(memberAccount.getLastCheckin())) {
             throw new RuntimeException("今天已经签到过了");
@@ -227,7 +231,7 @@ public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAc
 
         // 更新签到信息
         memberAccount.setLastCheckin(today);
-        
+
         // 判断是否连续签到
         LocalDate yesterday = today.minusDays(1);
         if (yesterday.equals(memberAccount.getLastCheckin())) {
@@ -274,7 +278,7 @@ public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAc
     @Transactional(rollbackFor = Exception.class)
     public void checkExpiredMembers() {
         LocalDateTime now = LocalDateTime.now();
-        
+
         // 查询过期的会员
         List<MemberAccount> expiredAccounts = this.list(
             new QueryWrapper<MemberAccount>()
@@ -288,7 +292,7 @@ public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAc
             this.updateById(account);
 
             // TODO: 可以发送过期通知
-            System.out.println(String.format("用户 %d 的会员已过期", account.getUserId()));
+            log.info("用户 {} 的会员已过期", account.getUserId());
         }
     }
 
@@ -310,7 +314,7 @@ public class MemberServiceImpl extends ServiceImpl<MemberAccountMapper, MemberAc
         memberAccount.setContinuousCheckinDays(0);
         memberAccount.setCreatedAt(LocalDateTime.now());
         memberAccount.setUpdatedAt(LocalDateTime.now());
-        
+
         this.save(memberAccount);
         return memberAccount;
     }

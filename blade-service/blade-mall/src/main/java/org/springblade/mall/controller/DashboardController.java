@@ -17,6 +17,8 @@ import org.springblade.system.user.feign.IUserClient;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 管理员仪表盘控制器
@@ -24,6 +26,8 @@ import java.util.Map;
 @RestController
 @RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/dashboard")
 public class DashboardController extends BladeController {
+
+    private static final Logger log = LoggerFactory.getLogger(DashboardController.class);
 
     @Autowired
     private ProductMapper productMapper;
@@ -41,19 +45,19 @@ public class DashboardController extends BladeController {
     @GetMapping("/stats")
     @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
     public ResponseEntity<R<Map<String, Object>>> getStats() {
-        System.out.println("=== DashboardController.getStats() 被调用 ===");
+        log.info("=== DashboardController.getStats() 被调用 ===");
         try {
             Map<String, Object> stats = new HashMap<>();
 
             // 商品总数
             Long productCount = productMapper.selectCount(null);
             stats.put("productCount", productCount);
-            System.out.println("商品总数: " + productCount);
+            log.info("商品总数: {}", productCount);
 
             // 订单总数（使用自定义方法避免 MySQL 关键字问题）
             Long orderCount = orderMapper.countAllOrders();
             stats.put("orderCount", orderCount);
-            System.out.println("订单总数: " + orderCount);
+            log.info("订单总数: {}", orderCount);
 
             // 用户总数
             // 注意：由于 IUserClient 接口暂未提供获取用户总数的方法，
@@ -62,10 +66,10 @@ public class DashboardController extends BladeController {
             try {
                 userCount = orderMapper.countDistinctUsers();
             } catch (Exception e) {
-                System.out.println("获取用户总数失败: " + e.getMessage());
+                log.error("获取用户总数失败: {}", e.getMessage());
             }
             stats.put("userCount", userCount);
-            System.out.println("用户总数: " + userCount);
+            log.info("用户总数: {}", userCount);
 
             // 销售总额（这里简单计算，实际应该从订单表统计）
             stats.put("totalSales", 0.0);
@@ -78,10 +82,10 @@ public class DashboardController extends BladeController {
             List<Map<String, Object>> topProducts = List.of();
             stats.put("topProducts", topProducts);
 
-            System.out.println("返回统计数据");
+            log.info("返回统计数据");
             return ResponseEntity.ok(R.data(stats));
         } catch (Exception e) {
-            System.out.println("getStats 异常: " + e.getMessage());
+            log.error("getStats 异常: {}", e.getMessage());
             e.printStackTrace();
             return ResponseEntity.badRequest().body(R.fail(e.getMessage()));
         }

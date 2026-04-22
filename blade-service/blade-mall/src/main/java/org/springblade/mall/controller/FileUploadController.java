@@ -13,6 +13,8 @@ import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 文件上传控制器
@@ -20,6 +22,8 @@ import java.util.UUID;
 @RestController
 @RequestMapping(AppConstant.APPLICATION_MALL_NAME)
 public class FileUploadController extends BladeController {
+
+    private static final Logger log = LoggerFactory.getLogger(FileUploadController.class);
 
     @Value("${blade.prop.upload-path:uploads}")
     private String uploadPath;
@@ -43,7 +47,7 @@ public class FileUploadController extends BladeController {
             uploadDir.mkdirs();
         }
 
-        System.out.println("Upload directory: " + uploadPath);
+        log.info("Upload directory: {}", uploadPath);
     }
 
     /**
@@ -52,9 +56,9 @@ public class FileUploadController extends BladeController {
     @PostMapping("/admin/upload/image")
     public ResponseEntity<R<String>> uploadImage(@RequestParam("file") MultipartFile file, @RequestParam(value = "type", defaultValue = "product") String type) {
         try {
-            System.out.println("Upload path: " + uploadPath);
-            System.out.println("Upload domain: " + uploadDomain);
-            System.out.println("Upload type: " + type);
+            log.debug("Upload path: {}", uploadPath);
+            log.debug("Upload domain: {}", uploadDomain);
+            log.debug("Upload type: {}", type);
 
             // 检查文件是否为空
             if (file.isEmpty()) {
@@ -63,22 +67,22 @@ public class FileUploadController extends BladeController {
 
             // 检查文件类型
             String contentType = file.getContentType();
-            System.out.println("File content type: " + contentType);
+            log.debug("File content type: {}", contentType);
             // 检查文件扩展名
             String originalFilename = file.getOriginalFilename();
-            System.out.println("Original filename: " + originalFilename);
+            log.debug("Original filename: {}", originalFilename);
             if (originalFilename == null || !originalFilename.contains(".")) {
                 return ResponseEntity.badRequest().body(R.fail("文件名无效"));
             }
             String fileExtension = originalFilename.toLowerCase().substring(originalFilename.lastIndexOf('.'));
-            System.out.println("File extension: " + fileExtension);
+            log.debug("File extension: {}", fileExtension);
 
             // 允许的文件类型
             boolean isAllowedExtension = ".jpg,.jpeg,.png,.ico".contains(fileExtension);
             boolean isAllowedContentType = contentType != null && (contentType.startsWith("image/") || "image/x-icon".equals(contentType) || "image/vnd.microsoft.icon".equals(contentType));
 
-            System.out.println("Is allowed extension: " + isAllowedExtension);
-            System.out.println("Is allowed content type: " + isAllowedContentType);
+            log.debug("Is allowed extension: {}", isAllowedExtension);
+            log.debug("Is allowed content type: {}", isAllowedContentType);
 
             if (!isAllowedExtension && !isAllowedContentType) {
                 return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
@@ -86,27 +90,27 @@ public class FileUploadController extends BladeController {
 
             // 确保上传目录存在
             File uploadDir = new File(uploadPath + File.separator + type);
-            System.out.println("Upload directory: " + uploadDir.getAbsolutePath());
+            log.debug("Upload directory: {}", uploadDir.getAbsolutePath());
             if (!uploadDir.exists()) {
                 boolean created = uploadDir.mkdirs();
-                System.out.println("Directory created: " + created);
+                log.debug("Directory created: {}", created);
             }
 
             // 生成唯一文件名
-            System.out.println("Original filename: " + originalFilename);
+            log.debug("Original filename: {}", originalFilename);
             String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
             String fileName = UUID.randomUUID().toString() + extension;
-            System.out.println("Generated filename: " + fileName);
+            log.debug("Generated filename: {}", fileName);
 
             // 保存文件
             File dest = new File(uploadDir, fileName);
-            System.out.println("Destination file: " + dest.getAbsolutePath());
+            log.debug("Destination file: {}", dest.getAbsolutePath());
             file.transferTo(dest);
-            System.out.println("File transferred successfully");
+            log.info("File transferred successfully");
 
             // 返回文件URL（使用相对路径）
             String fileUrl = "/uploads/" + type + "/" + fileName;
-            System.out.println("File URL: " + fileUrl);
+            log.info("File URL: {}", fileUrl);
             return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
 
         } catch (Exception e) {
@@ -121,7 +125,7 @@ public class FileUploadController extends BladeController {
     @PostMapping("/admin/upload/file")
     public ResponseEntity<R<String>> uploadFile(@RequestParam("file") MultipartFile file) {
         try {
-            System.out.println("Upload path: " + uploadPath);
+            log.debug("Upload path: {}", uploadPath);
 
             // 检查文件是否为空
             if (file.isEmpty()) {
@@ -177,8 +181,8 @@ public class FileUploadController extends BladeController {
     @PostMapping("/upload/single")
     public ResponseEntity<R<String>> uploadSingleFile(@RequestParam("file") MultipartFile file, @RequestParam("type") String type) {
         try {
-            System.out.println("Upload path: " + uploadPath);
-            System.out.println("File type: " + type);
+            log.debug("Upload path: {}", uploadPath);
+            log.debug("File type: {}", type);
 
             // 检查文件是否为空
             if (file.isEmpty()) {
@@ -187,7 +191,7 @@ public class FileUploadController extends BladeController {
 
             // 检查文件类型
             String contentType = file.getContentType();
-            System.out.println("File content type: " + contentType);
+            log.debug("File content type: {}", contentType);
             if (contentType == null) {
                 return ResponseEntity.badRequest().body(R.fail("文件类型无效"));
             }
@@ -207,31 +211,31 @@ public class FileUploadController extends BladeController {
 
             // 确保上传目录存在
             File uploadDir = new File(uploadPath);
-            System.out.println("Upload directory: " + uploadDir.getAbsolutePath());
+            log.debug("Upload directory: {}", uploadDir.getAbsolutePath());
             if (!uploadDir.exists()) {
                 boolean created = uploadDir.mkdirs();
-                System.out.println("Directory created: " + created);
+                log.debug("Directory created: {}", created);
             }
 
             // 生成唯一文件名
             String originalFilename = file.getOriginalFilename();
-            System.out.println("Original filename: " + originalFilename);
+            log.debug("Original filename: {}", originalFilename);
             if (originalFilename == null || !originalFilename.contains(".")) {
                 return ResponseEntity.badRequest().body(R.fail("文件名无效"));
             }
             String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
             String fileName = UUID.randomUUID().toString() + extension;
-            System.out.println("Generated filename: " + fileName);
+            log.debug("Generated filename: {}", fileName);
 
             // 保存文件
             File dest = new File(uploadDir, fileName);
-            System.out.println("Destination file: " + dest.getAbsolutePath());
+            log.debug("Destination file: {}", dest.getAbsolutePath());
             file.transferTo(dest);
-            System.out.println("File transferred successfully");
+            log.info("File transferred successfully");
 
             // 返回文件URL（使用相对路径）
             String fileUrl = "/uploads/" + fileName;
-            System.out.println("File URL: " + fileUrl);
+            log.info("File URL: {}", fileUrl);
             return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
 
         } catch (Exception e) {

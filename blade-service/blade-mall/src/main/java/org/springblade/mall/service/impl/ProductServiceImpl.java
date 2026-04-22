@@ -39,12 +39,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 商品服务实现类 - 增强版
  */
 @Service
 public class ProductServiceImpl implements ProductService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductServiceImpl.class);
 
     @Autowired
     private ProductMapper productMapper;
@@ -85,7 +89,7 @@ public class ProductServiceImpl implements ProductService {
     @Autowired
     private ProductSpecValueMapper productSpecValueMapper;
 
-    @Value("${blade.prop.upload-domain:http://localhost:8085}")
+    @Value("${blade.prop.upload-domain:http://localhost:80}")
     private String uploadDomain;
 
     @Override
@@ -127,14 +131,14 @@ public class ProductServiceImpl implements ProductService {
         product.setTenantId(tenantId);
         // 调试：检查富文本内容
         if (product.getDetailDescription() != null) {
-            System.out.println("=== 准备保存富文本内容调试 ===");
-            System.out.println("保存前 detailDescription 类型: " + product.getDetailDescription().getClass().getName());
-            System.out.println("保存前 detailDescription 长度: " + product.getDetailDescription().length());
-            System.out.println("保存前 detailDescription 前200字符: " + product.getDetailDescription().substring(0, Math.min(200, product.getDetailDescription().length())));
-            System.out.println("保存前 detailDescription 是否包含 <html: " + product.getDetailDescription().contains("<html"));
-            System.out.println("保存前 detailDescription 是否包含 <body: " + product.getDetailDescription().contains("<body"));
-            System.out.println("保存前 detailDescription 是否包含 <p: " + product.getDetailDescription().contains("<p"));
-            System.out.println("保存前 detailDescription 是否包含 <div: " + product.getDetailDescription().contains("<div"));
+            log.debug("=== 准备保存富文本内容调试 ===");
+            log.debug("保存前 detailDescription 类型: {}", product.getDetailDescription().getClass().getName());
+            log.debug("保存前 detailDescription 长度: {}", product.getDetailDescription().length());
+            log.debug("保存前 detailDescription 前200字符: {}", product.getDetailDescription().substring(0, Math.min(200, product.getDetailDescription().length())));
+            log.debug("保存前 detailDescription 是否包含 <html: {}", product.getDetailDescription().contains("<html"));
+            log.debug("保存前 detailDescription 是否包含 <body: {}", product.getDetailDescription().contains("<body"));
+            log.debug("保存前 detailDescription 是否包含 <p: {}", product.getDetailDescription().contains("<p"));
+            log.debug("保存前 detailDescription 是否包含 <div: {}", product.getDetailDescription().contains("<div"));
         }
         product.setIsNew(productDTO.getIsNew() != null ? productDTO.getIsNew() : 0);
         product.setIsHot(productDTO.getIsHot() != null ? productDTO.getIsHot() : 0);
@@ -144,11 +148,11 @@ public class ProductServiceImpl implements ProductService {
         product.setUpdatedAt(LocalDateTime.now());
 
         // 保存商品
-        System.out.println("=== 准备保存商品 ===");
-        System.out.println("商品对象: " + product);
+        log.info("=== 准备保存商品 ===");
+        log.info("商品对象: {}", product);
         productMapper.insert(product);
-        System.out.println("=== 商品保存成功 ===");
-        System.out.println("商品ID: " + product.getId());
+        log.info("=== 商品保存成功 ===");
+        log.info("商品ID: {}", product.getId());
 
         // 保存商品图片
         saveProductImages(product.getId(), productDTO.getImages());
@@ -327,22 +331,22 @@ public class ProductServiceImpl implements ProductService {
         Product product = productMapper.selectOne(queryWrapper);
         if (product == null) {
             // 调试信息
-            System.out.println("=== 商品查询调试 ===");
-            System.out.println("查询商品ID: " + id);
-            System.out.println("当前租户ID: " + SecureUtil.getTenantId());
-            System.out.println("商品不存在");
+            log.warn("=== 商品查询调试 ===");
+            log.warn("查询商品ID: {}", id);
+            log.warn("当前租户ID: {}", SecureUtil.getTenantId());
+            log.warn("商品不存在");
             throw new RuntimeException("商品不存在");
         }
         // 调试：检查富文本内容
         if (product.getDetailDescription() != null) {
-            System.out.println("=== 数据库富文本内容调试 ===");
-            System.out.println("数据库中 detailDescription 类型: " + product.getDetailDescription().getClass().getName());
-            System.out.println("数据库中 detailDescription 长度: " + product.getDetailDescription().length());
-            System.out.println("数据库中 detailDescription 前200字符: " + product.getDetailDescription().substring(0, Math.min(200, product.getDetailDescription().length())));
-            System.out.println("数据库中 detailDescription 是否包含 <html: " + product.getDetailDescription().contains("<html"));
-            System.out.println("数据库中 detailDescription 是否包含 <body: " + product.getDetailDescription().contains("<body"));
-            System.out.println("数据库中 detailDescription 是否包含 <p: " + product.getDetailDescription().contains("<p"));
-            System.out.println("数据库中 detailDescription 是否包含 <div: " + product.getDetailDescription().contains("<div"));
+            log.debug("=== 数据库富文本内容调试 ===");
+            log.debug("数据库中 detailDescription 类型: {}", product.getDetailDescription().getClass().getName());
+            log.debug("数据库中 detailDescription 长度: {}", product.getDetailDescription().length());
+            log.debug("数据库中 detailDescription 前200字符: {}", product.getDetailDescription().substring(0, Math.min(200, product.getDetailDescription().length())));
+            log.debug("数据库中 detailDescription 是否包含 <html: {}", product.getDetailDescription().contains("<html"));
+            log.debug("数据库中 detailDescription 是否包含 <body: {}", product.getDetailDescription().contains("<body"));
+            log.debug("数据库中 detailDescription 是否包含 <p: {}", product.getDetailDescription().contains("<p"));
+            log.debug("数据库中 detailDescription 是否包含 <div: {}", product.getDetailDescription().contains("<div"));
         }
         return convertToVO(product);
     }

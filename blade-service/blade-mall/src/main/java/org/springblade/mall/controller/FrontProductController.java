@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 前端商品控制器 - 增强版
@@ -33,6 +35,8 @@ import java.util.Map;
 @RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/front/products")
 @Tag(name = "前端商品管理", description = "前端商品管理")
 public class FrontProductController extends BladeController {
+
+    private static final Logger log = LoggerFactory.getLogger(FrontProductController.class);
 
     private ProductService productService;
 
@@ -139,9 +143,9 @@ public class FrontProductController extends BladeController {
         try {
             HttpServletRequest request = WebUtil.getRequest();
             String tenantIdFromHeader = request != null ? request.getHeader("Tenant-Id") : null;
-            System.out.println("=== FrontProductController.getProductById 调试 ===");
-            System.out.println("商品ID: " + id);
-            System.out.println("请求头中的Tenant-Id: " + tenantIdFromHeader);
+            log.debug("=== FrontProductController.getProductById 调试 ===");
+            log.debug("商品ID: {}", id);
+            log.debug("请求头中的Tenant-Id: {}", tenantIdFromHeader);
             ProductVO productVO = productService.getProductById(id);
             return R.data(productVO);
         } catch (Exception e) {

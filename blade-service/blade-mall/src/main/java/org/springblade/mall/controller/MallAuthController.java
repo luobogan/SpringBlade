@@ -46,6 +46,8 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 商城认证控制器
@@ -57,6 +59,8 @@ import java.util.Map;
 @Tag(name = "商城认证", description = "商城认证接口")
 @RequiredArgsConstructor
 public class MallAuthController {
+
+    private static final Logger log = LoggerFactory.getLogger(MallAuthController.class);
 
     private final IUserClient userClient;
     private final WeChatService weChatService;
@@ -115,7 +119,7 @@ public class MallAuthController {
                 if (jsonNode.has("phoneNumber")) {
                     String phoneNumber = jsonNode.get("phoneNumber").asText();
                     phoneInfo.put("phoneNumber", phoneNumber);
-                    System.out.println("解析到微信手机号：" + phoneNumber);
+                    log.info("解析到微信手机号：{}", phoneNumber);
                 } else {
                     throw new RuntimeException("解密数据中未找到手机号");
                 }
@@ -143,7 +147,7 @@ public class MallAuthController {
             }
 
             String openId = session.getOpenid();
-            System.out.println("微信登录成功，获取到openId: " + openId);
+            log.info("微信登录成功，获取到openId: {}", openId);
 
             // 2. 检查用户是否存在
             User user = checkThirdPartyUser(openId);
@@ -235,9 +239,9 @@ public class MallAuthController {
         try {
             // 获取当前登录用户 ID
             Long userId = SecureUtil.getUserId();
-            System.out.println("getCurrentUser - userId from token: " + userId);
+            log.info("getCurrentUser - userId from token: {}", userId);
             if (userId == null || userId == -1) {
-                System.out.println("getCurrentUser - userId is null or -1");
+                log.warn("getCurrentUser - userId is null or -1");
                 return R.fail("未登录");
             }
 
@@ -248,7 +252,7 @@ public class MallAuthController {
             }
 
             User user = userInfoResult.getData().getUser();
-            System.out.println("getCurrentUser - user from db: " + (user != null ? user.getId() : "null"));
+            log.info("getCurrentUser - user from db: {}", user != null ? user.getId() : "null");
 
             // 构建返回数据
             Map<String, Object> result = new HashMap<>();

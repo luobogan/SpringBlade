@@ -18,12 +18,16 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 商品关联服务实现类
  */
 @Service
 public class ProductRelationServiceImpl implements ProductRelationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductRelationServiceImpl.class);
 
     @Autowired
     private ProductRelationMapper productRelationMapper;
@@ -90,7 +94,7 @@ public class ProductRelationServiceImpl implements ProductRelationService {
                 result.add(vo);
             } catch (Exception e) {
                 // 跳过已存在的关联
-                System.out.println("跳过已存在的关联: " + e.getMessage());
+                log.warn("跳过已存在的关联: {}", e.getMessage());
             }
         }
         return result;

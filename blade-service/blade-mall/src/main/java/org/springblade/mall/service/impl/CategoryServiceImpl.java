@@ -18,12 +18,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 分类服务实现类
  */
 @Service
 public class CategoryServiceImpl implements CategoryService {
+
+    private static final Logger log = LoggerFactory.getLogger(CategoryServiceImpl.class);
 
     @Autowired
     private MallCategoryMapper categoryMapper;
@@ -191,18 +195,18 @@ public class CategoryServiceImpl implements CategoryService {
         String tenantId = SecureUtil.getTenantId();
         // 如果租户ID为空，抛出异常
         if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            System.out.println("=== 获取所有分类 ===");
-            System.out.println("租户ID为空，抛出异常");
+            log.warn("=== 获取所有分类 ===");
+            log.warn("租户ID为空，抛出异常");
             throw new RuntimeException("租户ID不能为空");
         }
 
-        System.out.println("=== 获取所有分类 ===");
-        System.out.println("使用的租户ID: " + tenantId);
+        log.info("=== 获取所有分类 ===");
+        log.info("使用的租户ID: {}", tenantId);
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         List<Category> categories = categoryMapper.selectList(queryWrapper);
-        System.out.println("获取到的分类数量: " + categories.size());
+        log.info("获取到的分类数量: {}", categories.size());
         for (Category category : categories) {
-            System.out.println("分类ID: " + category.getId() + ", 名称: " + category.getName() + ", 父分类ID: " + category.getParentId());
+            log.info("分类ID: {}, 名称: {}, 父分类ID: {}", category.getId(), category.getName(), category.getParentId());
         }
         return buildCategoryTree(categories);
     }
@@ -217,18 +221,18 @@ public class CategoryServiceImpl implements CategoryService {
         String tenantId = SecureUtil.getTenantId();
         // 如果租户ID为空，抛出异常
         if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            System.out.println("=== 获取所有分类（包括禁用状态）===");
-            System.out.println("租户ID为空，抛出异常");
+            log.warn("=== 获取所有分类（包括禁用状态）===");
+            log.warn("租户ID为空，抛出异常");
             throw new RuntimeException("租户ID不能为空");
         }
 
-        System.out.println("=== 获取所有分类（包括禁用状态）===");
-        System.out.println("使用的租户ID: " + tenantId);
+        log.info("=== 获取所有分类（包括禁用状态）===");
+        log.info("使用的租户ID: {}", tenantId);
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         List<Category> categories = categoryMapper.selectList(queryWrapper);
-        System.out.println("获取到的分类数量: " + categories.size());
+        log.info("获取到的分类数量: {}", categories.size());
         for (Category category : categories) {
-            System.out.println("分类ID: " + category.getId() + ", 名称: " + category.getName() + ", 父分类ID: " + category.getParentId());
+            log.info("分类ID: {}, 名称: {}, 父分类ID: {}", category.getId(), category.getName(), category.getParentId());
         }
         return buildCategoryTree(categories);
     }

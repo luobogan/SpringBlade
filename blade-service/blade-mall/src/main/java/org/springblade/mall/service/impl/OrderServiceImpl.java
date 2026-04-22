@@ -1,6 +1,7 @@
 package org.springblade.mall.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.springblade.core.tool.api.R;
 import org.springblade.mall.dto.OrderDTO;
 import org.springblade.mall.dto.OrderItemDTO;
 import org.springblade.mall.entity.*;
@@ -11,6 +12,8 @@ import org.springblade.mall.service.ProductService;
 import org.springblade.mall.vo.AddressVO;
 import org.springblade.mall.vo.OrderItemVO;
 import org.springblade.mall.vo.OrderVO;
+import org.springblade.system.user.entity.User;
+import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -81,8 +84,8 @@ public class OrderServiceImpl implements OrderService {
         }
 
         // 检查用户是否存在
-        org.springblade.core.tool.api.R<org.springblade.system.user.entity.UserInfo> userResult = userClient.userInfo(orderDTO.getUserId());
-        if (!userResult.isSuccess() || userResult.getData() == null || userResult.getData().getUser() == null) {
+        R<UserInfo> userResult = userClient.userInfo(orderDTO.getUserId());
+        if (!userResult.isSuccess() || userResult.getData() == null) {
             throw new RuntimeException("用户不存在");
         }
 
@@ -164,23 +167,23 @@ public class OrderServiceImpl implements OrderService {
             productService.updateProductStock(itemDTO.getProductId());
 
             // 计算金额
-            System.out.println("=== 订单商品信息 ===");
-            System.out.println("商品ID: " + itemDTO.getProductId());
-            System.out.println("商品名称: " + product.getName());
-            System.out.println("前端传递的价格: " + itemDTO.getPrice());
-            System.out.println("数据库中的价格: " + product.getPrice());
-            System.out.println("购买数量: " + itemDTO.getQuantity());
+            log.info("=== 订单商品信息 ===");
+            log.info("商品ID: {}", itemDTO.getProductId());
+            log.info("商品名称: {}", product.getName());
+            log.info("前端传递的价格: {}", itemDTO.getPrice());
+            log.info("数据库中的价格: {}", product.getPrice());
+            log.info("购买数量: {}", itemDTO.getQuantity());
 
             BigDecimal itemPrice = itemDTO.getPrice() != null ? itemDTO.getPrice() : product.getPrice();
-            System.out.println("使用的价格: " + itemPrice);
-            System.out.println("商品小计: " + itemPrice.multiply(BigDecimal.valueOf(itemDTO.getQuantity())));
+            log.info("使用的价格: {}", itemPrice);
+            log.info("商品小计: {}", itemPrice.multiply(BigDecimal.valueOf(itemDTO.getQuantity())));
 
             totalAmount = totalAmount.add(itemPrice.multiply(BigDecimal.valueOf(itemDTO.getQuantity())));
-            System.out.println("当前累计总金额: " + totalAmount);
+            log.info("当前累计总金额: {}", totalAmount);
         }
 
-        System.out.println("=== 订单金额计算完成 ===");
-        System.out.println("订单总金额: " + totalAmount);
+        log.info("=== 订单金额计算完成 ===");
+        log.info("订单总金额: {}", totalAmount);
 
         // 处理优惠券
         if (orderDTO.getCouponId() != null) {
@@ -906,9 +909,9 @@ public class OrderServiceImpl implements OrderService {
 
         // 获取用户信息
         if (order.getUserId() != null) {
-            org.springblade.core.tool.api.R<org.springblade.system.user.entity.UserInfo> userResult = userClient.userInfo(order.getUserId());
+            R<UserInfo> userResult = userClient.userInfo(order.getUserId());
             if (userResult.isSuccess() && userResult.getData() != null && userResult.getData().getUser() != null) {
-                org.springblade.system.user.entity.User user = userResult.getData().getUser();
+                User user = userResult.getData().getUser();
                 orderVO.setUserName(user.getName() != null ? user.getName() : user.getAccount());
             }
         }
