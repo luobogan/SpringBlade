@@ -203,7 +203,6 @@ public class ProductServiceImpl implements ProductService {
         // 获取商品
         QueryWrapper<Product> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("id", id);
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
         Product product = productMapper.selectOne(queryWrapper);
         if (product == null) {
             throw new RuntimeException("商品不存在");
@@ -287,7 +286,6 @@ public class ProductServiceImpl implements ProductService {
         // 检查商品是否存在
         QueryWrapper<Product> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("id", id);
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
         Product product = productMapper.selectOne(queryWrapper);
         if (product == null) {
             throw new RuntimeException("商品不存在");
@@ -325,8 +323,6 @@ public class ProductServiceImpl implements ProductService {
         QueryWrapper<Product> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("id", id);
         queryWrapper.eq("is_deleted", 0);
-        // 添加租户ID条件
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
         // 移除status=1的限制，允许编辑任何状态的商品
         Product product = productMapper.selectOne(queryWrapper);
         if (product == null) {
@@ -440,8 +436,6 @@ public class ProductServiceImpl implements ProductService {
         queryWrapper.eq("status", 1);
         queryWrapper.eq("is_new", 1);
         queryWrapper.eq("is_deleted", 0);
-        // 添加租户ID条件
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
 
         // 添加分类状态筛选：只返回所属分类处于启用状态的产品
         QueryWrapper<Category> categoryQuery = new QueryWrapper<>();
@@ -485,8 +479,6 @@ public class ProductServiceImpl implements ProductService {
         queryWrapper.in("category_id", activeCategoryIds);
         queryWrapper.eq("status", 1);
         queryWrapper.eq("is_deleted", 0);
-        // 添加租户ID条件
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
         List<Product> products = productMapper.selectList(queryWrapper);
         return products.stream()
                 .map(this::convertToVO)
@@ -1249,8 +1241,6 @@ public class ProductServiceImpl implements ProductService {
 
         QueryWrapper<Product> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("is_deleted", 0);
-        // 添加租户ID条件
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
 
         // 只在status不为null时添加状态过滤
         // 对于admin端，status为null时查询所有状态的商品
@@ -1375,8 +1365,6 @@ public class ProductServiceImpl implements ProductService {
         queryWrapper.eq("status", 1);
         queryWrapper.eq("is_hot", 1);
         queryWrapper.eq("is_deleted", 0);
-        // 添加租户ID条件
-        queryWrapper.eq("tenant_id", SecureUtil.getTenantId());
 
         // 添加分类状态筛选：只返回所属分类处于启用状态的产品
         QueryWrapper<Category> categoryQuery = new QueryWrapper<>();
