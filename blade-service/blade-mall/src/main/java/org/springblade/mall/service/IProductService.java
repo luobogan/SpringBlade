@@ -32,3 +32,6 @@ public interface IProductService extends IService<Product> {
 	IPage<Product> page(IPage<Product> page, Product product);
 
 }
+
+
+

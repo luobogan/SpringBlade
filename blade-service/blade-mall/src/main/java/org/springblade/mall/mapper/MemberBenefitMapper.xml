@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.springblade.mall.mapper.MemberBenefitMapper">
+
+    <!-- 根据会员等级 ID 查询权益列表 -->
+    <select id="selectByLevelId" resultType="org.springblade.mall.entity.MemberBenefit">
+        SELECT * FROM member_benefit
+        WHERE level_id = #{levelId}
+        ORDER BY sort_order ASC
+    </select>
+
+</mapper>
+

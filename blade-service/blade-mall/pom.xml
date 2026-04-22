@@ -37,6 +37,10 @@
             <groupId>org.springblade</groupId>
             <artifactId>blade-mall-api</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-user-api</artifactId>
+        </dependency>
         <!-- 添加 validation 依赖 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

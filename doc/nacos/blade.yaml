@@ -73,7 +73,7 @@ knife4j:
 swagger:
   title: SpringBlade 接口文档系统
   description: SpringBlade 接口文档系统
-  version: 4.8.0
+  version: 4.9.0
   license: Powered By SpringBlade
   licenseUrl: https://bladex.cn
   terms-of-service-url: https://bladex.cn
@@ -86,14 +86,32 @@ swagger:
 blade:
   auth:
     #使用 @org.springblade.test.Sm2KeyGenerator 获取,用于国密sm2验签,需和前端保持一致
-    public-key: 04ac02fe94f4cac62a57a2335cc96a075a1ee41cea3b211bd7acbb9cf579b7e601b9ece2b0cfab64dca268b6942bf556af67cfe226a5cf28d936039c43e4bb12c1
+    public-key: ${BLADE_OAUTH2_PUBLIC_KEY}
     #使用 @org.springblade.test.Sm2KeyGenerator 获取,用于国密sm2解密,前端无需配置
-    private-key: 00ac7fde22ecf5a764ea69b7ca8205383d98e7459e765bc1bd092f62c5f85267f9
+    private-key: ${BLADE_OAUTH2_PRIVATE_KEY}
   token:
     #使用 @org.springblade.test.SignKeyGenerator 获取
-    sign-key: qHJlcyzQ7YoGmHA7wZzvioTKYzYMaugG
+    sign-key: ${BLADE_TOKEN_SIGN_KEY}
     #使用 @org.springblade.test.SignKeyGenerator 获取
-    aes-key: hJtodEd1qzJX9UOB9RBFdWk9KrAb59fH
+    aes-key: ${BLADE_TOKEN_CRYPTO_KEY}
+  #jackson配置
+  jackson:
+    #null自动转空值
+    null-to-empty: true
+    #大数字自动转字符串
+    big-num-to-string: true
+    #支持text文本请求,与报文加密同时开启
+    support-text-plain: false
+    #视图配置
+    view:
+      #动态模式的默认视图
+      default-view: summary
+      #角色→视图映射
+      role-mapping:
+        administrator: administrator
+        admin: admin
+        user: detail
+        guest: summary
   xss:
     enabled: true
     skip-url:
@@ -112,4 +130,3 @@ blade:
     column: tenant_id
     tables:
       - blade_notice
-

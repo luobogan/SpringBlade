@@ -1,115 +1,186 @@
-/**
- * Copyright (c) 2018-2099, Chill Zhuang 庄骞 (bladejava@qq.com).
- * <p>
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * <p>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package org.springblade.mall.controller;
 
-import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.AllArgsConstructor;
-import org.springblade.core.mp.support.Condition;
-import org.springblade.core.mp.support.Query;
+import org.springblade.mall.dto.CategoryDTO;
+import org.springblade.mall.service.CategoryService;
+import org.springblade.mall.vo.CategoryVO;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
+import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.tool.constant.RoleConstant;
-import org.springblade.core.tool.node.ForestNodeMerger;
-import org.springblade.core.tool.utils.Func;
-import org.springblade.mall.entity.Category;
-import org.springblade.mall.service.ICategoryService;
+import org.springblade.core.boot.ctrl.BladeController;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.AllArgsConstructor;
 import org.springframework.web.bind.annotation.*;
-
 import java.util.List;
 
 /**
  * 分类控制器
- *
- * @author Chill
  */
 @RestController
-@RequestMapping("/mall/category")
 @AllArgsConstructor
-@Tag(name = "分类管理")
-public class CategoryController {
+@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/categories")
+@Tag(name = "分类管理", description = "分类管理")
+public class CategoryController extends BladeController {
 
-	private final ICategoryService categoryService;
+    private CategoryService categoryService;
 
-	/**
-	 * 分类列表
-	 */
-	@GetMapping("/list")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
-	@Operation(summary = "分类列表", description = "分类列表")
-	public R<IPage<Category>> list(Query query, Category category) {
-		IPage<Category> pages = categoryService.page(Condition.getPage(query), category);
-		return R.data(pages);
-	}
+    /**
+     * 创建分类
+     * @param categoryDTO 分类信息
+     * @return 创建结果
+     */
+    @PostMapping
+    @Operation(summary = "创建分类", description = "创建分类")
+    public R<CategoryVO> createCategory(@Parameter(description = "分类信息") @Valid @RequestBody CategoryDTO categoryDTO) {
+        try {
+            CategoryVO categoryVO = categoryService.createCategory(categoryDTO);
+            R<CategoryVO> result = R.data(categoryVO);
+            result.setMsg("分类创建成功");
+            return result;
+        } catch (Exception e) {
+            // 记录详细错误日志
+            System.err.println("创建分类失败: " + e.getMessage());
+            e.printStackTrace();
+            // 返回简化后的错误消息给前端
+            String errorMsg = e.getMessage();
+            if (errorMsg != null && errorMsg.contains("Out of range value")) {
+                return R.fail("parentId 值无效，请选择有效的父分类");
+            }
+            return R.fail(errorMsg);
+        }
+    }
 
-	/**
-	 * 分类树
-	 */
-	@GetMapping("/tree")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
-	@Operation(summary = "分类树", description = "分类树")
-	public R<List<Category>> tree() {
-		List<Category> tree = categoryService.tree();
-		return R.data(tree);
-	}
+    /**
+     * 更新分类
+     * @param id 分类ID
+     * @param categoryDTO 分类信息
+     * @return 更新结果
+     */
+    @PutMapping("/{id}")
+    @Operation(summary = "更新分类", description = "更新分类")
+    public R<CategoryVO> updateCategory(@Parameter(description = "分类ID") @PathVariable Long id, @Parameter(description = "分类信息") @Valid @RequestBody CategoryDTO categoryDTO) {
+        try {
+            CategoryVO categoryVO = categoryService.updateCategory(id, categoryDTO);
+            R<CategoryVO> result = R.data(categoryVO);
+            result.setMsg("分类更新成功");
+            return result;
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
 
-	/**
-	 * 分类详情
-	 */
-	@GetMapping("/detail")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
-	@Operation(summary = "分类详情", description = "分类详情")
-	public R<Category> detail(Long id) {
-		Category category = categoryService.getById(id);
-		return R.data(category);
-	}
+    /**
+     * 删除分类
+     * @param id 分类ID
+     * @return 删除结果
+     */
+    @DeleteMapping("/{id}")
+    @Operation(summary = "删除分类", description = "删除分类")
+    public R<?> deleteCategory(@Parameter(description = "分类ID") @PathVariable Long id) {
+        try {
+            categoryService.deleteCategory(id);
+            return R.success("分类删除成功");
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
 
-	/**
-	 * 新增分类
-	 */
-	@PostMapping("/submit")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
-	@Operation(summary = "新增分类", description = "新增分类")
-	public R submit(@RequestBody Category category) {
-		boolean save = categoryService.save(category);
-		return save ? R.data(category) : R.fail("创建失败");
-	}
+    /**
+     * 获取分类详情
+     * @param id 分类ID
+     * @return 分类详情
+     */
+    @GetMapping("/{id}")
+    @Operation(summary = "获取分类详情", description = "获取分类详情")
+    public R<CategoryVO> getCategoryById(@Parameter(description = "分类ID") @PathVariable Long id) {
+        try {
+            CategoryVO categoryVO = categoryService.getCategoryById(id);
+            return R.data(categoryVO);
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
 
-	/**
-	 * 更新分类
-	 */
-	@PostMapping("/update")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
-	@Operation(summary = "更新分类", description = "更新分类")
-	public R update(@RequestBody Category category) {
-		boolean update = categoryService.updateById(category);
-		return R.status(update);
-	}
+    /**
+     * 获取所有分类（包括禁用状态）
+     * @return 分类列表
+     */
+    @GetMapping
+    @Operation(summary = "获取所有分类", description = "获取所有分类")
+    public R<List<CategoryVO>> getAllCategories() {
+        try {
+            List<CategoryVO> categories = categoryService.getAllCategoriesWithStatus();
+            return R.data(categories);
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
 
-	/**
-	 * 删除分类
-	 */
-	@PostMapping("/remove")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
-	@Operation(summary = "删除分类", description = "删除分类")
-	public R remove(Long id) {
-		boolean remove = categoryService.removeById(id);
-		return R.status(remove);
-	}
+    /**
+     * 获取分类树（包括禁用状态）
+     * @return 分类树
+     */
+    @GetMapping("/tree")
+    @Operation(summary = "获取分类树", description = "获取分类树")
+    public R<List<CategoryVO>> getCategoryTree() {
+        try {
+            List<CategoryVO> categories = categoryService.getAllCategoriesWithStatus();
+            return R.data(categories);
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
 
+    /**
+     * 获取子分类（包括禁用状态）
+     * @param parentId 父分类ID
+     * @return 子分类列表
+     */
+    @GetMapping("/sub/{parentId}")
+    @Operation(summary = "获取子分类", description = "获取子分类")
+    public R<List<CategoryVO>> getSubCategories(@Parameter(description = "父分类ID") @PathVariable Long parentId) {
+        try {
+            List<CategoryVO> categories = categoryService.getSubCategoriesWithStatus(parentId);
+            return R.data(categories);
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    /**
+     * 获取活跃分类
+     * @return 活跃分类列表
+     */
+    @GetMapping("/active")
+    @Operation(summary = "获取活跃分类", description = "获取活跃分类")
+    public R<List<CategoryVO>> getActiveCategories() {
+        try {
+            List<CategoryVO> categories = categoryService.getActiveCategories();
+            return R.data(categories);
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    /**
+     * 更新分类排序
+     * @param sortData 排序数据
+     * @return 更新结果
+     */
+    @PutMapping("/sort")
+    @Operation(summary = "更新分类排序", description = "更新分类排序")
+    public R<?> updateCategorySort(@RequestBody List<org.springblade.mall.service.CategoryService.SortRequest> sortData) {
+        try {
+            categoryService.updateCategorySort(sortData);
+            return R.success("排序更新成功");
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
 }
+
+
+

@@ -32,3 +32,6 @@ public interface IBrandService extends IService<Brand> {
 	IPage<Brand> page(IPage<Brand> page, Brand brand);
 
 }
+
+
+

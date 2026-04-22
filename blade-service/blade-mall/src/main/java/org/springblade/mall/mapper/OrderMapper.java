@@ -1,28 +1,39 @@
-/**
- * Copyright (c) 2018-2099, Chill Zhuang 庄骞 (bladejava@qq.com).
- * <p>
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * <p>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package org.springblade.mall.mapper;
 
-import org.springblade.mall.entity.Order;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.springblade.mall.entity.Order;
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 /**
- * 订单映射器
- *
- * @author Chill
+ * 订单Mapper
  */
+
 public interface OrderMapper extends BaseMapper<Order> {
 
+    /**
+     * 自定义查询：获取订单总数
+     * 使用 @Select 避免 MyBatis Plus 的 SQL 语法问题
+     */
+    @Select("SELECT COUNT(*) FROM `order`")
+    Long countAllOrders();
+
+    /**
+     * 根据订单号查询订单
+     * @param orderNo 订单号
+     * @return 订单信息
+     */
+    @Select("SELECT * FROM `order` WHERE order_no = #{orderNo}")
+    Order selectByOrderNo(@Param("orderNo") String orderNo);
+
+    /**
+     * 统计订单表中的唯一用户ID数量
+     * @return 唯一用户数量
+     */
+    @Select("SELECT COUNT(DISTINCT user_id) FROM `order` WHERE user_id IS NOT NULL")
+    Long countDistinctUsers();
 }
+
+
+

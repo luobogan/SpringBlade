@@ -16,6 +16,7 @@
 package org.springblade.system.user.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
@@ -26,10 +27,13 @@ import lombok.EqualsAndHashCode;
 import org.springblade.core.mp.base.TenantEntity;
 
 import java.io.Serial;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Date;
 
 /**
- * 实体类
+ * 实体类（已集成商城会员字段）
  *
  * @author Chill
  */
@@ -42,13 +46,12 @@ public class User extends TenantEntity {
 	private static final long serialVersionUID = 1L;
 
 	/**
-	 * 主键id
+	 * 主键 id
 	 */
 	@Schema(description = "主键")
 	@TableId(value = "id", type = IdType.ASSIGN_ID)
 	@JsonSerialize(using = ToStringSerializer.class)
 	private Long id;
-
 
 	/**
 	 * 编号
@@ -83,6 +86,10 @@ public class User extends TenantEntity {
 	 */
 	private String phone;
 	/**
+	 * 第三方平台用户ID
+	 */
+	private String openId;
+	/**
 	 * 生日
 	 */
 	private Date birthday;
@@ -91,17 +98,110 @@ public class User extends TenantEntity {
 	 */
 	private Integer sex;
 	/**
-	 * 角色id
+	 * 角色 id
 	 */
 	private String roleId;
 	/**
-	 * 部门id
+	 * 部门 id
 	 */
 	private String deptId;
 	/**
-	 * 部门id
+	 * 部门 id
 	 */
 	private String postId;
 
+	// ==================== 商城会员字段开始 ====================
+
+	/**
+	 * 微信 openid
+	 */
+	@Schema(description = "微信 openid")
+	@TableField("wx_openid")
+	private String wxOpenid;
+	/**
+	 * 昵称（商城）
+	 */
+	@Schema(description = "昵称")
+	@TableField("nickname")
+	private String nickname;
+
+	/**
+	 * 性别（商城：0 未知，1 男，2 女）
+	 */
+	@Schema(description = "性别")
+	@TableField("gender")
+	private Integer gender;
+
+	/**
+	 * 生日（商城）
+	 */
+	@Schema(description = "生日")
+	@TableField("mall_birthday")
+	private LocalDate mallBirthday;
+
+	/**
+	 * 会员等级：0 普通用户，1-9 对应不同等级
+	 */
+	@Schema(description = "会员等级")
+	@TableField("member_level")
+	private Integer memberLevel;
+
+	/**
+	 * 会员积分
+	 */
+	@Schema(description = "会员积分")
+	@TableField("member_points")
+	private Integer memberPoints;
+
+	/**
+	 * 会员成长值
+	 */
+	@Schema(description = "会员成长值")
+	@TableField("member_growth")
+	private Integer memberGrowth;
+
+	/**
+	 * 会员经验值
+	 */
+	@Schema(description = "会员经验值")
+	@TableField("member_experience")
+	private Integer memberExperience;
+
+	/**
+	 * 会员开始时间
+	 */
+	@Schema(description = "会员开始时间")
+	@TableField("member_start_time")
+	private LocalDateTime memberStartTime;
+
+	/**
+	 * 会员到期时间
+	 */
+	@Schema(description = "会员到期时间")
+	@TableField("member_end_time")
+	private LocalDateTime memberEndTime;
+
+	/**
+	 * 会员状态：0 非会员，1 会员，2 过期会员
+	 */
+	@Schema(description = "会员状态")
+	@TableField("member_status")
+	private Integer memberStatus;
+
+	/**
+	 * 累计消费金额
+	 */
+	@Schema(description = "累计消费金额")
+	@TableField("total_consumption")
+	private BigDecimal totalConsumption;
+
+	/**
+	 * 会员信息最后更新时间
+	 */
+	@Schema(description = "会员信息最后更新时间")
+	@TableField("last_member_update")
+	private LocalDateTime lastMemberUpdate;
+
+	// ==================== 商城会员字段结束 ====================
 
 }

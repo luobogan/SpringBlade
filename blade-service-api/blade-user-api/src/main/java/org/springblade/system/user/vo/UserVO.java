@@ -67,4 +67,10 @@ public class UserVO extends User {
 	 */
 	@BladeView(Views.Detail.class)
 	private String sexName;
+
+		/**
+	 * 租户名称
+	 */
+	// @BladeView(Views.Detail.class)
+	private String tenantName;
 }
