@@ -80,5 +80,11 @@ public class Tenant extends BaseEntity {
 	@Schema(description = "联系地址")
 	private String address;
 
+	/**
+	 * 产品包ID
+	 */
+	@Schema(description = "产品包ID")
+	private Long packageId;
+
 
 }

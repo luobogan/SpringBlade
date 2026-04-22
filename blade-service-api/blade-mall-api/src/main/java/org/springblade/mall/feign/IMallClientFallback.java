@@ -15,9 +15,4 @@ public class IMallClientFallback implements IMallClient {
 		return R.fail("获取用户信息失败");
 	}
 
-	@Override
-	public R<Boolean> checkUserExist(String account) {
-		return R.fail("检查用户存在失败");
-	}
-
 }

@@ -52,7 +52,14 @@ public class PostServiceImpl extends BaseServiceImpl<PostMapper, Post> implement
 
 	@Override
 	public List<String> getPostNames(String postIds) {
-		return baseMapper.getPostNames(Func.toLongArray(postIds));
+		if (Func.isEmpty(postIds)) {
+			return java.util.Collections.emptyList();
+		}
+		Long[] ids = Func.toLongArray(postIds);
+		if (ids == null || ids.length == 0) {
+			return java.util.Collections.emptyList();
+		}
+		return baseMapper.getPostNames(ids);
 	}
 
 }

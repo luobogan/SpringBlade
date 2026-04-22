@@ -71,4 +71,9 @@ public class DeptVO extends Dept implements INode<DeptVO> {
 	 */
 	private String parentName;
 
+	/**
+	 * 租户名称
+	 */
+	private String tenantName;
+
 }

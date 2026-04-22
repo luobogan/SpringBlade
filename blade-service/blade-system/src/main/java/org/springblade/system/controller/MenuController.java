@@ -199,9 +199,15 @@ public class MenuController extends BladeController {
 	@Operation(summary = "角色所分配的树", description = "角色所分配的树")
 	public R<CheckedTreeVO> roleTreeKeys(String roleIds) {
 		CheckedTreeVO vo = new CheckedTreeVO();
-		vo.setMenu(menuService.roleTreeKeys(roleIds));
-		vo.setDataScope(menuService.dataScopeTreeKeys(roleIds));
-		vo.setApiScope(menuService.apiScopeTreeKeys(roleIds));
+		CheckedTreeVO.TreeKeys menuKeys = new CheckedTreeVO.TreeKeys();
+		menuKeys.setCheckedKeys(menuService.roleTreeKeys(roleIds));
+		vo.setMenu(menuKeys);
+		CheckedTreeVO.TreeKeys dataScopeKeys = new CheckedTreeVO.TreeKeys();
+		dataScopeKeys.setCheckedKeys(menuService.dataScopeTreeKeys(roleIds));
+		vo.setDataScope(dataScopeKeys);
+		CheckedTreeVO.TreeKeys apiScopeKeys = new CheckedTreeVO.TreeKeys();
+		apiScopeKeys.setCheckedKeys(menuService.apiScopeTreeKeys(roleIds));
+		vo.setApiScope(apiScopeKeys);
 		return R.data(vo);
 	}
 
@@ -254,7 +260,9 @@ public class MenuController extends BladeController {
 	@Operation(summary = "顶部菜单所分配的树", description = "顶部菜单所分配的树")
 	public R<CheckedTreeVO> topTreeKeys(String topMenuIds) {
 		CheckedTreeVO vo = new CheckedTreeVO();
-		vo.setMenu(menuService.topTreeKeys(topMenuIds));
+		CheckedTreeVO.TreeKeys menuKeys = new CheckedTreeVO.TreeKeys();
+		menuKeys.setCheckedKeys(menuService.topTreeKeys(topMenuIds));
+		vo.setMenu(menuKeys);
 		return R.data(vo);
 	}
 

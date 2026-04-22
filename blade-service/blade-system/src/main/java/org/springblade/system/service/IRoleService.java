@@ -18,6 +18,7 @@ package org.springblade.system.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import org.springblade.system.entity.Role;
+import org.springblade.system.user.entity.User;
 import org.springblade.system.vo.RoleVO;
 
 import jakarta.validation.constraints.NotEmpty;
@@ -74,5 +75,31 @@ public interface IRoleService extends IService<Role> {
 	 * @return
 	 */
 	List<String> getRoleNames(String roleIds);
+
+	/**
+	 * 根据角色ID获取用户列表
+	 *
+	 * @param roleId
+	 * @return
+	 */
+	List<User> getUsersByRoleId(Long roleId);
+
+	/**
+	 * 授权用户到角色
+	 *
+	 * @param roleId
+	 * @param userIds
+	 * @return
+	 */
+	boolean grantUser(Long roleId, List<Long> userIds);
+
+	/**
+	 * 取消用户的角色授权
+	 *
+	 * @param roleId
+	 * @param userIds
+	 * @return
+	 */
+	boolean revokeUser(Long roleId, List<Long> userIds);
 
 }

@@ -18,11 +18,11 @@ package org.springblade.system.service.impl;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import org.springblade.core.cache.utils.CacheUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.constant.BladeConstant;
 import org.springblade.core.tool.node.ForestNodeMerger;
+import org.springblade.core.cache.utils.CacheUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.StringPool;
 import org.springblade.system.entity.Dept;
@@ -55,7 +55,7 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements ID
 	@Override
 	public String getDeptIds(String tenantId, String deptNames) {
 		List<Dept> deptList = baseMapper.selectList(Wrappers.<Dept>query().lambda().eq(Dept::getTenantId, tenantId).in(Dept::getDeptName, Func.toStrList(deptNames)));
-		if (deptList != null && !deptList.isEmpty()) {
+		if (deptList != null && deptList.size() > 0) {
 			return deptList.stream().map(dept -> Func.toStr(dept.getId())).distinct().collect(Collectors.joining(","));
 		}
 		return null;
@@ -63,7 +63,14 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements ID
 
 	@Override
 	public List<String> getDeptNames(String deptIds) {
-		return baseMapper.getDeptNames(Func.toLongArray(deptIds));
+		if (Func.isEmpty(deptIds)) {
+			return java.util.Collections.emptyList();
+		}
+		Long[] ids = Func.toLongArray(deptIds);
+		if (ids == null || ids.length == 0) {
+			return java.util.Collections.emptyList();
+		}
+		return baseMapper.getDeptNames(ids);
 	}
 
 	@Override

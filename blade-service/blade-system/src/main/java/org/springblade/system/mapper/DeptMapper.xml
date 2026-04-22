@@ -6,6 +6,7 @@
     <resultMap id="deptResultMap" type="org.springblade.system.entity.Dept">
         <id column="id" property="id"/>
         <result column="parent_id" property="parentId"/>
+        <result column="ancestors" property="ancestors"/>
         <result column="dept_name" property="deptName"/>
         <result column="full_name" property="fullName"/>
         <result column="sort" property="sort"/>
@@ -24,7 +25,7 @@
     <!-- 通用查询结果列 -->
     <sql id="baseColumnList">
         select
-        id, parent_id, dept_name, full_name, sort, remark, is_deleted
+        id, parent_id, ancestors, dept_name, full_name, sort, remark, is_deleted
     </sql>
 
     <select id="selectDeptPage" resultMap="deptResultMap">
@@ -44,10 +45,17 @@
         FROM
         blade_dept
         WHERE
-        id IN
-        <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
-            #{ids}
-        </foreach>
+        <choose>
+            <when test="array != null and array.length > 0">
+                id IN
+                <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
+                    #{ids}
+                </foreach>
+            </when>
+            <otherwise>
+                1 = 0
+            </otherwise>
+        </choose>
         and is_deleted = 0
     </select>
 

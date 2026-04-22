@@ -23,6 +23,7 @@
         <result column="sex" property="sex"/>
         <result column="role_id" property="roleId"/>
         <result column="dept_id" property="deptId"/>
+        <result column="post_id" property="postId"/>
     </resultMap>
 
     <!-- 通用查询结果列 -->
@@ -55,12 +56,15 @@
         role_name
         FROM
         blade_role
-        WHERE
-        id IN
-        <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
-            #{ids}
-        </foreach>
-        and is_deleted = 0
+        <where>
+            is_deleted = 0
+            <if test="array != null and array.length > 0">
+                AND id IN
+                <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
+                    #{ids}
+                </foreach>
+            </if>
+        </where>
     </select>
 
     <select id="getRoleAlias" resultType="java.lang.String">
@@ -68,12 +72,15 @@
             role_alias
         FROM
             blade_role
-        WHERE
-            id IN
-        <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
-            #{ids}
-        </foreach>
-        and is_deleted = 0
+        <where>
+            is_deleted = 0
+            <if test="array != null and array.length > 0">
+                AND id IN
+            <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
+                #{ids}
+            </foreach>
+            </if>
+        </where>
     </select>
 
     <select id="getDeptName" resultType="java.lang.String">
@@ -81,16 +88,26 @@
             dept_name
         FROM
             blade_dept
-        WHERE
-            id IN
-        <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
-            #{ids}
-        </foreach>
-        and is_deleted = 0
+        <where>
+            is_deleted = 0
+            <if test="array != null and array.length > 0">
+                AND id IN
+            <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
+                #{ids}
+            </foreach>
+            </if>
+        </where>
     </select>
 
     <select id="exportUser" resultType="org.springblade.system.excel.UserExcel">
         SELECT id, tenant_id, account, name, real_name, email, phone, birthday, role_id, dept_id, post_id FROM blade_user ${ew.customSqlSegment}
+    </select>
+
+    <select id="selectUsersByRoleId" resultMap="userResultMap">
+        SELECT *
+        FROM blade_user
+        WHERE is_deleted = 0
+          AND FIND_IN_SET(#{roleId}, role_id) > 0
     </select>
 
 </mapper>

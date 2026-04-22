@@ -89,7 +89,7 @@ public class ProductServiceImpl implements ProductService {
     @Autowired
     private ProductSpecValueMapper productSpecValueMapper;
 
-    @Value("${blade.prop.upload-domain:http://localhost:80}")
+    @Value("${blade.prop.upload-domain:http://127.0.0.1:81}")
     private String uploadDomain;
 
     @Override

@@ -59,7 +59,7 @@ public interface CategoryService {
     
     /**
      * 获取所有分类（包括禁用状态）
-     * @return 分类列表
+     * @return 分类树
      */
     List<CategoryVO> getAllCategoriesWithStatus();
     
@@ -100,5 +100,3 @@ public interface CategoryService {
         }
     }
 }
-
-

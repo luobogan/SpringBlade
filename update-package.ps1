@@ -12,10 +12,10 @@ foreach ($file in $javaFiles) {
     $content = Get-Content -Path $file.FullName -Encoding UTF8 -Raw
 
     # 替换包路径
-    $newContent = $content -replace "package org\.springblade\.system\.([a-z]+);", "package org.springblade.modules.system.$1;"
+    $newContent = $content -replace "package org\.springblade\.system\.([a-z]+);", "package org.springblade.system.$1;"
 
     # 替换导入路径
-    $newContent = $newContent -replace "import org\.springblade\.system\.([a-z]+)\.([a-zA-Z0-9]+);", "import org.springblade.modules.system.$1.$2;"
+    $newContent = $newContent -replace "import org\.springblade\.system\.([a-z]+)\.([a-zA-Z0-9]+);", "import org.springblade.system.$1.$2;"
 
     # 写入修改后的内容
     Set-Content -Path $file.FullName -Value $newContent -Encoding UTF8

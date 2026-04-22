@@ -86,5 +86,11 @@ public class Role implements Serializable {
 	@Schema(description = "是否已删除")
 	private Integer isDeleted;
 
+	/**
+	 * 状态
+	 */
+	@Schema(description = "状态")
+	private Integer status;
+
 
 }

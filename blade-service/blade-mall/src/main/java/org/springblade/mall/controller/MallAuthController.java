@@ -15,7 +15,6 @@
  */
 package org.springblade.mall.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,7 +25,6 @@ import org.springblade.core.launch.constant.TokenConstant;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DigestUtil;
-import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.mall.dto.PhoneDTO;
 import org.springblade.mall.service.WeChatService;
 import org.springblade.mall.vo.WeChatSessionVO;

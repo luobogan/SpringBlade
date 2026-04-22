@@ -83,6 +83,15 @@ public interface IMenuService extends IService<Menu> {
 	List<MenuVO> grantTree(BladeUser user);
 
 	/**
+	 * 授权树形结构（指定角色）
+	 *
+	 * @param user
+	 * @param roleId
+	 * @return
+	 */
+	List<MenuVO> grantTree(BladeUser user, String roleId);
+
+	/**
 	 * 数据权限授权树形结构
 	 *
 	 * @param user
@@ -91,12 +100,30 @@ public interface IMenuService extends IService<Menu> {
 	List<MenuVO> grantDataScopeTree(BladeUser user);
 
 	/**
+	 * 数据权限授权树形结构（指定角色）
+	 *
+	 * @param user
+	 * @param roleId
+	 * @return
+	 */
+	List<MenuVO> grantDataScopeTree(BladeUser user, String roleId);
+
+	/**
 	 * 接口权限授权树形结构
 	 *
 	 * @param user
 	 * @return
 	 */
 	List<MenuVO> grantApiScopeTree(BladeUser user);
+
+	/**
+	 * 接口权限授权树形结构（指定角色）
+	 *
+	 * @param user
+	 * @param roleId
+	 * @return
+	 */
+	List<MenuVO> grantApiScopeTree(BladeUser user, String roleId);
 
 	/**
 	 * 默认选中节点
@@ -145,5 +172,13 @@ public interface IMenuService extends IService<Menu> {
 	 * @return
 	 */
 	List<String> topTreeKeys(String topMenuIds);
+
+	/**
+	 * 递归删除菜单（包括子菜单和角色权限）
+	 *
+	 * @param ids 菜单ID列表
+	 * @return 删除的菜单数量
+	 */
+	int removeRecursive(List<Long> ids);
 
 }

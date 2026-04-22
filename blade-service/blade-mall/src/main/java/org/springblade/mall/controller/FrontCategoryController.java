@@ -2,12 +2,15 @@ package org.springblade.mall.controller;
 
 import org.springblade.mall.service.CategoryService;
 import org.springblade.mall.vo.CategoryVO;
+import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.boot.ctrl.BladeController;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,6 +34,21 @@ public class FrontCategoryController extends BladeController {
     private CategoryService categoryService;
 
     /**
+     * 从请求头获取租户ID，优先使用Token中的，否则使用Header中的
+     */
+    private String getTenantId() {
+        String tenantId = SecureUtil.getTenantId();
+        if (org.springblade.core.tool.utils.StringUtil.isNotBlank(tenantId)) {
+            return tenantId;
+        }
+        HttpServletRequest request = org.springblade.core.tool.utils.WebUtil.getRequest();
+        if (request != null) {
+            tenantId = request.getHeader("Tenant-Id");
+        }
+        return tenantId;
+    }
+
+    /**
      * 获取所有分类
      * @param top 是否只获取顶级分类
      * @param valid 是否只获取有效的分类
@@ -42,7 +60,7 @@ public class FrontCategoryController extends BladeController {
             @Parameter(description = "是否只获取顶级分类") @RequestParam(required = false) Integer top,
             @Parameter(description = "是否只获取有效的分类") @RequestParam(required = false) Integer valid) {
         try {
-            List<CategoryVO> categories = categoryService.getAllCategories();
+            List<CategoryVO> categories = TenantUtil.use(getTenantId(), () -> categoryService.getAllCategories());
 
             // 过滤顶级分类
             if (top != null && top == 1) {
@@ -72,7 +90,7 @@ public class FrontCategoryController extends BladeController {
     @Operation(summary = "获取分类树", description = "获取分类树")
     public R<List<CategoryVO>> getCategoryTree() {
         try {
-            List<CategoryVO> categories = categoryService.getAllCategories();
+            List<CategoryVO> categories = TenantUtil.use(getTenantId(), () -> categoryService.getAllCategories());
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());
@@ -88,7 +106,7 @@ public class FrontCategoryController extends BladeController {
     @Operation(summary = "获取子分类", description = "获取子分类")
     public R<List<CategoryVO>> getSubCategories(@Parameter(description = "父分类ID") @PathVariable Long parentId) {
         try {
-            List<CategoryVO> categories = categoryService.getSubCategories(parentId);
+            List<CategoryVO> categories = TenantUtil.use(getTenantId(), () -> categoryService.getSubCategories(parentId));
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());
@@ -103,13 +121,10 @@ public class FrontCategoryController extends BladeController {
     @Operation(summary = "获取活跃分类", description = "获取活跃分类")
     public R<List<CategoryVO>> getActiveCategories() {
         try {
-            List<CategoryVO> categories = categoryService.getActiveCategories();
+            List<CategoryVO> categories = TenantUtil.use(getTenantId(), () -> categoryService.getActiveCategories());
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());
         }
     }
 }
-
-
-

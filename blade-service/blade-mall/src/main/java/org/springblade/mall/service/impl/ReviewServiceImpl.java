@@ -6,6 +6,9 @@ import org.springblade.mall.entity.*;
 import org.springblade.mall.mapper.*;
 import org.springblade.mall.service.ReviewService;
 import org.springblade.mall.vo.ReviewVO;
+import org.springblade.core.tool.api.R;
+import org.springblade.system.user.entity.User;
+import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -212,9 +215,9 @@ public class ReviewServiceImpl implements ReviewService {
         reviewVO.setRatingText(getRatingText(review.getRating()));
 
         // 获取用户信息
-        org.springblade.core.tool.api.R<org.springblade.system.user.entity.UserInfo> userResult = userClient.userInfo(review.getUserId());
+        R<UserInfo> userResult = userClient.userInfo(review.getUserId());
         if (userResult.isSuccess() && userResult.getData() != null && userResult.getData().getUser() != null) {
-            org.springblade.system.user.entity.User user = userResult.getData().getUser();
+            User user = userResult.getData().getUser();
             reviewVO.setUserName(user.getName() != null ? user.getName() : user.getAccount());
         }
 

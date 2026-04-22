@@ -19,7 +19,6 @@ public class MallClient implements IMallClient {
 
 	private static final String API_PREFIX = "/mall/user";
 	private static final String INFO = API_PREFIX + "/info";
-	private static final String EXIST = API_PREFIX + "/exist";
 
 	private IUserClient userClient;
 
@@ -27,16 +26,6 @@ public class MallClient implements IMallClient {
 	@GetMapping(INFO)
 	public R<UserInfo> getUserInfo(@RequestParam("userId") Long userId) {
 		return userClient.userInfo(userId);
-	}
-
-	@Override
-	@GetMapping(EXIST)
-	public R<Boolean> checkUserExist(@RequestParam("account") String account) {
-		R<UserInfo> userInfoResult = userClient.userInfo(null, account, null);
-		if (userInfoResult.isSuccess() && userInfoResult.getData() != null && userInfoResult.getData().getUser() != null) {
-			return R.data(true);
-		}
-		return R.data(false);
 	}
 
 }

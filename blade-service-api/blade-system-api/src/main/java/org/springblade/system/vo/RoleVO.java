@@ -70,4 +70,9 @@ public class RoleVO extends Role implements INode<RoleVO> {
 	 * 上级角色
 	 */
 	private String parentName;
+
+	/**
+	 * 租户名称
+	 */
+	private String tenantName;
 }

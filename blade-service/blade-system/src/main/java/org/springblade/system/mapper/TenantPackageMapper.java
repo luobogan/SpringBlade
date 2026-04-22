@@ -19,7 +19,7 @@ import org.springblade.system.entity.TenantPackage;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
- * 租户产品包映射器
+ * 租户产品包 Mapper 接口
  *
  * @author Chill
  */

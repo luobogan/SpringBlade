@@ -27,10 +27,15 @@ import java.util.List;
 @Data
 public class CheckedTreeVO {
 
-	private List<String> menu;
+	private TreeKeys menu = new TreeKeys();
 
-	private List<String> dataScope;
+	private TreeKeys dataScope = new TreeKeys();
 
-	private List<String> apiScope;
+	private TreeKeys apiScope = new TreeKeys();
+
+	@Data
+	public static class TreeKeys {
+		private List<String> checkedKeys;
+	}
 
 }

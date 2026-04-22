@@ -24,17 +24,15 @@ import org.springblade.common.constant.CommonConstant;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.mp.base.BaseServiceImpl;
 import org.springblade.core.secure.utils.SecureUtil;
-import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.*;
 import org.springblade.system.entity.Tenant;
-import org.springblade.system.feign.ISysClient;
+
+import org.springblade.system.excel.UserExcel;
+import org.springblade.system.mapper.UserMapper;
+import org.springblade.system.service.*;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
-import org.springblade.system.excel.UserExcel;
-import org.springblade.system.mapper.UserMapper;
-import org.springblade.system.service.IUserOauthService;
-import org.springblade.system.service.IUserService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,8 +51,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	private static final String GUEST_NAME = "guest";
 	private static final String MINUS_ONE = "-1";
 
-	private ISysClient sysClient;
+	private IDeptService deptService;
+	private IPostService postService;
+	private IRoleService roleService;
 	private IUserOauthService userOauthService;
+	private ITenantService tenantService;
 
 	@Override
 	public boolean submit(User user) {
@@ -167,7 +168,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 
 	@Override
 	public List<String> getRoleName(String roleIds) {
-		return baseMapper.getRoleName(Func.toStrArray(roleIds));
+		if (Func.isEmpty(roleIds)) {
+			return Collections.emptyList();
+		}
+		String[] ids = Func.toStrArray(roleIds);
+		if (ids == null || ids.length == 0) {
+			return Collections.emptyList();
+		}
+		return baseMapper.getRoleName(ids);
 	}
 
 	@Override
@@ -180,11 +188,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		data.forEach(userExcel -> {
 			User user = Objects.requireNonNull(BeanUtil.copyProperties(userExcel, User.class));
 			// 设置部门ID
-			user.setDeptId(sysClient.getDeptIds(userExcel.getTenantId(), userExcel.getDeptName()));
+			user.setDeptId(deptService.getDeptIds(userExcel.getTenantId(), userExcel.getDeptName()));
 			// 设置岗位ID
-			user.setPostId(sysClient.getPostIds(userExcel.getTenantId(), userExcel.getPostName()));
+			user.setPostId(postService.getPostIds(userExcel.getTenantId(), userExcel.getPostName()));
 			// 设置角色ID
-			user.setRoleId(sysClient.getRoleIds(userExcel.getTenantId(), userExcel.getRoleName()));
+			user.setRoleId(roleService.getRoleIds(userExcel.getTenantId(), userExcel.getRoleName()));
 			// 设置默认密码
 			user.setPassword(CommonConstant.DEFAULT_PASSWORD);
 			this.submit(user);
@@ -195,9 +203,9 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	public List<UserExcel> exportUser(Wrapper<User> queryWrapper) {
 		List<UserExcel> userList = baseMapper.exportUser(queryWrapper);
 		userList.forEach(user -> {
-			user.setRoleName(StringUtil.join(sysClient.getRoleNames(user.getRoleId())));
-			user.setDeptName(StringUtil.join(sysClient.getDeptNames(user.getDeptId())));
-			user.setPostName(StringUtil.join(sysClient.getPostNames(user.getPostId())));
+			user.setRoleName(StringUtil.join(roleService.getRoleNames(user.getRoleId())));
+			user.setDeptName(StringUtil.join(deptService.getDeptNames(user.getDeptId())));
+			user.setPostName(StringUtil.join(postService.getPostNames(user.getPostId())));
 		});
 		return userList;
 	}
@@ -205,9 +213,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	@Override
 	@Transactional(rollbackFor = Exception.class)
 	public boolean registerGuest(User user, Long oauthId) {
-		R<Tenant> result = sysClient.getTenant(user.getTenantId());
-		Tenant tenant = result.getData();
-		if (!result.isSuccess() || tenant == null || tenant.getId() == null) {
+		Tenant tenant = tenantService.getOne(Wrappers.<Tenant>lambdaQuery().eq(Tenant::getTenantId, user.getTenantId()));
+		if (tenant == null || tenant.getId() == null) {
 			throw new ServiceException("租户信息错误!");
 		}
 		UserOauth userOauth = userOauthService.getById(oauthId);
@@ -225,5 +232,6 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		boolean oauthTemp = userOauthService.updateById(userOauth);
 		return (userTemp && oauthTemp);
 	}
+
 
 }

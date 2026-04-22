@@ -27,6 +27,7 @@ import org.springblade.system.service.IPackageMenuService;
 import org.springblade.system.service.ITenantPackageService;
 import org.springblade.system.vo.CheckedTreeVO;
 import org.springblade.system.vo.GrantTreeVO;
+import org.springblade.system.vo.MenuVO;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -58,9 +59,9 @@ public class TenantPackageServiceImpl extends ServiceImpl<TenantPackageMapper, T
 	@Override
 	public GrantTreeVO grantTree() {
 		GrantTreeVO vo = new GrantTreeVO();
-		vo.setMenu(ForestNodeMerger.merge(menuMapper.grantTree()));
-		vo.setDataScope(ForestNodeMerger.merge(menuMapper.grantDataScopeTree()));
-		vo.setApiScope(ForestNodeMerger.merge(menuMapper.grantApiScopeTree()));
+		vo.setMenu(ForestNodeMerger.merge(menuMapper.grantTree("000000")));
+		vo.setDataScope(ForestNodeMerger.merge(menuMapper.grantDataScopeTree("000000")));
+		vo.setApiScope(ForestNodeMerger.merge(menuMapper.grantApiScopeTree("000000")));
 		return vo;
 	}
 
@@ -70,7 +71,9 @@ public class TenantPackageServiceImpl extends ServiceImpl<TenantPackageMapper, T
 		List<String> menuIds = packageMenus.stream().map(pm -> Func.toStr(pm.getMenuId())).collect(Collectors.toList());
 
 		CheckedTreeVO vo = new CheckedTreeVO();
-		vo.setMenu(menuIds);
+		CheckedTreeVO.TreeKeys menuKeys = new CheckedTreeVO.TreeKeys();
+		menuKeys.setCheckedKeys(menuIds);
+		vo.setMenu(menuKeys);
 
 		return vo;
 	}

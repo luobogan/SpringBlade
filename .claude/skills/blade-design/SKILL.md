@@ -89,7 +89,7 @@ blade-service/blade-{module}/                  ← 实现层
 
 | 维度 | Boot | Cloud |
 |------|------|-------|
-| **基础包名** | `org.springblade.modules.{module}` | `org.springblade.{module}` |
+| **基础包名** | `org.springblade.{module}` | `org.springblade.{module}` |
 | **Controller 路由** | `@RequestMapping(AppConstant.APPLICATION_XXX_NAME + "/{path}")` | `@RequestMapping("/{path}")` |
 | **服务间调用** | 直接注入 Service | Feign Client 远程调用 |
 | **Entity/VO 位置** | 与 Service 同模块 | 独立 API 模块中 |

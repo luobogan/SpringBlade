@@ -1,8 +1,7 @@
 package org.springblade.mall.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import org.springblade.core.secure.utils.SecureUtil;
-import org.springblade.core.tool.utils.Func;
+import org.springblade.core.tenant.TenantUtil;
 import org.springblade.mall.dto.CategoryDTO;
 import org.springblade.mall.entity.Category;
 import org.springblade.mall.mapper.MallCategoryMapper;
@@ -35,8 +34,8 @@ public class CategoryServiceImpl implements CategoryService {
     @Override
     @Transactional
     public CategoryVO createCategory(CategoryDTO categoryDTO) {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
+        // 获取当前租户ID（从TenantUtil ThreadLocal或JWT Token中获取）
+        String tenantId = TenantUtil.getTenantId();
 
         // 验证 parentId - 如果为0或负数，设置为null（顶级分类）
         Long parentId = categoryDTO.getParentId();
@@ -65,7 +64,7 @@ public class CategoryServiceImpl implements CategoryService {
         category.setCreatedAt(LocalDateTime.now());
         category.setUpdatedAt(LocalDateTime.now());
 
-        // 保存分类
+        // 保存分类（MyBatis-Plus 拦截器会自动处理租户隔离）
         categoryMapper.insert(category);
 
         // 转换为VO返回
@@ -112,11 +111,11 @@ public class CategoryServiceImpl implements CategoryService {
         category.setName(categoryDTO.getName());
         category.setDescription(categoryDTO.getDescription());
         // 验证 parentId - 如果为0或负数，设置为null（顶级分类）
-        Long parentId = categoryDTO.getParentId();
-        if (parentId != null && parentId <= 0) {
-            parentId = null;
+        Long parentIds = categoryDTO.getParentId();
+        if (parentIds != null && parentIds <= 0) {
+            parentIds = null;
         }
-        category.setParentId(parentId);
+        category.setParentId(parentIds);
         category.setIcon(categoryDTO.getIcon());
         category.setSortOrder(categoryDTO.getSort());
         category.setStatus(categoryDTO.getStatus());
@@ -191,17 +190,8 @@ public class CategoryServiceImpl implements CategoryService {
 
     @Override
     public List<CategoryVO> getAllCategories() {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
-        // 如果租户ID为空，抛出异常
-        if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            log.warn("=== 获取所有分类 ===");
-            log.warn("租户ID为空，抛出异常");
-            throw new RuntimeException("租户ID不能为空");
-        }
-
         log.info("=== 获取所有分类 ===");
-        log.info("使用的租户ID: {}", tenantId);
+        log.info("使用的租户ID: {}", TenantUtil.getTenantId());
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         log.info("获取到的分类数量: {}", categories.size());
@@ -217,17 +207,8 @@ public class CategoryServiceImpl implements CategoryService {
      * @return 分类树
      */
     public List<CategoryVO> getAllCategoriesWithStatus() {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
-        // 如果租户ID为空，抛出异常
-        if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            log.warn("=== 获取所有分类（包括禁用状态）===");
-            log.warn("租户ID为空，抛出异常");
-            throw new RuntimeException("租户ID不能为空");
-        }
-
         log.info("=== 获取所有分类（包括禁用状态）===");
-        log.info("使用的租户ID: {}", tenantId);
+        log.info("使用的租户ID: {}", TenantUtil.getTenantId());
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         log.info("获取到的分类数量: {}", categories.size());
@@ -239,13 +220,6 @@ public class CategoryServiceImpl implements CategoryService {
 
     @Override
     public List<CategoryVO> getSubCategories(Long parentId) {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
-        // 如果租户ID为空，抛出异常
-        if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            throw new RuntimeException("租户ID不能为空");
-        }
-
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("parent_id", parentId);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
@@ -261,13 +235,6 @@ public class CategoryServiceImpl implements CategoryService {
      * @return 子分类列表
      */
     public List<CategoryVO> getSubCategoriesWithStatus(Long parentId) {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
-        // 如果租户ID为空，抛出异常
-        if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            throw new RuntimeException("租户ID不能为空");
-        }
-
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("parent_id", parentId);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
@@ -278,13 +245,6 @@ public class CategoryServiceImpl implements CategoryService {
 
     @Override
     public List<CategoryVO> getActiveCategories() {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
-        // 如果租户ID为空，抛出异常
-        if (org.springblade.core.tool.utils.StringUtil.isBlank(tenantId)) {
-            throw new RuntimeException("租户ID不能为空");
-        }
-
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         return buildCategoryTree(categories);
@@ -357,6 +317,3 @@ public class CategoryServiceImpl implements CategoryService {
         }
     }
 }
-
-
-

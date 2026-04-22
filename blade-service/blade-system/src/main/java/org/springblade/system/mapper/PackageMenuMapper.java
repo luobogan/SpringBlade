@@ -19,7 +19,7 @@ import org.springblade.system.entity.PackageMenu;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
- * 产品包菜单关联映射器
+ * 产品包菜单关联 Mapper 接口
  *
  * @author Chill
  */

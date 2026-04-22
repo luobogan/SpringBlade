@@ -29,13 +29,4 @@ public interface IMallClient {
 	@GetMapping(INFO)
 	R<UserInfo> getUserInfo(@RequestParam("userId") Long userId);
 
-	/**
-	 * 检查用户是否存在
-	 *
-	 * @param account 账号
-	 * @return 是否存在
-	 */
-	@GetMapping(EXIST)
-	R<Boolean> checkUserExist(@RequestParam("account") String account);
-
 }

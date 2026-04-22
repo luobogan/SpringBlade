@@ -15,14 +15,16 @@
  */
 package org.springblade.system.wrapper;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springblade.common.constant.CommonConstant;
 import org.springblade.core.mp.support.BaseEntityWrapper;
-import org.springblade.core.tool.node.ForestNodeMerger;
 import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.SpringUtil;
 import org.springblade.system.entity.Dept;
+import org.springblade.system.entity.Tenant;
 import org.springblade.system.service.IDeptService;
+import org.springblade.system.service.ITenantService;
 import org.springblade.system.vo.DeptVO;
 
 import java.util.List;
@@ -36,9 +38,11 @@ import java.util.stream.Collectors;
 public class DeptWrapper extends BaseEntityWrapper<Dept, DeptVO> {
 
 	private static IDeptService deptService;
+	private static ITenantService tenantService;
 
 	static {
 		deptService = SpringUtil.getBean(IDeptService.class);
+		tenantService = SpringUtil.getBean(ITenantService.class);
 	}
 
 	public static DeptWrapper build() {
@@ -54,12 +58,36 @@ public class DeptWrapper extends BaseEntityWrapper<Dept, DeptVO> {
 			Dept parent = deptService.getById(dept.getParentId());
 			deptVO.setParentName(parent.getDeptName());
 		}
+		if (Func.isNotEmpty(dept.getTenantId())) {
+			Tenant tenant = tenantService.getOne(new LambdaQueryWrapper<Tenant>()
+				.eq(Tenant::getTenantId, dept.getTenantId()));
+			if (tenant != null) {
+				deptVO.setTenantName(tenant.getTenantName());
+			}
+		}
 		return deptVO;
 	}
 
 	public List<DeptVO> listNodeVO(List<Dept> list) {
-		List<DeptVO> collect = list.stream().map(dept -> BeanUtil.copyProperties(dept, DeptVO.class)).collect(Collectors.toList());
-		return ForestNodeMerger.merge(collect);
+		return list.stream().map(dept -> {
+			DeptVO deptVO = BeanUtil.copyProperties(dept, DeptVO.class);
+			if (Func.equals(dept.getParentId(), CommonConstant.TOP_PARENT_ID)) {
+				deptVO.setParentName(CommonConstant.TOP_PARENT_NAME);
+			} else {
+				Dept parent = deptService.getById(dept.getParentId());
+				if (parent != null) {
+					deptVO.setParentName(parent.getDeptName());
+				}
+			}
+			if (Func.isNotEmpty(dept.getTenantId())) {
+				Tenant tenant = tenantService.getOne(new LambdaQueryWrapper<Tenant>()
+					.eq(Tenant::getTenantId, dept.getTenantId()));
+				if (tenant != null) {
+					deptVO.setTenantName(tenant.getTenantName());
+				}
+			}
+			return deptVO;
+		}).collect(Collectors.toList());
 	}
 
 }

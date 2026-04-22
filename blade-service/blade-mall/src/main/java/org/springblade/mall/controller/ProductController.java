@@ -26,7 +26,8 @@ import java.util.Map;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/products")
+//AppConstant.APPLICATION_MALL_NAME +
+@RequestMapping("/products")
 @Tag(name = "商品管理", description = "商品管理")
 public class ProductController extends BladeController {
 

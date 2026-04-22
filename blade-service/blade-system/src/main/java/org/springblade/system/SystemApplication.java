@@ -15,15 +15,24 @@
  */
 package org.springblade.system;
 
-import org.springblade.core.cloud.client.BladeCloudApplication;
 import org.springblade.core.launch.BladeApplication;
 import org.springblade.core.launch.constant.AppConstant;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
+import org.springframework.cloud.openfeign.EnableFeignClients;
 
 /**
- * 系统模块启动器
+ * 系统服务启动类
+ *
  * @author Chill
  */
-@BladeCloudApplication
+@SpringBootApplication
+@EnableDiscoveryClient
+@EnableFeignClients(basePackages = {
+	AppConstant.BASE_PACKAGES,
+	"org.springblade"
+})
 public class SystemApplication {
 
 	public static void main(String[] args) {
@@ -31,4 +40,3 @@ public class SystemApplication {
 	}
 
 }
-

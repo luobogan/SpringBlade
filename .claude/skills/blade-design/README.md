@@ -28,7 +28,7 @@ blade-design
 
 ### Boot 单体架构
 - 所有代码在同一模块内
-- 包名：`org.springblade.modules.{module}`
+- 包名：`org.springblade.{module}`
 - Controller 路由含服务名前缀：`AppConstant.APPLICATION_XXX_NAME + "/path"`
 - 无 Feign Client
 
@@ -113,7 +113,7 @@ blade-design/
 
 | 维度 | Boot | Cloud |
 |------|------|-------|
-| 基础包名 | `org.springblade.modules.{module}` | `org.springblade.{module}` |
+| 基础包名 | `org.springblade.{module}` | `org.springblade.{module}` |
 | Controller 路由 | `AppConstant.APPLICATION_XXX_NAME + "/path"` | `"/path"` |
 | Entity 位置 | 同模块 | API 模块 |
 | 服务间调用 | 直接注入 | Feign Client |

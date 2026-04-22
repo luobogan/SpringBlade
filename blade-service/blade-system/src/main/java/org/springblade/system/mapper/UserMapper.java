@@ -82,4 +82,12 @@ public interface UserMapper extends BaseMapper<User> {
 	 */
 	List<UserExcel> exportUser(@Param("ew") Wrapper<User> queryWrapper);
 
+	/**
+	 * 根据角色ID查询用户列表
+	 *
+	 * @param roleId
+	 * @return
+	 */
+	List<User> selectUsersByRoleId(Long roleId);
+
 }

@@ -19,8 +19,6 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
 import org.springblade.core.tool.node.INode;
 import org.springblade.system.entity.Menu;
 
@@ -33,8 +31,6 @@ import java.util.List;
  *
  * @author Chill
  */
-@Data
-@EqualsAndHashCode(callSuper = true)
 @Schema(description = "MenuVO对象")
 public class MenuVO extends Menu implements INode<MenuVO> {
 	@Serial
@@ -64,14 +60,6 @@ public class MenuVO extends Menu implements INode<MenuVO> {
 	@JsonInclude(JsonInclude.Include.NON_EMPTY)
 	private Boolean hasChildren;
 
-	@Override
-	public List<MenuVO> getChildren() {
-		if (this.children == null) {
-			this.children = new ArrayList<>();
-		}
-		return this.children;
-	}
-
 	/**
 	 * 上级菜单
 	 */
@@ -91,4 +79,127 @@ public class MenuVO extends Menu implements INode<MenuVO> {
 	 * 是否新窗口打开
 	 */
 	private String isOpenName;
+
+	/**
+	 * 组件路径
+	 */
+	private String component;
+
+	/**
+	 * 组件类型
+	 */
+	private String componentType;
+
+	/**
+	 * 远程组件地址
+	 */
+	private String remoteUrl;
+
+	/**
+	 * 组件版本号
+	 */
+	private String cacheVersion;
+
+	// Getter and Setter methods
+	@Override
+	public Long getId() {
+		return id;
+	}
+
+	public void setId(Long id) {
+		this.id = id;
+	}
+
+	@Override
+	public Long getParentId() {
+		return parentId;
+	}
+
+	public void setParentId(Long parentId) {
+		this.parentId = parentId;
+	}
+
+	@Override
+	public List<MenuVO> getChildren() {
+		if (this.children == null) {
+			this.children = new ArrayList<>();
+		}
+		return this.children;
+	}
+
+	public void setChildren(List<MenuVO> children) {
+		this.children = children;
+	}
+
+	public Boolean getHasChildren() {
+		return hasChildren;
+	}
+
+	public void setHasChildren(Boolean hasChildren) {
+		this.hasChildren = hasChildren;
+	}
+
+	public String getParentName() {
+		return parentName;
+	}
+
+	public void setParentName(String parentName) {
+		this.parentName = parentName;
+	}
+
+	public String getCategoryName() {
+		return categoryName;
+	}
+
+	public void setCategoryName(String categoryName) {
+		this.categoryName = categoryName;
+	}
+
+	public String getActionName() {
+		return actionName;
+	}
+
+	public void setActionName(String actionName) {
+		this.actionName = actionName;
+	}
+
+	public String getIsOpenName() {
+		return isOpenName;
+	}
+
+	public void setIsOpenName(String isOpenName) {
+		this.isOpenName = isOpenName;
+	}
+
+	public String getComponent() {
+		return component;
+	}
+
+	public void setComponent(String component) {
+		this.component = component;
+	}
+
+	public String getComponentType() {
+		return componentType;
+	}
+
+	public void setComponentType(String componentType) {
+		this.componentType = componentType;
+	}
+
+	public String getRemoteUrl() {
+		return remoteUrl;
+	}
+
+	public void setRemoteUrl(String remoteUrl) {
+		this.remoteUrl = remoteUrl;
+	}
+
+	public String getCacheVersion() {
+		return cacheVersion;
+	}
+
+	public void setCacheVersion(String cacheVersion) {
+		this.cacheVersion = cacheVersion;
+	}
 }

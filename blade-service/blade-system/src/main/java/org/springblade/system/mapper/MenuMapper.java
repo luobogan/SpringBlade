@@ -17,6 +17,7 @@ package org.springblade.system.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.apache.ibatis.annotations.Param;
 import org.springblade.system.dto.MenuDTO;
 import org.springblade.system.entity.Menu;
 import org.springblade.system.vo.MenuVO;
@@ -59,62 +60,70 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 授权树形结构
 	 *
+	 * @param tenantId
 	 * @return
 	 */
-	List<MenuVO> grantTree();
+	List<MenuVO> grantTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 授权树形结构
 	 *
+	 * @param tenantId
 	 * @param roleId
 	 * @return
 	 */
-	List<MenuVO> grantTreeByRole(List<Long> roleId);
+	List<MenuVO> grantTreeByRole(@Param("tenantId") String tenantId, @Param("roleId") List<Long> roleId);
 
 	/**
 	 * 数据权限授权树形结构
 	 *
+	 * @param tenantId
 	 * @return
 	 */
-	List<MenuVO> grantDataScopeTree();
+	List<MenuVO> grantDataScopeTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 数据权限授权树形结构
 	 *
+	 * @param tenantId
 	 * @param roleId
 	 * @return
 	 */
-	List<MenuVO> grantDataScopeTreeByRole(List<Long> roleId);
+	List<MenuVO> grantDataScopeTreeByRole(@Param("tenantId") String tenantId, @Param("roleId") List<Long> roleId);
 
 	/**
 	 * 接口权限授权树形结构
 	 *
+	 * @param tenantId
 	 * @return
 	 */
-	List<MenuVO> grantApiScopeTree();
+	List<MenuVO> grantApiScopeTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 接口权限授权树形结构
 	 *
+	 * @param tenantId
 	 * @param roleId
 	 * @return
 	 */
-	List<MenuVO> grantApiScopeTreeByRole(List<Long> roleId);
+	List<MenuVO> grantApiScopeTreeByRole(@Param("tenantId") String tenantId, @Param("roleId") List<Long> roleId);
 
 	/**
 	 * 顶部菜单树形结构
 	 *
+	 * @param tenantId
 	 * @return
 	 */
-	List<MenuVO> grantTopTree();
+	List<MenuVO> grantTopTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 顶部菜单树形结构
 	 *
+	 * @param tenantId
 	 * @param roleId
 	 * @return
 	 */
-	List<MenuVO> grantTopTreeByRole(List<Long> roleId);
+	List<MenuVO> grantTopTreeByRole(@Param("tenantId") String tenantId, @Param("roleId") List<Long> roleId);
 
 	/**
 	 * 所有菜单
@@ -129,7 +138,7 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	 * @param roleId
 	 * @return
 	 */
-	List<Menu> roleMenu(List<Long> roleId);
+	List<Menu> roleMenu(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 菜单树形结构
@@ -137,7 +146,7 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	 * @param roleId
 	 * @return
 	 */
-	List<Menu> routes(List<Long> roleId);
+	List<Menu> routes(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 按钮树形结构
@@ -145,15 +154,14 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	 * @param roleId
 	 * @return
 	 */
-	List<Menu> buttons(List<Long> roleId);
+	List<Menu> buttons(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 获取配置的角色权限
-	 *
 	 * @param roleIds
 	 * @return
 	 */
-	List<MenuDTO> authRoutes(List<Long> roleIds);
+	List<MenuDTO> authRoutes(@Param("roleIds") List<Long> roleIds);
 
 	/**
 	 * 根据角色ID获取角色菜单
@@ -161,7 +169,7 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	 * @param roleId
 	 * @return
 	 */
-	List<Menu> roleMenuByRoleId(List<Long> roleId);
+	List<Menu> roleMenuByRoleId(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 根据顶部菜单ID获取菜单

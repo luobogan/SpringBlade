@@ -19,10 +19,10 @@ package org.springblade.system.service;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.core.mp.base.BaseService;
+import org.springblade.system.excel.UserExcel;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
-import org.springblade.system.excel.UserExcel;
 
 import java.util.List;
 
@@ -35,7 +35,6 @@ public interface IUserService extends BaseService<User> {
 
 	/**
 	 * 新增或修改用户
-	 *
 	 * @param user
 	 * @return
 	 */

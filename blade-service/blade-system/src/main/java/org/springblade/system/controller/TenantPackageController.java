@@ -166,7 +166,7 @@ public class TenantPackageController extends BladeController {
 		}
 		List<TreeNode> allTreeNodes;
 		try {
-			Object rawResult = menuMapper.grantTree();
+			Object rawResult = menuMapper.grantTree(BladeConstant.ADMIN_TENANT_ID);
 			allTreeNodes = (List<TreeNode>) rawResult;
 		} catch (ClassCastException e) {
 			allTreeNodes = new ArrayList<>();

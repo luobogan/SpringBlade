@@ -46,10 +46,19 @@
         FROM
         blade_role
         WHERE
-        id IN
-        <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
-            #{ids}
-        </foreach>
+        <choose>
+            <when test="ids != null and ids.length > 0">
+                id IN
+                <foreach collection="ids" item="item" index="index" open="(" close=")" separator=",">
+                    <if test="item != null">
+                        #{item}
+                    </if>
+                </foreach>
+            </when>
+            <otherwise>
+                1 = 0
+            </otherwise>
+        </choose>
         and is_deleted = 0
     </select>
 

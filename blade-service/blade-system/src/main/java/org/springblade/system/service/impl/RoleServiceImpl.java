@@ -28,15 +28,19 @@ import org.springblade.system.entity.Role;
 import org.springblade.system.entity.RoleMenu;
 import org.springblade.system.entity.RoleScope;
 import org.springblade.system.mapper.RoleMapper;
+import org.springblade.system.mapper.UserMapper;
 import org.springblade.system.service.IRoleMenuService;
 import org.springblade.system.service.IRoleScopeService;
 import org.springblade.system.service.IRoleService;
+import org.springblade.system.user.entity.User;
 import org.springblade.system.vo.RoleVO;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
 
 import jakarta.validation.constraints.NotEmpty;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -55,6 +59,7 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements IR
 
 	private final IRoleMenuService roleMenuService;
 	private final IRoleScopeService roleScopeService;
+	private final UserMapper userMapper;
 
 	@Override
 	public IPage<RoleVO> selectRolePage(IPage<RoleVO> page, RoleVO role) {
@@ -137,7 +142,63 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements IR
 
 	@Override
 	public List<String> getRoleNames(String roleIds) {
-		return baseMapper.getRoleNames(Func.toLongArray(roleIds));
+		if (Func.isEmpty(roleIds)) {
+			return java.util.Collections.emptyList();
+		}
+		Long[] ids = Func.toLongArray(roleIds);
+		if (ids == null || ids.length == 0) {
+			return java.util.Collections.emptyList();
+		}
+		return baseMapper.getRoleNames(ids);
+	}
+
+	@Override
+	public List<User> getUsersByRoleId(Long roleId) {
+		if (Func.isEmpty(roleId)) {
+			return java.util.Collections.emptyList();
+		}
+		return userMapper.selectUsersByRoleId(roleId);
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public boolean grantUser(Long roleId, List<Long> userIds) {
+		if (Func.isEmpty(roleId) || CollectionUtil.isEmpty(userIds)) {
+			return false;
+		}
+		String roleIdStr = Func.toStr(roleId);
+		for (Long userId : userIds) {
+			User user = userMapper.selectById(userId);
+			if (user != null) {
+				String currentRoleIds = Func.toStr(user.getRoleId());
+				if (Func.isEmpty(currentRoleIds)) {
+					user.setRoleId(roleIdStr);
+				} else if (!currentRoleIds.contains(roleIdStr)) {
+					user.setRoleId(currentRoleIds + "," + roleIdStr);
+				}
+				userMapper.updateById(user);
+			}
+		}
+		return true;
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public boolean revokeUser(Long roleId, List<Long> userIds) {
+		if (Func.isEmpty(roleId) || CollectionUtil.isEmpty(userIds)) {
+			return false;
+		}
+		String roleIdStr = Func.toStr(roleId);
+		for (Long userId : userIds) {
+			User user = userMapper.selectById(userId);
+			if (user != null && Func.isNotEmpty(user.getRoleId())) {
+				List<String> roleIdList = new ArrayList<>(Arrays.asList(Func.toStrArray(user.getRoleId())));
+				roleIdList.remove(roleIdStr);
+				user.setRoleId(String.join(",", roleIdList));
+				userMapper.updateById(user);
+			}
+		}
+		return true;
 	}
 
 }

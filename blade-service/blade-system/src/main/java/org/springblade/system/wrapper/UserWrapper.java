@@ -21,6 +21,7 @@ import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.SpringUtil;
 import org.springblade.system.feign.IDictClient;
+import org.springblade.system.service.ITenantService;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.service.IUserService;
 import org.springblade.system.user.vo.UserVO;
@@ -38,9 +39,12 @@ public class UserWrapper extends BaseEntityWrapper<User, UserVO> {
 
 	private static IDictClient dictClient;
 
+	private static ITenantService tenantService;
+
 	static {
 		userService = SpringUtil.getBean(IUserService.class);
 		dictClient = SpringUtil.getBean(IDictClient.class);
+		tenantService = SpringUtil.getBean(ITenantService.class);
 	}
 
 	public static UserWrapper build() {
@@ -57,6 +61,10 @@ public class UserWrapper extends BaseEntityWrapper<User, UserVO> {
 		R<String> dict = dictClient.getValue("sex", Func.toInt(user.getSex()));
 		if (dict.isSuccess()) {
 			userVO.setSexName(dict.getData());
+		}
+		if (Func.isNotEmpty(user.getTenantId())) {
+			String tenantName = tenantService.getTenantNameByTenantId(user.getTenantId());
+			userVO.setTenantName(tenantName);
 		}
 		return userVO;
 	}

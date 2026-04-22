@@ -23,6 +23,7 @@ import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.SpringUtil;
 import org.springblade.system.entity.Role;
 import org.springblade.system.service.IRoleService;
+import org.springblade.system.service.ITenantService;
 import org.springblade.system.vo.RoleVO;
 
 import java.util.List;
@@ -36,9 +37,11 @@ import java.util.stream.Collectors;
 public class RoleWrapper extends BaseEntityWrapper<Role, RoleVO> {
 
 	private static IRoleService roleService;
+	private static ITenantService tenantService;
 
 	static {
 		roleService = SpringUtil.getBean(IRoleService.class);
+		tenantService = SpringUtil.getBean(ITenantService.class);
 	}
 
 	public static RoleWrapper build() {
@@ -54,8 +57,13 @@ public class RoleWrapper extends BaseEntityWrapper<Role, RoleVO> {
 			Role parent = roleService.getById(role.getParentId());
 			roleVO.setParentName(parent.getRoleName());
 		}
+		if (Func.isNotEmpty(role.getTenantId())) {
+			String tenantName = tenantService.getTenantNameByTenantId(role.getTenantId());
+			roleVO.setTenantName(tenantName);
+		}
 		return roleVO;
 	}
+
 
 	public List<RoleVO> listNodeVO(List<Role> list) {
 		List<RoleVO> collect = list.stream().map(this::entityVO).collect(Collectors.toList());

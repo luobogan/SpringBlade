@@ -30,10 +30,17 @@
         FROM
             blade_post
         WHERE
-            id IN
-            <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
-                #{ids}
-            </foreach>
+        <choose>
+            <when test="array != null and array.length > 0">
+                id IN
+                <foreach collection="array" item="ids" index="index" open="(" close=")" separator=",">
+                    #{ids}
+                </foreach>
+            </when>
+            <otherwise>
+                1 = 0
+            </otherwise>
+        </choose>
             and is_deleted = 0
     </select>
 

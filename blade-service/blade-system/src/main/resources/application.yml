@@ -1,0 +1,56 @@
+# 服务配置
+server:
+  port: 8000
+
+# 应用配置
+spring:
+  application:
+    name: blade-system
+  # 数据库配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/blade?useSSL=false&useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  # Redis配置
+  redis:
+    host: localhost
+    port: 6379
+    password:
+    database: 0
+
+# 租户配置
+blade:
+  tenant:
+    column: tenant_id
+    tables:
+      - blade_menu
+      - blade_dept
+      - blade_role
+      - blade_user
+      - blade_dict
+      - blade_param
+      - blade_post
+      - blade_region
+      - blade_menu_component
+      - blade_top_menu_setting
+      - blade_tenant
+      - blade_tenant_package
+      - blade_package_menu
+
+# MyBatis-Plus配置
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*Mapper.xml
+  type-aliases-package: org.springblade.system.entity
+  global-config:
+    banner: false
+    db-config:
+      id-type: ASSIGN_ID
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# 日志配置
+logging:
+  level:
+    org.springframework: warn
+    org.springblade: info

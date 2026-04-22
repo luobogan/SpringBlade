@@ -18,24 +18,22 @@ package org.springblade.system.service.impl;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.AllArgsConstructor;
-import org.springblade.core.log.exception.ServiceException;
+import org.springblade.core.mp.base.BaseService;
 import org.springblade.core.mp.base.BaseServiceImpl;
 import org.springblade.core.tenant.TenantId;
-import org.springblade.core.tool.api.R;
+import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.constant.BladeConstant;
 import org.springblade.core.tool.utils.DigestUtil;
 import org.springblade.core.tool.utils.Func;
-import org.springblade.system.entity.Dept;
-import org.springblade.system.entity.Post;
-import org.springblade.system.entity.Role;
-import org.springblade.system.entity.Tenant;
+import org.springblade.system.entity.*;
 import org.springblade.system.mapper.DeptMapper;
 import org.springblade.system.mapper.RoleMapper;
+import org.springblade.system.mapper.RoleMenuMapper;
 import org.springblade.system.mapper.TenantMapper;
+import org.springblade.system.mapper.UserMapper;
 import org.springblade.system.service.IPostService;
 import org.springblade.system.service.ITenantService;
 import org.springblade.system.user.entity.User;
-import org.springblade.system.user.feign.IUserClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,20 +50,36 @@ import java.util.stream.Collectors;
 @AllArgsConstructor
 public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> implements ITenantService {
 
+	// private static String getFirstLetters(String chinese) {
+	// 	if (Func.isEmpty(chinese)) {
+	// 		return "";
+	// 	}
+	// 	StringBuilder sb = new StringBuilder();
+	// 	for (char c : chinese.toCharArray()) {
+	// 		if (c >= '\u4e00' && c <= '\u9fa5') {
+	// 			String[] pinyin = net.sourceforge.pinyin4j.PinyinHelper.toHanyuPinyinStringArray(c);
+	// 			if (pinyin != null && pinyin.length > 0) {
+	// 				sb.append(Character.toUpperCase(pinyin[0].charAt(0)));
+	// 			} else {
+	// 				sb.append('N');
+	// 			}
+	// 		} else if (Character.isLetter(c)) {
+	// 			sb.append(Character.toUpperCase(c));
+	// 		}
+	// 	}
+	// 	return sb.toString();
+	// }
+
 	private final TenantId tenantId;
 	private final RoleMapper roleMapper;
 	private final DeptMapper deptMapper;
 	private final IPostService postService;
-	private final IUserClient userClient;
+	private final UserMapper userMapper;
+	private final RoleMenuMapper roleMenuMapper;
 
 	@Override
 	public IPage<Tenant> selectTenantPage(IPage<Tenant> page, Tenant tenant) {
 		return page.setRecords(baseMapper.selectTenantPage(page, tenant));
-	}
-
-	@Override
-	public Tenant getByTenantId(String tenantId) {
-		return getOne(Wrappers.<Tenant>query().lambda().eq(Tenant::getTenantId, tenantId));
 	}
 
 	@Override
@@ -76,51 +90,44 @@ public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> imp
 			List<String> codes = tenants.stream().map(Tenant::getTenantId).collect(Collectors.toList());
 			String tenantId = getTenantId(codes);
 			tenant.setTenantId(tenantId);
-			// 新建租户对应的默认角色
-			Role role = new Role();
-			role.setTenantId(tenantId);
-			role.setParentId(0L);
-			role.setRoleName("管理员");
-			role.setRoleAlias("admin");
-			role.setSort(2);
-			role.setIsDeleted(0);
-			roleMapper.insert(role);
-			// 新建租户对应的默认部门
-			Dept dept = new Dept();
-			dept.setTenantId(tenantId);
-			dept.setParentId(0L);
-			dept.setDeptName(tenant.getTenantName());
-			dept.setFullName(tenant.getTenantName());
-			dept.setSort(2);
-			dept.setIsDeleted(0);
-			deptMapper.insert(dept);
-			// 新建租户对应的默认岗位
-			Post post = new Post();
-			post.setTenantId(tenantId);
-			post.setCategory(1);
-			post.setPostCode("ceo");
-			post.setPostName("首席执行官");
-			post.setSort(1);
-			postService.save(post);
-			// 新建租户对应的默认管理用户
-			User user = new User();
-			user.setTenantId(tenantId);
-			user.setName("admin");
-			user.setRealName("admin");
-			user.setAccount("admin");
-			user.setPassword(DigestUtil.encrypt("admin"));
-			user.setRoleId(String.valueOf(role.getId()));
-			user.setDeptId(String.valueOf(dept.getId()));
-			user.setPostId(String.valueOf(post.getId()));
-			user.setBirthday(new Date());
-			user.setSex(1);
-			user.setIsDeleted(BladeConstant.DB_NOT_DELETED);
-			boolean temp = super.saveOrUpdate(tenant);
-			R<Boolean> result = userClient.saveUser(user);
-			if (!result.isSuccess()) {
-				throw new ServiceException(result.getMsg());
-			}
-			return temp;
+			TenantUtil.use(tenantId, () -> {
+				Role role = new Role();
+				role.setTenantId(tenantId);
+				role.setParentId(0L);
+				role.setRoleName("管理员");
+				role.setRoleAlias("admin");
+				role.setSort(2);
+				role.setIsDeleted(0);
+				roleMapper.insert(role);
+				Dept dept = new Dept();
+				dept.setTenantId(tenantId);
+				dept.setParentId(0L);
+				dept.setDeptName(tenant.getTenantName());
+				dept.setFullName(tenant.getTenantName());
+				dept.setSort(2);
+				dept.setIsDeleted(0);
+				deptMapper.insert(dept);
+				Post post = new Post();
+				post.setTenantId(tenantId);
+				post.setCategory(1);
+				post.setPostCode("ceo");
+				post.setPostName("首席执行官");
+				post.setSort(1);
+				postService.save(post);
+				User user = new User();
+				user.setTenantId(tenantId);
+				user.setName("admin");
+				user.setRealName("admin");
+				user.setAccount("admin");
+				user.setPassword(DigestUtil.encrypt("admin"));
+				user.setRoleId(String.valueOf(role.getId()));
+				user.setDeptId(String.valueOf(dept.getId()));
+				user.setPostId(String.valueOf(post.getId()));
+				user.setBirthday(new Date());
+				user.setSex(1);
+				user.setIsDeleted(BladeConstant.DB_NOT_DELETED);
+				userMapper.insert(user);
+			});
 		}
 		return super.saveOrUpdate(tenant);
 	}
@@ -131,6 +138,43 @@ public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> imp
 			return getTenantId(codes);
 		}
 		return code;
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public boolean deleteLogic(List<Long> ids) {
+		for (Long id : ids) {
+			Tenant tenant = baseMapper.selectById(id);
+			if (tenant != null && Func.isNotBlank(tenant.getTenantId())) {
+				String tenantId = tenant.getTenantId();
+				TenantUtil.use(tenantId, () -> {
+					List<Role> roles = roleMapper.selectList(Wrappers.<Role>query().lambda().eq(Role::getTenantId, tenantId));
+					List<Long> roleIds = roles.stream().map(Role::getId).collect(Collectors.toList());
+					if (!roleIds.isEmpty()) {
+						roleMenuMapper.delete(Wrappers.<RoleMenu>query().lambda().in(RoleMenu::getRoleId, roleIds));
+					}
+					userMapper.delete(Wrappers.<User>query().lambda().eq(User::getTenantId, tenantId));
+					roleMapper.delete(Wrappers.<Role>query().lambda().eq(Role::getTenantId, tenantId));
+					deptMapper.delete(Wrappers.<Dept>query().lambda().eq(Dept::getTenantId, tenantId));
+					postService.remove(Wrappers.<Post>query().lambda().eq(Post::getTenantId, tenantId));
+				});
+			}
+		}
+		return super.deleteLogic(ids);
+	}
+
+	@Override
+	public String getTenantNameByTenantId(String tenantId) {
+		if (Func.isEmpty(tenantId)) {
+			return null;
+		}
+		Tenant tenant = baseMapper.selectOne(Wrappers.<Tenant>query().lambda().eq(Tenant::getTenantId, tenantId));
+		return tenant != null ? tenant.getTenantName() : null;
+	}
+
+	@Override
+	public Tenant getByTenantId(String tenantId) {
+		return baseMapper.selectOne(Wrappers.<Tenant>query().lambda().eq(Tenant::getTenantId, tenantId));
 	}
 
 }

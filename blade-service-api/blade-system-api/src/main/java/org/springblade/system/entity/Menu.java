@@ -124,6 +124,54 @@ public class Menu implements Serializable {
 	@Schema(description = "是否已删除")
 	private Integer isDeleted;
 
+	/**
+	 * 租户ID
+	 */
+	@Schema(description = "租户ID")
+	private String tenantId;
+
+	/**
+	 * 是否组件
+	 */
+	@Schema(description = "是否组件")
+	private Integer isComponent;
+
+	/**
+	 * 组件路径
+	 */
+	@Schema(description = "组件路径")
+	private String component;
+
+	/**
+	 * 组件类型
+	 */
+	@Schema(description = "组件类型")
+	private String componentType;
+
+	/**
+	 * 远程URL
+	 */
+	@Schema(description = "远程URL")
+	private String remoteUrl;
+
+	/**
+	 * 缓存版本
+	 */
+	@Schema(description = "缓存版本")
+	private String cacheVersion;
+
+	/**
+	 * 状态
+	 */
+	@Schema(description = "状态")
+	private Integer status;
+
+	/**
+	 * 源菜单ID
+	 */
+	@Schema(description = "源菜单ID")
+	private Long sourceMenuId;
+
 
 	@Override
 	public boolean equals(Object obj) {
