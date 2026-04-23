@@ -29,7 +29,7 @@ import java.util.List;
  * @since 2026-03-05
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/member")
+@RequestMapping("/member")
 @AllArgsConstructor
 public class MemberController extends BladeController {
 

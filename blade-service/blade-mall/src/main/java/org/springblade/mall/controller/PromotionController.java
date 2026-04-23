@@ -24,7 +24,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/promotions")
+@RequestMapping("/admin/promotions")
 @Tag(name = "促销规则管理", description = "促销规则管理")
 public class PromotionController extends BladeController {
 

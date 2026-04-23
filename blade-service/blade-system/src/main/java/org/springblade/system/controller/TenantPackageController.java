@@ -50,7 +50,7 @@ import java.util.Map;
  * @author Chill
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_SYSTEM_NAME + "/tenant-package")
+@RequestMapping("/tenant-package")
 @Hidden
 @Tag(name = "租户产品包管理")
 @AllArgsConstructor

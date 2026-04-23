@@ -19,7 +19,7 @@ import java.util.Map;
  * 管理员订单控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/orders")
+@RequestMapping("/admin/orders")
 @AllArgsConstructor
 @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 public class AdminOrderController extends BladeController {
@@ -41,27 +41,27 @@ public class AdminOrderController extends BladeController {
             @RequestParam(required = false) String status) {
         try {
             List<OrderVO> orders;
-            
+
             // 根据状态筛选订单
             if (status != null && !status.isEmpty()) {
                 orders = orderService.getOrdersByStatus(status);
             } else {
                 orders = orderService.getAllOrders();
             }
-            
+
             // 根据关键词搜索
             if (keyword != null && !keyword.isEmpty()) {
                 orders = orders.stream()
-                        .filter(order -> order.getOrderNo().contains(keyword) || 
+                        .filter(order -> order.getOrderNo().contains(keyword) ||
                                 (order.getUserName() != null && order.getUserName().contains(keyword)))
                         .collect(java.util.stream.Collectors.toList());
             }
-            
+
             // 模拟分页
             int start = (query.getCurrent() - 1) * query.getSize();
             int end = Math.min(start + query.getSize(), orders.size());
             List<OrderVO> pageOrders = orders.subList(start, end);
-            
+
             Map<String, Object> response = new java.util.HashMap<>();
             response.put("list", pageOrders);
             response.put("total", orders.size());
@@ -136,11 +136,11 @@ public class AdminOrderController extends BladeController {
     @ApiOperationSupport(order = 5)
     @Operation(summary = "订单发货", description = "传入id、shippingMethod和trackingNo")
     public R<OrderVO> shipOrder(
-            @PathVariable Long id, 
+            @PathVariable Long id,
             @RequestBody Map<String, String> shippingInfo) {
         try {
-            OrderVO orderVO = orderService.shipOrder(id, 
-                    shippingInfo.get("shippingMethod"), 
+            OrderVO orderVO = orderService.shipOrder(id,
+                    shippingInfo.get("shippingMethod"),
                     shippingInfo.get("trackingNo"));
             return R.data(orderVO);
         } catch (Exception e) {

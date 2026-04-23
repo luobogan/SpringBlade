@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory;
  * 品牌控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/brands")
+@RequestMapping("/brands")
 public class BrandController extends BladeController {
 
     private static final Logger log = LoggerFactory.getLogger(BrandController.class);

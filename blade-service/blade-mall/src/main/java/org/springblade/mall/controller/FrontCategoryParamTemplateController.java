@@ -22,7 +22,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/category-param-templates")
+@RequestMapping("/category-param-templates")
 @Tag(name = "前端分类参数模板管理", description = "前端分类参数模板管理")
 public class FrontCategoryParamTemplateController extends BladeController {
 

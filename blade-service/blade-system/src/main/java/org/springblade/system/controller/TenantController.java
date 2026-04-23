@@ -75,7 +75,7 @@ import static org.springblade.core.cache.utils.CacheUtil.SYS_CACHE;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_SYSTEM_NAME + "/tenant")
+@RequestMapping("/tenant")
 @Hidden
 @Tag(name = "租户管理", description = "接口")
 public class TenantController extends BladeController {

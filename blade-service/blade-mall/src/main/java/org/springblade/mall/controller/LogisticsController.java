@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/logistics")
+@RequestMapping("/admin/logistics")
 @Tag(name = "物流信息管理", description = "物流信息管理")
 public class LogisticsController extends BladeController {
 

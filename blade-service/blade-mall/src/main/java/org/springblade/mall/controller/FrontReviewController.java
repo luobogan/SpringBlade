@@ -22,7 +22,7 @@ import java.util.List;
  * 处理前端的评价相关请求
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/reviews")
+@RequestMapping("/reviews")
 @AllArgsConstructor
 public class FrontReviewController extends BladeController {
 
@@ -81,7 +81,7 @@ public class FrontReviewController extends BladeController {
             }
 
             reviewDTO.setProductId(productId);
-            
+
             ReviewVO reviewVO = reviewService.createReview(reviewDTO);
             return R.success("评价创建成功").data(reviewVO);
         } catch (Exception e) {

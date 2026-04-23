@@ -21,7 +21,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/product-relations")
+@RequestMapping("/admin/product-relations")
 @Tag(name = "商品关联管理", description = "商品关联管理")
 public class ProductRelationController extends BladeController {
 

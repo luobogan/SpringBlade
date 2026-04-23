@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/front/products")
+@RequestMapping("/front/products")
 @Tag(name = "前端商品管理", description = "前端商品管理")
 public class FrontProductController extends BladeController {
 

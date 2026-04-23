@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/front/categories")
+@RequestMapping("/front/categories")
 @Tag(name = "前端分类管理", description = "前端分类管理")
 public class FrontCategoryController extends BladeController {
 

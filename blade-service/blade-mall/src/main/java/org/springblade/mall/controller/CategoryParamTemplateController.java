@@ -25,7 +25,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/category-param-templates")
+@RequestMapping("/admin/category-param-templates")
 @Tag(name = "分类参数模板管理", description = "分类参数模板管理")
 public class CategoryParamTemplateController extends BladeController {
 

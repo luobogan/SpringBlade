@@ -26,7 +26,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/front/category-brands")
+@RequestMapping("/front/category-brands")
 @Tag(name = "前端分类品牌管理", description = "前端分类品牌管理")
 public class FrontCategoryBrandController extends BladeController {
 

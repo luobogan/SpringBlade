@@ -33,10 +33,10 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * 评价控制器
+ * 评价控制器 AppConstant.APPLICATION_MALL_NAME +
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/review")
+@RequestMapping("/review")
 @AllArgsConstructor
 public class ReviewController extends BladeController {
 
@@ -150,7 +150,7 @@ public class ReviewController extends BladeController {
     @GetMapping("/rating/list")
     @ApiOperationSupport(order = 7)
     @Operation(summary = "根据评分获取评价", description = "传入productId和rating")
-    public R<List<ReviewVO>> getReviewsByRating(@Parameter(description = "商品ID", required = true) @RequestParam Long productId, 
+    public R<List<ReviewVO>> getReviewsByRating(@Parameter(description = "商品ID", required = true) @RequestParam Long productId,
                                                @Parameter(description = "评分", required = true) @RequestParam Integer rating) {
         try {
             List<ReviewVO> reviews = reviewService.getReviewsByRating(productId, rating);

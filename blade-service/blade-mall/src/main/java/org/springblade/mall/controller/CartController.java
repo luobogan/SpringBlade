@@ -21,7 +21,7 @@ import java.util.List;
  * 购物车管理控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/cart")
+@RequestMapping("/cart")
 public class CartController extends BladeController {
 
     private static final Logger log = LoggerFactory.getLogger(CartController.class);

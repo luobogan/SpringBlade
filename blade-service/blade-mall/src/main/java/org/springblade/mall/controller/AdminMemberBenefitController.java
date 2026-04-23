@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
  * @since 2026-03-05
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/member-benefits")
+@RequestMapping("/admin/member-benefits")
 @AllArgsConstructor
 @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 public class AdminMemberBenefitController extends BladeController {

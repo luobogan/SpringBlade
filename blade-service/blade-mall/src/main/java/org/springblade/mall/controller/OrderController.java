@@ -36,7 +36,7 @@ import java.util.List;
  * 订单控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/order")
+@RequestMapping("/order")
 @AllArgsConstructor
 public class OrderController extends BladeController {
 
@@ -120,7 +120,7 @@ public class OrderController extends BladeController {
     @PostMapping("/update-status")
     @ApiOperationSupport(order = 7)
     @Operation(summary = "更新订单状态", description = "传入id和status")
-    public R<OrderVO> updateOrderStatus(@Parameter(description = "订单ID", required = true) @RequestParam Long id, 
+    public R<OrderVO> updateOrderStatus(@Parameter(description = "订单ID", required = true) @RequestParam Long id,
                                         @Parameter(description = "订单状态", required = true) @RequestParam String status) {
         OrderVO orderVO = orderService.updateOrderStatus(id, status);
         return R.data(orderVO, "订单状态更新成功");
@@ -132,7 +132,7 @@ public class OrderController extends BladeController {
     @PostMapping("/pay")
     @ApiOperationSupport(order = 8)
     @Operation(summary = "支付订单", description = "传入id和paymentDTO")
-    public R<OrderVO> payOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id, 
+    public R<OrderVO> payOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id,
                                @Valid @RequestBody PaymentDTO paymentDTO) {
         OrderVO orderVO = orderService.payOrder(id, paymentDTO.getPaymentMethod(), paymentDTO.getPaymentNo());
         return R.data(orderVO, "订单支付成功");
@@ -144,8 +144,8 @@ public class OrderController extends BladeController {
     @PostMapping("/ship")
     @ApiOperationSupport(order = 9)
     @Operation(summary = "发货", description = "传入id、shippingMethod和trackingNo")
-    public R<OrderVO> shipOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id, 
-                                @Parameter(description = "配送方式", required = true) @RequestParam String shippingMethod, 
+    public R<OrderVO> shipOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id,
+                                @Parameter(description = "配送方式", required = true) @RequestParam String shippingMethod,
                                 @Parameter(description = "物流单号", required = true) @RequestParam String trackingNo) {
         OrderVO orderVO = orderService.shipOrder(id, shippingMethod, trackingNo);
         return R.data(orderVO, "订单发货成功");

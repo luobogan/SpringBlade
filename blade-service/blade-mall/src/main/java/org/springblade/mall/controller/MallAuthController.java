@@ -53,7 +53,7 @@ import org.slf4j.LoggerFactory;
  * @author Chill
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/auth")
+@RequestMapping("/auth")
 @Tag(name = "商城认证", description = "商城认证接口")
 @RequiredArgsConstructor
 public class MallAuthController {

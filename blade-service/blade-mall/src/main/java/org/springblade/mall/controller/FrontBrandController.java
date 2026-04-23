@@ -22,7 +22,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/front/brands")
+@RequestMapping("/front/brands")
 @Tag(name = "前端品牌管理", description = "前端品牌管理")
 public class FrontBrandController extends BladeController {
 

@@ -18,10 +18,10 @@ import jakarta.validation.Valid;
 import java.util.List;
 
 /**
- * 地址管理控制器
+ * 地址管理控制器AppConstant.APPLICATION_MALL_NAME +
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/address")
+@RequestMapping("/address")
 public class AddressController extends BladeController {
 
     private static final Logger log = LoggerFactory.getLogger(AddressController.class);

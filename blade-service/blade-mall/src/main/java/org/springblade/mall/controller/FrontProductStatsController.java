@@ -19,7 +19,7 @@ import java.util.Map;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/products")
+@RequestMapping("/products")
 @Tag(name = "前端商品统计", description = "前端商品统计")
 public class FrontProductStatsController extends BladeController {
 

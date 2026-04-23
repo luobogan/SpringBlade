@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
  * 管理员仪表盘控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/admin/dashboard")
+@RequestMapping("/admin/dashboard")
 public class DashboardController extends BladeController {
 
     private static final Logger log = LoggerFactory.getLogger(DashboardController.class);

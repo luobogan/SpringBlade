@@ -36,13 +36,13 @@ import org.springframework.web.bind.annotation.*;
 /**
  * 微信支付控制器
  * 提供微信支付统一下单、查询等接口
- * 
+ *
  * @author youpinmall
  * @date 2026-03-05
  */
 @Tag(name = "微信支付", description = "微信支付相关接口")
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/pay/wechat")
+@RequestMapping("/pay/wechat")
 @RequiredArgsConstructor
 public class PayController extends BladeController {
 

@@ -24,7 +24,7 @@ import java.util.List;
  * 分类属性管理控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/category-attributes")
+@RequestMapping("/category-attributes")
 @AllArgsConstructor
 public class CategoryAttributeController extends BladeController {
 

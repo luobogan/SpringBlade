@@ -18,7 +18,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/promotions")
+@RequestMapping("/promotions")
 @Tag(name = "前端促销管理", description = "前端促销管理")
 public class FrontPromotionController extends BladeController {
 

@@ -19,7 +19,7 @@ import java.util.List;
 @Slf4j
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/category-brands")
+@RequestMapping("/category-brands")
 @Tag(name = "分类品牌管理", description = "分类品牌管理")
 public class CategoryBrandController extends BladeController {
 

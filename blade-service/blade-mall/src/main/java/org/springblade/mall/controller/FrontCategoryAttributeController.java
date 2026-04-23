@@ -29,7 +29,7 @@ import java.util.List;
  */
 @RestController
 @AllArgsConstructor
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/front/category-attributes")
+@RequestMapping("/front/category-attributes")
 @Tag(name = "前端分类属性管理", description = "前端分类属性管理")
 public class FrontCategoryAttributeController extends BladeController {
 

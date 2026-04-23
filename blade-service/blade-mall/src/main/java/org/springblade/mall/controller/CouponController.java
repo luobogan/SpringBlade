@@ -19,7 +19,7 @@ import java.util.List;
  * 优惠券控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/coupons")
+@RequestMapping("/coupons")
 @AllArgsConstructor
 public class CouponController extends BladeController {
 

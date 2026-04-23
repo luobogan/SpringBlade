@@ -18,13 +18,14 @@ import java.io.IOException;
 /**
  * 微信支付回调控制器
  * 处理微信支付结果通知和退款结果通知
- * 
+ *
  * @author youpinmall
  * @date 2026-03-05
  */
 @Tag(name = "微信支付回调", description = "微信支付回调通知接口")
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/pay")
+//AppConstant.APPLICATION_MALL_NAME +
+@RequestMapping("/pay")
 @RequiredArgsConstructor
 public class WechatPayCallbackController extends BladeController {
 
@@ -34,7 +35,7 @@ public class WechatPayCallbackController extends BladeController {
 
     /**
      * 微信支付结果通知
-     * 
+     *
      * @param request HTTP 请求
      * @return 处理结果
      */
@@ -53,12 +54,12 @@ public class WechatPayCallbackController extends BladeController {
             String nonce = request.getHeader("Wechatpay-Nonce");
             String serial = request.getHeader("Wechatpay-Serial");
 
-            log.debug("签名信息：signature={}, timestamp={}, nonce={}, serial={}", 
+            log.debug("签名信息：signature={}, timestamp={}, nonce={}, serial={}",
                     signature, timestamp, nonce, serial);
 
             // 处理支付回调
             String result = callbackService.handlePayNotify(body, signature, timestamp, nonce, serial);
-            
+
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             log.error("处理微信支付回调失败", e);
@@ -68,7 +69,7 @@ public class WechatPayCallbackController extends BladeController {
 
     /**
      * 微信退款结果通知
-     * 
+     *
      * @param request HTTP 请求
      * @return 处理结果
      */
@@ -87,12 +88,12 @@ public class WechatPayCallbackController extends BladeController {
             String nonce = request.getHeader("Wechatpay-Nonce");
             String serial = request.getHeader("Wechatpay-Serial");
 
-            log.debug("签名信息：signature={}, timestamp={}, nonce={}, serial={}", 
+            log.debug("签名信息：signature={}, timestamp={}, nonce={}, serial={}",
                     signature, timestamp, nonce, serial);
 
             // 处理退款回调
             String result = callbackService.handleRefundNotify(body, signature, timestamp, nonce, serial);
-            
+
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             log.error("处理微信退款回调失败", e);
@@ -102,7 +103,7 @@ public class WechatPayCallbackController extends BladeController {
 
     /**
      * 获取请求体
-     * 
+     *
      * @param request HTTP 请求
      * @return 请求体字符串
      * @throws IOException IO 异常

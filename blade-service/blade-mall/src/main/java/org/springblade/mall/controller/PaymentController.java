@@ -23,7 +23,7 @@ import java.util.List;
  * 支付控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME + "/payment")
+@RequestMapping("/payment")
 @RequiredArgsConstructor
 public class PaymentController extends BladeController {
 
