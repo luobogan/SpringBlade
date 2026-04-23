@@ -34,11 +34,15 @@ import org.springblade.core.tool.constant.BladeConstant;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.system.entity.Role;
 import org.springblade.system.service.IRoleService;
+import org.springblade.system.user.entity.User;
 import org.springblade.system.vo.GrantVO;
 import org.springblade.system.vo.RoleVO;
+import org.springblade.system.user.vo.UserVO;
 import org.springblade.system.wrapper.RoleWrapper;
+import org.springblade.system.wrapper.UserWrapper;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -55,6 +59,7 @@ import static org.springblade.core.cache.utils.CacheUtil.SYS_CACHE;
 @RequestMapping("/role")
 @Tag(name = "角色", description = "角色")
 public class RoleController extends BladeController {
+
 
 	private IRoleService roleService;
 
@@ -95,7 +100,6 @@ public class RoleController extends BladeController {
 		List<RoleVO> tree = roleService.tree(Func.toStr(tenantId, bladeUser.getTenantId()));
 		return R.data(tree);
 	}
-
 
 	/**
 	 * 获取指定角色树形结构
@@ -145,4 +149,165 @@ public class RoleController extends BladeController {
 		boolean temp = roleService.grant(grantVO.getRoleIds(), grantVO.getMenuIds(), grantVO.getDataScopeIds(), grantVO.getApiScopeIds());
 		return R.status(temp);
 	}
+
+	/**
+	 * 获取角色下的用户列表
+	 */
+	@GetMapping("/users")
+	@ApiOperationSupport(order = 8)
+	@Operation(summary = "获取角色用户", description = "传入roleId")
+	public R<List<UserVO>> getUsersByRoleId(@Parameter(description = "角色ID", required = true) @RequestParam Long roleId) {
+		List<User> users = roleService.getUsersByRoleId(roleId);
+		return R.data(UserWrapper.build().listVO(users));
+	}
+
+	/**
+	 * 授权用户到角色
+	 */
+	@PostMapping("/grant-user")
+	@ApiOperationSupport(order = 9)
+	@Operation(summary = "授权用户", description = "传入roleId和userIds")
+	public R grantUser(@RequestBody Map<String, Object> params) {
+		Long roleId = parseLong(params.get("roleId"));
+		List<Long> userIds = parseLongList(params.get("userIds"));
+		boolean temp = roleService.grantUser(roleId, userIds);
+		return R.status(temp);
+	}
+
+	/**
+	 * 取消用户的角色授权
+	 */
+	@PostMapping("/revoke-user")
+	@ApiOperationSupport(order = 10)
+	@Operation(summary = "取消授权", description = "传入roleId和userIds")
+	public R revokeUser(@RequestBody Map<String, Object> params) {
+		Long roleId = parseLong(params.get("roleId"));
+		List<Long> userIds = parseLongList(params.get("userIds"));
+		boolean temp = roleService.revokeUser(roleId, userIds);
+		return R.status(temp);
+	}
+
+	private Long parseLong(Object value) {
+		if (value == null) {
+			return null;
+		}
+		if (value instanceof Long) {
+			return (Long) value;
+		}
+		if (value instanceof Number) {
+			return ((Number) value).longValue();
+		}
+		if (value instanceof String) {
+			String strValue = ((String) value).trim();
+			if (!strValue.isEmpty()) {
+				return new java.math.BigDecimal(strValue).longValue();
+			}
+		}
+		return null;
+	}
+
+	private List<Long> parseLongList(Object value) {
+		List<Long> result = new ArrayList<>();
+		if (value instanceof List) {
+			for (Object item : (List<?>) value) {
+				Long id = parseLong(item);
+				if (id != null) {
+					result.add(id);
+				}
+			}
+		} else if (value instanceof String) {
+			result = Func.toLongList((String) value);
+		}
+		return result;
+	}
+
+//	private IRoleService roleService;
+//
+//	/**
+//	 * 详情
+//	 */
+//	@GetMapping("/detail")
+//	@ApiOperationSupport(order = 1)
+//	@Operation(summary = "详情", description = "传入role")
+//	public R<RoleVO> detail(Role role) {
+//		Role detail = roleService.getOne(Condition.getQueryWrapper(role));
+//		return R.data(RoleWrapper.build().entityVO(detail));
+//	}
+//
+//	/**
+//	 * 列表
+//	 */
+//	@GetMapping("/list")
+//	@Parameters({
+//		@Parameter(name = "roleName", description = "参数名称", in = ParameterIn.QUERY, schema = @Schema(type = "string")),
+//		@Parameter(name = "roleAlias", description = "角色别名", in = ParameterIn.QUERY, schema = @Schema(type = "string"))
+//	})
+//	@ApiOperationSupport(order = 2)
+//	@Operation(summary = "列表", description = "传入role")
+//	public R<List<RoleVO>> list(@Parameter(hidden = true) @RequestParam Map<String, Object> role, BladeUser bladeUser) {
+//		QueryWrapper<Role> queryWrapper = Condition.getQueryWrapper(role, Role.class);
+//		List<Role> list = roleService.list((!bladeUser.getTenantId().equals(BladeConstant.ADMIN_TENANT_ID)) ? queryWrapper.lambda().eq(Role::getTenantId, bladeUser.getTenantId()) : queryWrapper);
+//		return R.data(RoleWrapper.build().listNodeVO(list));
+//	}
+//
+//	/**
+//	 * 获取角色树形结构
+//	 */
+//	@GetMapping("/tree")
+//	@ApiOperationSupport(order = 3)
+//	@Operation(summary = "树形结构", description = "树形结构")
+//	public R<List<RoleVO>> tree(String tenantId, BladeUser bladeUser) {
+//		List<RoleVO> tree = roleService.tree(Func.toStr(tenantId, bladeUser.getTenantId()));
+//		return R.data(tree);
+//	}
+//
+//
+//	/**
+//	 * 获取指定角色树形结构
+//	 */
+//	@GetMapping("/tree-by-id")
+//	@ApiOperationSupport(order = 4)
+//	@Operation(summary = "树形结构", description = "树形结构")
+//	public R<List<RoleVO>> treeById(Long roleId, BladeUser bladeUser) {
+//		Role role = roleService.getById(roleId);
+//		List<RoleVO> tree = roleService.tree(Func.notNull(role) ? role.getTenantId() : bladeUser.getTenantId());
+//		return R.data(tree);
+//	}
+//
+//	/**
+//	 * 新增或修改
+//	 */
+//	@PostMapping("/submit")
+//	@ApiOperationSupport(order = 5)
+//	@Operation(summary = "新增或修改", description = "传入role")
+//	public R submit(@Valid @RequestBody Role role, BladeUser user) {
+//		CacheUtil.clear(SYS_CACHE);
+//		if (Func.isEmpty(role.getId())) {
+//			role.setTenantId(user.getTenantId());
+//		}
+//		return R.status(roleService.saveOrUpdate(role));
+//	}
+//
+//	/**
+//	 * 删除
+//	 */
+//	@PostMapping("/remove")
+//	@ApiOperationSupport(order = 6)
+//	@Operation(summary = "删除", description = "传入ids")
+//	public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
+//		CacheUtil.clear(SYS_CACHE);
+//		return R.status(roleService.removeByIds(Func.toLongList(ids)));
+//	}
+//
+//	/**
+//	 * 设置角色权限
+//	 */
+//	@PostMapping("/grant")
+//	@ApiOperationSupport(order = 7)
+//	@Operation(summary = "权限设置", description = "传入roleId集合以及menuId集合")
+//	public R grant(@RequestBody GrantVO grantVO) {
+//		CacheUtil.clear(SYS_CACHE);
+//		boolean temp = roleService.grant(grantVO.getRoleIds(), grantVO.getMenuIds(), grantVO.getDataScopeIds(), grantVO.getApiScopeIds());
+//		return R.status(temp);
+//	}
 }
