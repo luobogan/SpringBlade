@@ -42,12 +42,12 @@ public interface LauncherConstant {
 	/**
 	 * sentinel dev 地址
 	 */
-	String SENTINEL_DEV_ADDR = "127.0.0.1:80";
+	String SENTINEL_DEV_ADDR = "127.0.0.1:81";
 
 	/**
 	 * sentinel prod 地址
 	 */
-	String SENTINEL_PROD_ADDR = "172.30.0.58:80";
+	String SENTINEL_PROD_ADDR = "172.30.0.58:81";
 
 	/**
 	 * sentinel test 地址

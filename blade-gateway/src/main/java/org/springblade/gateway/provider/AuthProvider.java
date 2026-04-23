@@ -46,6 +46,7 @@ public class AuthProvider {
 		DEFAULT_SKIP_URL.add("/storage/deduct/**");
 		DEFAULT_SKIP_URL.add("/error/**");
 		DEFAULT_SKIP_URL.add("/assets/**");
+		DEFAULT_SKIP_URL.add("/blade-mall/front/**");
 	}
 
 	/**

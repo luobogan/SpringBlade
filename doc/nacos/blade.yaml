@@ -126,7 +126,52 @@ blade:
       - client-id: saber
         path-patterns:
           - /saber/**
+
   tenant:
     column: tenant_id
+    auto: true
     tables:
       - blade_notice
+    # 排除多租户的数据表 — 这些表虽然实体继承 TenantEntity，但实际是全局共享的
+    # blade_menu: 菜单表，所有租户共享同一套菜单结构
+    # blade_role_menu: 角色-菜单关联表
+    # blade_role_scope: 角色-数据权限/接口权限关联表
+    # blade_top_menu_setting: 顶部菜单设置表
+    # blade_tenant_package: 产品包定义表
+    # blade_package_menu: 产品包-菜单关联表
+    # blade_dict: 字典表（通常全局共享）
+    # blade_dict_option: 字典选项表
+    # exclude-tables:
+
+# 微信小程序配置
+wechat:
+  miniapp:
+    appid: wx3d4a76c14ed1683b  # 请替换为实际的小程序AppID
+    secret: b1f771b0d92b9dcca5b260d91de53c22  # 请替换为实际的小程序AppSecret
+
+  # 微信支付配置
+  pay:
+    enabled: false  # 是否启用微信支付（true: 启用，false: 禁用）
+    appid: wx3d4a76c14ed1683b  # 小程序 AppID
+    mch-id: 1900000000  # 商户号，请替换为实际的商户号
+    mch-serial-no: b1f771b0d92b9dcca5b260d91de53c22  # 商户证书序列号
+    api-v3-key: your_api_v3_key_here  # APIv3 密钥（32 位）
+    private-key-path: src/main/resources/certs/apiclient_key.pem  # 商户私钥路径（需从微信商户平台下载）
+    platform-cert-path: src/main/resources/certs/wechatpay_cert.pem  # 微信支付平台证书路径
+    notify-url: https://your-domain.com/api/pay/wechat/notify  # 支付结果通知地址
+    refund-notify-url: https://your-domain.com/api/pay/wechat/refund/notify  # 退款通知地址
+
+# 第三方平台配置
+third-party:
+  # 微信公众号/开放平台配置
+  wechat:
+    app-id: wxc771b90f4d13039e  # 请替换为实际的微信AppID
+    app-secret: 20be435da6771c5d86c4fd6eb097ad9b  # 请替换为实际的微信AppSecret
+    access-token-url: https://api.weixin.qq.com/sns/oauth2/access_token
+    user-info-url: https://api.weixin.qq.com/sns/userinfo
+  # 抖音配置
+  douyin:
+    client-key: your_douyin_client_key  # 请替换为实际的抖音Client Key
+    client-secret: your_douyin_client_secret  # 请替换为实际的抖音Client Secret
+    access-token-url: https://open.douyin.com/oauth/access_token/
+    user-info-url: https://open.douyin.com/oauth/userinfo/
