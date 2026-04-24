@@ -73,9 +73,28 @@ public interface IUserClient {
 	 * 新建用户
 	 *
 	 * @param user 用户实体
-	 * @return
+	 * @return 保存后的用户对象（含数据库生成的ID）
 	 */
 	@PostMapping(API_PREFIX + "/save-user")
-	R<Boolean> saveUser(@RequestBody User user);
+	R<User> saveUser(@RequestBody User user);
+
+	/**
+	 * 保存第三方授权用户信息
+	 *
+	 * @param userOauth 第三方授权用户信息
+	 * @return
+	 */
+	@PostMapping(API_PREFIX + "/save-user-oauth")
+	R<Boolean> saveUserOauth(@RequestBody UserOauth userOauth);
+
+	/**
+	 * 根据租户ID和账号查询用户
+	 *
+	 * @param tenantId 租户ID
+	 * @param account  账号（微信登录时为openId）
+	 * @return 用户对象
+	 */
+	@GetMapping(API_PREFIX + "/user-by-account")
+	R<User> getUserByAccount(@RequestParam("tenantId") String tenantId, @RequestParam("account") String account);
 
 }

@@ -12,7 +12,7 @@ public class IMallClientFallback implements IMallClient {
 
 	@Override
 	public R<UserInfo> getUserInfo(Long userId) {
-		return R.fail("获取用户信息失败");
+		return R.<UserInfo>fail("获取用户信息失败");
 	}
 
 }

@@ -19,6 +19,7 @@ import com.alibaba.nacos.common.utils.StringUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.launch.props.BladeProperties;
@@ -60,12 +61,21 @@ public class AuthFilter implements GlobalFilter, Ordered {
 	@Override
 	public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
 		String path = exchange.getRequest().getURI().getPath();
-		if (isSkip(path)) {
+		log.info("=== AuthFilter 请求路径: {} ===", path);
+
+		boolean skip = isSkip(path);
+		log.info("isSkip({}) = {}", path, skip);
+
+		if (skip) {
+			log.info(">>> 白名单匹配，放行请求: {}", path);
 			return chain.filter(exchange);
 		}
+
+		log.warn("<<< 未匹配白名单，进入token校验: {}", path);
 		ServerHttpResponse resp = exchange.getResponse();
 		String headerToken = exchange.getRequest().getHeaders().getFirst(AuthProvider.AUTH_KEY);
 		String paramToken = exchange.getRequest().getQueryParams().getFirst(AuthProvider.AUTH_KEY);
+		log.debug("headerToken[{}]: {}, paramToken[{}]: {}", AuthProvider.AUTH_KEY, headerToken, AuthProvider.AUTH_KEY, paramToken);
 		if (StringUtils.isBlank(headerToken) && StringUtils.isBlank(paramToken)) {
 			return unAuth(resp, "缺失令牌,鉴权失败");
 		}
@@ -83,8 +93,26 @@ public class AuthFilter implements GlobalFilter, Ordered {
 	}
 
 	private boolean isSkip(String path) {
-		return AuthProvider.getDefaultSkipUrl().stream().anyMatch(pattern -> antPathMatcher.match(pattern, path))
-			|| authProperties.getSkipUrl().stream().anyMatch(pattern -> antPathMatcher.match(pattern, path));
+		List<String> defaultSkip = AuthProvider.getDefaultSkipUrl();
+		List<String> configSkip = authProperties.getSkipUrl();
+		log.debug("DEFAULT_SKIP_URL(代码层): {}", defaultSkip);
+		log.debug("CONFIG_SKIP_URL(Nacos配置): {}", configSkip);
+
+		boolean defaultMatch = defaultSkip.stream().anyMatch(pattern -> {
+			boolean match = antPathMatcher.match(pattern, path);
+			if (match) log.info("  ✅ 代码白名单匹配: pattern={}, path={}", pattern, path);
+			return match;
+		});
+		boolean configMatch = configSkip.stream().anyMatch(pattern -> {
+			boolean match = antPathMatcher.match(pattern, path);
+			if (match) log.info("  ✅ Nacos白名单匹配: pattern={}, path={}", pattern, path);
+			return match;
+		});
+
+		if (!defaultMatch && !configMatch) {
+			log.warn("  ❌ 所有白名单均未匹配: path={}", path);
+		}
+		return defaultMatch || configMatch;
 	}
 
 	private Mono<Void> unAuth(ServerHttpResponse resp, String msg) {

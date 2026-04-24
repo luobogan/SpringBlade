@@ -44,8 +44,18 @@ public class IUserClientFallback implements IUserClient {
 		return R.fail("未获取到账号信息");
 	}
 
+ 	@Override
+	public R<User> saveUser(User user) {
+		return R.<User>fail("创建用户失败");
+	}
+
 	@Override
-	public R<Boolean> saveUser(User user) {
-		return R.fail("创建用户失败");
+	public R<Boolean> saveUserOauth(UserOauth userOauth) {
+		return R.<Boolean>fail("保存OAuth信息失败");
+	}
+
+	@Override
+	public R<User> getUserByAccount(String tenantId, String account) {
+		return R.fail("查询用户信息失败");
 	}
 }

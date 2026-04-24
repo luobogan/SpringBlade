@@ -20,7 +20,6 @@ import io.jsonwebtoken.security.Keys;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.launch.constant.TokenConstant;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
@@ -147,17 +146,22 @@ public class MallAuthController {
             String openId = session.getOpenid();
             log.info("微信登录成功，获取到openId: {}", openId);
 
-            // 2. 检查用户是否存在
-            User user = checkThirdPartyUser(openId);
-            if (user == null) {
-                // 3. 创建新用户
+            User user = checkThirdPartyUser(openId, tenantId);
+            if (user == null || user.getId() == null || user.getId() <= 0) {
+                log.info("用户不存在或无效，创建新用户, openId: {}, tenantId: {}", openId, tenantId);
                 Map<String, Object> userInfo = new HashMap<>();
                 userInfo.put("nickname", "微信用户");
-                userInfo.put("avatar", "");
                 user = createThirdPartyUser(openId, "wechat", userInfo, tenantId);
             }
 
-            // 4. 直接生成JWT Token（不依赖请求上下文）
+            // 最终验证 user 对象完整性
+            if (user == null || user.getId() == null || user.getId() <= 0) {
+                throw new RuntimeException("用户对象无效，无法生成Token");
+            }
+
+            log.info("准备生成JWT Token, userId: {}, userName: {}, roleId: {}, tenantId: {}, deptId: {}",
+                user.getId(), user.getName(), user.getRoleId(), user.getTenantId(), user.getDeptId());
+
             String token = createJWTToken(user);
 
             // 构建返回结果
@@ -178,51 +182,156 @@ public class MallAuthController {
 
 
     /**
-     * 检查第三方用户是否已存在
+     * 检查第三方用户是否已存在（通过OAuth表+用户表双重查询）
      */
-    private User checkThirdPartyUser(String openId) {
-        R<UserInfo> userInfoResult = userClient.userAuthInfo(createUserOauth(openId));
+    private User checkThirdPartyUser(String openId, String tenantId) {
+        // 1. 先通过 OAuth 表查询（原有逻辑）
+        R<UserInfo> userInfoResult = userClient.userAuthInfo(createUserOauth(openId, tenantId));
         if (userInfoResult.isSuccess() && userInfoResult.getData() != null) {
-            return userInfoResult.getData().getUser();
+            User existingUser = userInfoResult.getData().getUser();
+            if (existingUser != null && existingUser.getId() != null && existingUser.getId() > 0) {
+                log.info("[OAuth查询] 已存在用户, userId: {}, openId: {}, tenantId: {}", existingUser.getId(), openId, tenantId);
+                return existingUser;
+            }
         }
+
+        // 2. 【关键修复】OAuth 未绑定时，直接按 account=openId 查询用户表
+        //    解决：首次登录时 OAuth 表插入了空记录但没有 userId，导致二次登录也找不到用户
+        log.info("[OAuth未绑定] 尝试直接按 account 查询用户表, openId: {}, tenantId: {}", openId, tenantId);
+        try {
+            R<User> userByAccountResult = userClient.getUserByAccount(tenantId, openId);
+            if (userByAccountResult.isSuccess() && userByAccountResult.getData() != null) {
+                User accountUser = userByAccountResult.getData();
+                if (accountUser != null && accountUser.getId() != null && accountUser.getId() > 0) {
+                    log.info("[账户查询] 找到已存在用户, userId: {}, openId: {}, tenantId: {}", accountUser.getId(), openId, tenantId);
+                    // 补充绑定 OAuth 记录
+                    bindOauthIfMissing(openId, tenantId, accountUser.getId());
+                    return accountUser;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[账户查询] 按账户查询用户失败（继续走创建流程）: {}", e.getMessage());
+        }
+
+        log.info("用户确实不存在, openId: {}, tenantId: {}", openId, tenantId);
         return null;
+    }
+
+    /**
+     * 补充绑定 OAuth 记录（如果缺失）
+     */
+    private void bindOauthIfMissing(String openId, String tenantId, Long userId) {
+        try {
+            // 先查询是否已有绑定
+            R<UserInfo> oauthCheck = userClient.userAuthInfo(createUserOauth(openId, tenantId));
+            if (oauthCheck.isSuccess() && oauthCheck.getData() != null) {
+                UserInfo oauthInfo = oauthCheck.getData();
+                User oauthUser = oauthInfo.getUser();
+                // 如果 OAuth 有记录但 userId 为空，更新它
+                if (oauthUser != null && (oauthUser.getId() == null || oauthUser.getId() <= 0)) {
+                    log.info("检测到 OAuth 记录缺少 userId 绑定，进行补充绑定, userId: {}", userId);
+                    UserOauth userOauth = new UserOauth();
+                    userOauth.setTenantId(tenantId);
+                    userOauth.setUuid(openId);
+                    userOauth.setUserId(userId);
+                    userOauth.setUsername(openId);
+                    userOauth.setSource("wechat");
+                    userClient.saveUserOauth(userOauth);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("补充 OAuth 绑定失败（不影响登录）: {}", e.getMessage());
+        }
     }
 
     /**
      * 创建第三方平台用户
      */
     private User createThirdPartyUser(String openId, String platform, Map<String, Object> userInfo, String tenantId) {
+        // 1. 构建新用户对象
         User user = new User();
-        user.setAccount(openId); // 使用openId作为账号
-        user.setPassword(DigestUtil.encrypt("random_password")); // 随机密码
-        user.setName(userInfo.getOrDefault("nickname", platform + "用户").toString());
+        user.setOpenId(openId);
+        user.setAccount(openId);
+        user.setPassword(DigestUtil.encrypt("random_password"));
+        String nickname = userInfo.getOrDefault("nickname", platform + "用户").toString();
+        user.setName(nickname);
+        user.setRealName(nickname);
         user.setAvatar(userInfo.getOrDefault("avatar", "").toString());
-        user.setTenantId(tenantId); // 使用传入的tenantId
-        user.setRoleId("1123598816738675202"); // 默认角色ID（需要提前创建）
+        user.setTenantId(tenantId);
+        user.setRoleId("1123598816738675202");
+        user.setDeptId("1123598813738675201");
         user.setStatus(1);
 
-        // 创建用户
-        R<Boolean> saveResult = userClient.saveUser(user);
-        if (!saveResult.isSuccess() || !saveResult.getData()) {
-            throw new RuntimeException("创建用户失败");
+        log.info("[创建用户] 准备保存用户, account: {}, tenantId: {}, name: {}", openId, tenantId, nickname);
+
+        // 2. 调用 Feign 保存用户
+        R<User> saveResult;
+        try {
+            saveResult = userClient.saveUser(user);
+        } catch (Exception feignEx) {
+            log.error("[创建用户] Feign 调用 saveUser 异常: {}", feignEx.getMessage());
+            throw new RuntimeException("远程创建用户失败: " + feignEx.getMessage());
         }
 
-        // 同时在blade_user_oauth表中创建记录
+        // 3. 验证保存结果
+        if (saveResult == null) {
+            throw new RuntimeException("创建用户失败：返回结果为空");
+        }
+        if (!saveResult.isSuccess()) {
+            throw new RuntimeException("创建用户失败: " + (saveResult.getMsg() != null ? saveResult.getMsg() : "未知错误"));
+        }
+        if (saveResult.getData() == null) {
+            throw new RuntimeException("创建用户失败：返回用户数据为空");
+        }
+
+        // 4. 验证返回的用户对象完整性
+        user = saveResult.getData();
+        if (user.getId() == null || user.getId() <= 0) {
+            log.error("[创建用户] 返回的 userId 无效: {}, 尝试按 account 重新查询", user.getId());
+            // 【关键兜底】如果返回的 id 无效，尝试重新查询
+            try {
+                R<User> retryResult = userClient.getUserByAccount(tenantId, openId);
+                if (retryResult.isSuccess() && retryResult.getData() != null
+                    && retryResult.getData().getId() != null && retryResult.getData().getId() > 0) {
+                    user = retryResult.getData();
+                    log.info("[创建用户] 重新查询成功, userId: {}", user.getId());
+                } else {
+                    throw new RuntimeException("创建用户后验证失败：无法获取有效的用户ID");
+                }
+            } catch (Exception retryEx) {
+                throw new RuntimeException("创建用户后重试查询失败: " + retryEx.getMessage());
+            }
+        }
+
+        log.info("[创建用户] 创建/获取用户成功, userId: {}, name: {}, roleId: {}, deptId: {}, tenantId: {}",
+            user.getId(), user.getName(), user.getRoleId(), user.getDeptId(), user.getTenantId());
+
+        // 5. 保存 OAuth 绑定记录
         UserOauth userOauth = new UserOauth();
-        userOauth.setTenantId(tenantId); // 使用传入的tenantId
+        userOauth.setTenantId(tenantId);
         userOauth.setUuid(openId);
         userOauth.setUserId(user.getId());
         userOauth.setUsername(openId);
-        userOauth.setNickname(userInfo.getOrDefault("nickname", "").toString());
+        userOauth.setNickname(nickname);
         userOauth.setAvatar(userInfo.getOrDefault("avatar", "").toString());
         userOauth.setSource(platform);
-        userClient.userAuthInfo(userOauth);
+        try {
+            R<Boolean> oauthResult = userClient.saveUserOauth(userOauth);
+            if (!oauthResult.isSuccess() || !oauthResult.getData()) {
+                log.warn("[OAuth绑定] 保存OAuth记录失败，但不影响登录流程");
+            } else {
+                log.info("[OAuth绑定] OAuth记录保存成功, userId: {}", user.getId());
+            }
+        } catch (Exception oauthEx) {
+            log.warn("[OAuth绑定] 保存OAuth异常（不影响登录）: {}", oauthEx.getMessage());
+        }
 
         return user;
     }
 
-    private UserOauth createUserOauth(String openId) {
+    private UserOauth createUserOauth(String openId, String tenantId) {
         UserOauth userOauth = new UserOauth();
+        userOauth.setTenantId(tenantId);
         userOauth.setUuid(openId);
         userOauth.setUsername(openId);
         return userOauth;
@@ -237,11 +346,27 @@ public class MallAuthController {
         try {
             // 获取当前登录用户 ID
             Long userId = SecureUtil.getUserId();
-            log.info("getCurrentUser - userId from token: {}", userId);
+
+            // 【诊断日志】输出完整的 token 信息用于排查
+            log.info("===== /auth/me 诊断开始 =====");
+            log.info("[auth/me] userId from SecureUtil: {}", userId);
+            try {
+                String tokenHeader = org.springblade.core.tool.utils.WebUtil.getRequest().getHeader("blade-auth");
+                log.info("[auth/me] blade-auth header: {}", tokenHeader != null && tokenHeader.length() > 20 ? tokenHeader.substring(0, 20) + "..." : tokenHeader);
+            } catch (Exception headerEx) {
+                log.warn("[auth/me] 无法读取请求头: {}", headerEx.getMessage());
+            }
+
             if (userId == null || userId == -1) {
-                log.warn("getCurrentUser - userId is null or -1");
+                // 【关键诊断】userId 为 -1 的详细原因
+                log.warn("===== /auth/me 鉴权失败 =====");
+                log.warn("[auth失败] userId={}, 原因: JWT中的user_id为空或-1", userId);
+                log.warn("[auth失败] 这意味着 login 接口生成的JWT中 user_id 就是无效值");
+                log.warn("[auth失败] 请检查 /wechat/login 返回的 user.id 是否为有效的正整数");
+                log.warn("================================");
                 return R.fail("未登录");
             }
+            log.info("[auth/me] 鉴权成功, userId: {}", userId);
 
             // 查询用户信息
             R<UserInfo> userInfoResult = userClient.userInfo(userId);
@@ -356,7 +481,7 @@ public class MallAuthController {
             }
 
             // 保存用户信息更新
-            R<Boolean> saveResult = userClient.saveUser(user);
+            R<User> saveResult = userClient.saveUser(user);
             if (!saveResult.isSuccess()) {
                 return R.fail("更新用户信息失败");
             }
@@ -388,7 +513,8 @@ public class MallAuthController {
         claims.put(TokenConstant.ROLE_ID, user.getRoleId());
         claims.put(TokenConstant.DEPT_ID, user.getDeptId());
         claims.put(TokenConstant.ACCOUNT, user.getAccount());
-        claims.put(TokenConstant.USER_NAME, user.getRealName());
+        String userName = (user.getRealName() != null && !user.getRealName().isEmpty()) ? user.getRealName() : user.getName();
+        claims.put(TokenConstant.USER_NAME, userName);
         claims.put(TokenConstant.CLIENT_ID, "sword");
 
         // 计算过期时间

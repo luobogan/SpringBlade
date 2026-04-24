@@ -119,6 +119,8 @@ blade:
   secure:
     skip-url:
       - /test/**
+      - /blade-mall/front/**
+      - /front/**
     client:
       - client-id: sword
         path-patterns:
@@ -126,7 +128,9 @@ blade:
       - client-id: saber
         path-patterns:
           - /saber/**
-
+      - client-id: sword
+        path-patterns:
+          - /blade-mall/front/**
   tenant:
     column: tenant_id
     auto: true

@@ -1,0 +1,22 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../../project/nacos"
+		},
+		{
+			"path": "../../blade-tool"
+		},
+		{
+			"path": "../../Sword"
+		},
+		{
+			"path": "../../springandreact"
+		}
+	],
+	"settings": {
+		"java.compile.nullAnalysis.mode": "automatic"
+	}
+}

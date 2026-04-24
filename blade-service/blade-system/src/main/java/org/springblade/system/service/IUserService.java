@@ -151,4 +151,6 @@ public interface IUserService extends BaseService<User> {
 	 * @return
 	 */
 	boolean registerGuest(User user, Long oauthId);
+
+	boolean saveUserOauth(UserOauth userOauth);
 }

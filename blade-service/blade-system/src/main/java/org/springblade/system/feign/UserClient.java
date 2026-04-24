@@ -15,6 +15,7 @@
  */
 package org.springblade.system.feign;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import io.swagger.v3.oas.annotations.Hidden;
 import lombok.AllArgsConstructor;
 import org.springblade.core.tool.api.R;
@@ -58,8 +59,33 @@ public class UserClient implements IUserClient {
 
 	@Override
 	@PostMapping(API_PREFIX + "/save-user")
-	public R<Boolean> saveUser(User user) {
-		return R.data(service.save(user));
+	public R<User> saveUser(User user) {
+		User existingUser = service.getOne(Wrappers.<User>query().lambda()
+			.eq(User::getTenantId, user.getTenantId())
+			.eq(User::getAccount, user.getAccount()));
+		if (existingUser != null) {
+			return R.data(existingUser);
+		}
+		boolean saved = service.save(user);
+		if (saved) {
+			return R.data(service.getById(user.getId()));
+		}
+		return R.<User>fail("创建用户失败");
+	}
+
+	@Override
+	@PostMapping(API_PREFIX + "/save-user-oauth")
+	public R<Boolean> saveUserOauth(UserOauth userOauth) {
+		return R.data(service.saveUserOauth(userOauth));
+	}
+
+	@Override
+	@GetMapping(API_PREFIX + "/user-by-account")
+	public R<User> getUserByAccount(String tenantId, String account) {
+		User user = service.getOne(Wrappers.<User>query().lambda()
+			.eq(User::getTenantId, tenantId)
+			.eq(User::getAccount, account));
+		return R.data(user);
 	}
 
 }
