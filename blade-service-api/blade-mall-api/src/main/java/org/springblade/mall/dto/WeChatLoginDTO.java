@@ -1,21 +1,19 @@
 package org.springblade.mall.dto;
 
-import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 /**
- * 微信登录DTO
+ * 微信登录 DTO
  */
 @Data
 public class WeChatLoginDTO {
+    /**
+     * 微信授权 code
+     */
+    private String code;
 
     /**
-     * 微信登录code
+     * 租户ID
      */
-    @NotBlank(message = "微信登录code不能为空")
-    private String code;
+    private String tenantId;
 }
-
-
-
-

@@ -25,6 +25,7 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DigestUtil;
 import org.springblade.mall.dto.PhoneDTO;
+import org.springblade.mall.dto.WeChatLoginDTO;
 import org.springblade.mall.service.WeChatService;
 import org.springblade.mall.vo.WeChatSessionVO;
 import org.springblade.system.user.entity.User;
@@ -135,7 +136,8 @@ public class MallAuthController {
      */
     @PostMapping("/wechat/login")
     @Operation(summary = "微信登录", description = "微信授权登录")
-    public R<?> wechatLogin(@RequestParam("code") String code, @RequestParam("tenantId") String tenantId) {
+    public R<?> wechatLogin(@RequestParam("code") String code,
+                          @RequestParam(value = "tenantId", defaultValue = "083914") String tenantId) {
         try {
             // 1. 使用code获取微信session信息（openid和session_key）
             WeChatSessionVO session = weChatService.getSessionByCode(code);
@@ -381,10 +383,12 @@ public class MallAuthController {
             Map<String, Object> result = new HashMap<>();
             result.put("id", user.getId());
             result.put("name", user.getName());
+            result.put("nickname", user.getNickname() != null ? user.getNickname() : user.getName());
             result.put("avatar", user.getAvatar());
             result.put("phone", user.getPhone());
+            result.put("mobile", user.getPhone());
             result.put("email", user.getEmail());
-            result.put("gender", user.getSex());
+            result.put("gender", user.getGender() != null ? user.getGender() : user.getSex());
             result.put("tenantId", user.getTenantId());
             result.put("oauthId", userInfoResult.getData().getOauthId());
 

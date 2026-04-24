@@ -1,7 +1,6 @@
 package org.springblade.mall.controller;
 
-import org.springblade.common.constant.CommonConstant;
-import org.springblade.core.launch.constant.AppConstant;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.boot.ctrl.BladeController;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,7 +10,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.annotation.PostConstruct;
 import java.io.File;
-import java.io.IOException;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +18,8 @@ import org.slf4j.LoggerFactory;
  * 文件上传控制器
  */
 @RestController
-@RequestMapping(AppConstant.APPLICATION_MALL_NAME)
+@RequestMapping("/upload")
+@Tag(name = "文件上传", description = "文件上传接口")
 public class FileUploadController extends BladeController {
 
     private static final Logger log = LoggerFactory.getLogger(FileUploadController.class);
@@ -178,7 +177,7 @@ public class FileUploadController extends BladeController {
     /**
      * 上传单个文件（前端用户使用）
      */
-    @PostMapping("/upload/single")
+    @PostMapping("/single")
     public ResponseEntity<R<String>> uploadSingleFile(@RequestParam("file") MultipartFile file, @RequestParam("type") String type) {
         try {
             log.debug("Upload path: {}", uploadPath);

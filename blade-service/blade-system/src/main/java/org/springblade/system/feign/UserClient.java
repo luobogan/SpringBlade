@@ -40,6 +40,9 @@ public class UserClient implements IUserClient {
 
 	private IUserService service;
 
+	// 与接口保持一致的 API 前缀
+	private static final String API_PREFIX = "/user";
+
 	@Override
 	public R<UserInfo> userInfo(Long userId) {
 		return R.data(service.userInfo(userId));
