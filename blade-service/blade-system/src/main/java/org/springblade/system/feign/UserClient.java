@@ -19,6 +19,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import io.swagger.v3.oas.annotations.Hidden;
 import lombok.AllArgsConstructor;
 import org.springblade.core.tool.api.R;
+import org.springblade.core.tool.utils.DateUtil;
 import org.springblade.system.service.IUserService;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
@@ -67,7 +68,19 @@ public class UserClient implements IUserClient {
 			.eq(User::getTenantId, user.getTenantId())
 			.eq(User::getAccount, user.getAccount()));
 		if (existingUser != null) {
-			return R.data(existingUser);
+			// 用户已存在，执行更新操作
+			user.setId(existingUser.getId());
+			// 忽略不应更新的字段
+			user.setRoleId(null);
+			user.setDeptId(null);
+			user.setAccount(null);
+			user.setPassword(null);
+			// 保护关键字段：个人资料更新不应修改 wx_openid
+			user.setWxOpenid(null);
+			user.setOpenId(null);
+			user.setUpdateTime(DateUtil.now());
+			service.updateById(user);
+			return R.data(service.getById(existingUser.getId()));
 		}
 		boolean saved = service.save(user);
 		if (saved) {

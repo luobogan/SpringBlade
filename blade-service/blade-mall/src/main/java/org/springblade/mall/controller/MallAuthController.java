@@ -253,6 +253,7 @@ public class MallAuthController {
         // 1. 构建新用户对象
         User user = new User();
         user.setOpenId(openId);
+        user.setWxOpenid(openId);  // 【关键】必须设置 wx_openid，这是数据库唯一索引字段
         user.setAccount(openId);
         user.setPassword(DigestUtil.encrypt("random_password"));
         String nickname = userInfo.getOrDefault("nickname", platform + "用户").toString();
@@ -264,7 +265,7 @@ public class MallAuthController {
         user.setDeptId("1123598813738675201");
         user.setStatus(1);
 
-        log.info("[创建用户] 准备保存用户, account: {}, tenantId: {}, name: {}", openId, tenantId, nickname);
+        log.info("[创建用户] 准备保存用户, account: {}, wxOpenid: {}, tenantId: {}, name: {}", openId, openId, tenantId, nickname);
 
         // 2. 调用 Feign 保存用户
         R<User> saveResult;
@@ -456,43 +457,85 @@ public class MallAuthController {
     @Operation(summary = "更新用户信息", description = "更新当前登录用户的信息")
     public R<?> updateUserInfo(@RequestBody UpdateUserRequest request) {
         try {
+            log.info("===== /auth/me PUT 开始 =====");
+            log.info("[updateUserInfo] Request - nickname: {}, avatar: {}, gender: {}, phone: {}, email: {}",
+                request.getNickname(),
+                request.getAvatar() != null && request.getAvatar().length() > 50 ? request.getAvatar().substring(0, 50) + "..." : request.getAvatar(),
+                request.getGender(),
+                request.getPhone(),
+                request.getEmail());
+
             // 获取当前登录用户ID
             Long userId = SecureUtil.getUserId();
             if (userId == null) {
+                log.warn("[updateUserInfo] 用户未登录");
                 return R.fail("未登录");
             }
+            log.info("[updateUserInfo] userId: {}", userId);
 
             // 查询用户信息
             R<UserInfo> userInfoResult = userClient.userInfo(userId);
             if (!userInfoResult.isSuccess() || userInfoResult.getData() == null) {
+                log.warn("[updateUserInfo] 用户不存在, userId: {}", userId);
                 return R.fail("用户不存在");
             }
 
             User user = userInfoResult.getData().getUser();
+            log.info("[updateUserInfo] Original user - avatar: {}, name: {}, sex: {}, phone: {}",
+                user.getAvatar(),
+                user.getName(),
+                user.getSex(),
+                user.getPhone());
 
             // 更新用户信息
-            if (request.getNickname() != null) {
+            if (request.getNickname() != null && !request.getNickname().trim().isEmpty()) {
                 user.setName(request.getNickname());
+                user.setNickname(request.getNickname());
             }
             if (request.getAvatar() != null) {
-                user.setAvatar(request.getAvatar());
+                // 如果avatar包含完整URL，只保留相对路径部分
+                String avatarPath = request.getAvatar();
+                if (avatarPath.startsWith("http://") || avatarPath.startsWith("https://")) {
+                    // 找到 /uploads/ 之后的部分
+                    int uploadsIndex = avatarPath.indexOf("/uploads/");
+                    if (uploadsIndex > 0) {
+                        avatarPath = avatarPath.substring(uploadsIndex);
+                    }
+                }
+                user.setAvatar(avatarPath);
             }
-            if (request.getPhone() != null) {
+            if (request.getGender() != null) {
+                user.setGender(request.getGender());
+                user.setSex(request.getGender());
+            }
+            if (request.getPhone() != null && !request.getPhone().trim().isEmpty()) {
                 user.setPhone(request.getPhone());
             }
             if (request.getEmail() != null) {
                 user.setEmail(request.getEmail());
             }
 
+            log.info("[updateUserInfo] Updating user - avatar: {}, name: {}, gender: {}, sex: {}, phone: {}",
+                user.getAvatar(),
+                user.getName(),
+                user.getGender(),
+                user.getSex(),
+                user.getPhone());
+
             // 保存用户信息更新
             R<User> saveResult = userClient.saveUser(user);
             if (!saveResult.isSuccess()) {
+                log.error("[updateUserInfo] 保存用户信息失败: {}", saveResult.getMsg());
                 return R.fail("更新用户信息失败");
             }
+
+            log.info("[updateUserInfo] 用户信息更新成功");
+            log.info("===== /auth/me PUT 完成 =====");
 
             // 返回更新后的用户信息
             return getCurrentUser();
         } catch (Exception e) {
+            log.error("[updateUserInfo] 更新用户信息异常: {}", e.getMessage(), e);
             return R.fail("更新用户信息失败：" + e.getMessage());
         }
     }
