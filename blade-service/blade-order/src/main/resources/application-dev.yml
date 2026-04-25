@@ -1,0 +1,11 @@
+#服务器端口
+server:
+  port: ${blade.order.port:8201}
+
+#数据源配置（从Nacos读取，修改blade.yaml即可）
+spring:
+  datasource:
+    url: ${blade.datasource.order.url}
+    username: ${blade.datasource.order.username}
+    password: ${blade.datasource.order.password}
+    driver-class-name: com.mysql.cj.jdbc.Driver

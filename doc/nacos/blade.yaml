@@ -31,6 +31,39 @@ spring:
             - Path=/uploads/**
           filters:
             - StripPrefix=0
+        - id: blade-order
+          uri: lb://blade-order
+          predicates:
+            - Path=/blade-order/**
+          filters:
+            - StripPrefix=1
+        - id: blade-pay
+          uri: lb://blade-pay
+          predicates:
+            - Path=/blade-pay/**
+          filters:
+            - StripPrefix=1
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+    username: root
+    password: 123456
+
+# 各服务数据源配置（Nacos统一管理，修改后重启生效）
+blade:
+  datasource:
+    dev:
+      url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
+    order:
+      url: jdbc:mysql://localhost:3306/blade_order?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
+    pay:
+      url: jdbc:mysql://localhost:3306/blade_pay?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
   devtools:
     restart:
       log-condition-evaluation-delta: false

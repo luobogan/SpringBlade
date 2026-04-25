@@ -22,6 +22,8 @@
         <module>blade-system-api</module>
         <module>blade-user-api</module>
         <module>blade-mall-api</module>
+        <module>blade-order-api</module>
+        <module>blade-pay-api</module>
     </modules>
 
     <dependencies>

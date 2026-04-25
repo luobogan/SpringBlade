@@ -16,6 +16,8 @@
         <java.version>17</java.version>
         <maven.plugin.version>3.11.0</maven.plugin.version>
         <maven.flatten.version>1.3.0</maven.flatten.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 推荐使用Harbor -->
         <docker.registry.url>10.211.55.5</docker.registry.url>
@@ -83,6 +85,16 @@
                 <artifactId>blade-mall-api</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>org.springblade</groupId>
+                <artifactId>blade-order-api</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springblade</groupId>
+                <artifactId>blade-pay-api</artifactId>
+                <version>${revision}</version>
+            </dependency>
             <!-- dynamic-datasource -->
             <dependency>
                 <groupId>com.baomidou</groupId>
@@ -96,6 +108,12 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.google.code.findbugs</groupId>
+            <artifactId>jsr305</artifactId>
+            <version>3.0.2</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
@@ -119,9 +137,6 @@
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
                     <version>3.2.10</version>
-                    <configuration>
-                        <finalName>${project.build.finalName}</finalName>
-                    </configuration>
                     <executions>
                         <execution>
                             <goals>

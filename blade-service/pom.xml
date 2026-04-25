@@ -21,6 +21,8 @@
         <module>blade-log</module>
         <module>blade-system</module>
         <module>blade-mall</module>
+        <module>blade-order</module>
+        <module>blade-pay</module>
     </modules>
 
     <dependencies>

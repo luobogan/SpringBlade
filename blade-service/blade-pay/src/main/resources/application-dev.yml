@@ -1,0 +1,11 @@
+#服务器端口
+server:
+  port: ${blade.pay.port:8202}
+
+#数据源配置（从Nacos读取，修改blade.yaml即可）
+spring:
+  datasource:
+    url: ${blade.datasource.pay.url}
+    username: ${blade.datasource.pay.username}
+    password: ${blade.datasource.pay.password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
