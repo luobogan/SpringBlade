@@ -119,7 +119,6 @@
     </dependencies>
 
     <build>
-        <finalName>${project.name}</finalName>
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
@@ -161,7 +160,7 @@
                                     <!--suppress UnresolvedMavenProperty -->
                                     <copy overwrite="true"
                                           todir="${project.root.directory}/target"
-                                          file="${project.build.directory}/${project.artifactId}.jar"/>
+                                          file="${project.build.directory}/${project.build.finalName}.jar"/>
                                 </target>
                             </configuration>
                         </execution>

@@ -1,6 +1,7 @@
 package org.springblade.order.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.springblade.core.secure.BladeUser;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.StringUtil;
@@ -49,11 +50,15 @@ public class OrderServiceImpl implements IOrderService {
     @Transactional
     public OrderVO createOrder(OrderDTO orderDTO) {
         String tenantId = SecureUtil.getTenantId();
+        log.info("创建订单，用户ID: {}, 租户ID: {}", orderDTO.getUserId(), tenantId);
+
         if (StringUtil.isBlank(tenantId)) {
             throw new RuntimeException("租户ID不能为空");
         }
 
         R<UserInfo> userResult = userClient.userInfo(orderDTO.getUserId());
+        log.info("用户信息查询结果: {}", userResult);
+
         if (!userResult.isSuccess() || userResult.getData() == null) {
             throw new RuntimeException("用户不存在");
         }
@@ -80,7 +85,9 @@ public class OrderServiceImpl implements IOrderService {
         order.setRemark(orderDTO.getRemark());
         order.setTenantId(tenantId);
 
+        log.info("准备插入订单: {}", order);
         orderMapper.insert(order);
+        log.info("订单插入成功，ID: {}", order.getId());
 
         for (OrderItemDTO itemDTO : orderDTO.getItems()) {
             OrderItem orderItem = new OrderItem();
@@ -95,7 +102,9 @@ public class OrderServiceImpl implements IOrderService {
             orderItem.setSkuId(itemDTO.getSkuId());
             orderItem.setTenantId(order.getTenantId());
 
+            log.info("准备插入订单项: {}", orderItem);
             orderItemMapper.insert(orderItem);
+            log.info("订单项插入成功");
         }
 
         return convertToVO(order);
@@ -251,18 +260,22 @@ public class OrderServiceImpl implements IOrderService {
     }
 
     @Override
-    public OrderVO getOrderById(Long id) {
-        String tenantId = SecureUtil.getTenantId();
-        if (StringUtil.isBlank(tenantId)) {
-            throw new RuntimeException("租户ID不能为空");
+    public OrderVO getOrderById(Long id, BladeUser user) {
+        if (user == null) {
+            throw new RuntimeException("用户未登录");
         }
 
+        log.info("查询订单，订单ID: {}, 用户ID: {}, 租户ID: {}", id, user.getUserId(), user.getTenantId());
+
         Order order = orderMapper.selectById(id);
+        log.info("查询结果: {}", order);
+
         if (order == null) {
             throw new RuntimeException("订单不存在");
         }
 
-        if (!tenantId.equals(order.getTenantId())) {
+        String tenantId = user.getTenantId();
+        if (StringUtil.isNotBlank(tenantId) && !tenantId.equals(order.getTenantId())) {
             throw new RuntimeException("无权访问此订单");
         }
 

@@ -37,8 +37,8 @@ public class OrderController extends BladeController {
     @GetMapping("/detail")
     @ApiOperationSupport(order = 2)
     @Operation(summary = "查看详情", description = "传入id")
-    public R<OrderVO> getOrderById(@Parameter(description = "订单ID", required = true) @RequestParam Long id) {
-        OrderVO orderVO = orderService.getOrderById(id);
+    public R<OrderVO> getOrderById(@Parameter(description = "订单ID", required = true) @RequestParam Long id, BladeUser user) {
+        OrderVO orderVO = orderService.getOrderById(id, user);
         return R.data(orderVO);
     }
 

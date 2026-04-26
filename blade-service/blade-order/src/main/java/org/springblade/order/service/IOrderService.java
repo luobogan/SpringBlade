@@ -1,5 +1,6 @@
 package org.springblade.order.service;
 
+import org.springblade.core.secure.BladeUser;
 import org.springblade.order.dto.OrderDTO;
 import org.springblade.order.vo.OrderCountStats;
 import org.springblade.order.vo.OrderVO;
@@ -20,7 +21,7 @@ public interface IOrderService {
 
     OrderVO cancelOrder(Long id);
 
-    OrderVO getOrderById(Long id);
+    OrderVO getOrderById(Long id, BladeUser user);
 
     OrderVO getOrderByOrderNo(String orderNo);
 
