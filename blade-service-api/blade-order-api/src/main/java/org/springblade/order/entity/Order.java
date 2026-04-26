@@ -1,5 +1,6 @@
 package org.springblade.order.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -13,6 +14,7 @@ import java.time.LocalDateTime;
 @TableName("blade_order")
 public class Order extends TenantEntity {
 
+	@TableField(value = "order_no")
     private String orderNo;
 
     private Long userId;
@@ -44,4 +46,10 @@ public class Order extends TenantEntity {
     private String orderStatus;
 
     private String remark;
+
+    /**
+     * BaseEntity中的status字段，订单表无此字段，标记为不存在
+     */
+    @TableField(exist = false)
+    private Integer status;
 }
