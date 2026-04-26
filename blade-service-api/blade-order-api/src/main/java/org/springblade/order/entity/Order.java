@@ -50,6 +50,5 @@ public class Order extends TenantEntity {
     /**
      * BaseEntity中的status字段，订单表无此字段，标记为不存在
      */
-    @TableField(exist = false)
     private Integer status;
 }
