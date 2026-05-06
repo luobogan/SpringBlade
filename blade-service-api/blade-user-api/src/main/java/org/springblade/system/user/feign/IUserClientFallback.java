@@ -58,4 +58,9 @@ public class IUserClientFallback implements IUserClient {
 	public R<User> getUserByAccount(String tenantId, String account) {
 		return R.fail("查询用户信息失败");
 	}
+
+	@Override
+	public R<User> getUserByPhone(String tenantId, String phone) {
+		return R.fail("查询用户信息失败");
+	}
 }

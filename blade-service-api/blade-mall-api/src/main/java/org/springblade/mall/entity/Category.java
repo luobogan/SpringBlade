@@ -61,6 +61,11 @@ public class Category extends MallTenantEntity {
      * 分类banner
      */
     private String banner;
+
+    /**
+     * 租户ID
+     */
+    private String tenantId;
 }
 
 

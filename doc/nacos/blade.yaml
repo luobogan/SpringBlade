@@ -169,8 +169,11 @@ blade:
       - /test/**
       - /blade-mall/front/**
       - /blade-mall/uploads/**
+      - /blade-mall/auth/**
+      - /blade-mall/upload/**
       - /front/**
       - /uploads/**
+      - /auth/**
     client:
       - client-id: sword
         path-patterns:

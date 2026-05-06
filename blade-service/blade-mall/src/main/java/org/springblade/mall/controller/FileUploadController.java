@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.servlet.http.HttpServletRequest;
 import java.io.File;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -18,7 +19,7 @@ import org.slf4j.LoggerFactory;
  * 文件上传控制器
  */
 @RestController
-@RequestMapping("/upload")
+@RequestMapping("/")
 @Tag(name = "文件上传", description = "文件上传接口")
 public class FileUploadController extends BladeController {
 
@@ -53,11 +54,21 @@ public class FileUploadController extends BladeController {
      * 上传图片（管理后台）
      */
     @PostMapping("/admin/upload/image")
-    public ResponseEntity<R<String>> uploadImage(@RequestParam("file") MultipartFile file, @RequestParam(value = "type", defaultValue = "product") String type) {
+    public ResponseEntity<R<String>> uploadImage(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "type", defaultValue = "product") String type,
+            HttpServletRequest request) {
         try {
+            // 获取租户ID
+            String tenantId = request.getHeader("Tenant-Id");
+            if (tenantId == null || tenantId.isEmpty()) {
+                tenantId = "default";
+            }
+
             log.debug("Upload path: {}", uploadPath);
             log.debug("Upload domain: {}", uploadDomain);
             log.debug("Upload type: {}", type);
+            log.debug("Tenant ID: {}", tenantId);
 
             // 检查文件是否为空
             if (file.isEmpty()) {
@@ -87,8 +98,8 @@ public class FileUploadController extends BladeController {
                 return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
             }
 
-            // 确保上传目录存在
-            File uploadDir = new File(uploadPath + File.separator + type);
+            // 确保上传目录存在（按租户ID分目录）
+            File uploadDir = new File(uploadPath + File.separator + tenantId + File.separator + type);
             log.debug("Upload directory: {}", uploadDir.getAbsolutePath());
             if (!uploadDir.exists()) {
                 boolean created = uploadDir.mkdirs();
@@ -107,8 +118,8 @@ public class FileUploadController extends BladeController {
             file.transferTo(dest);
             log.info("File transferred successfully");
 
-            // 返回文件URL（使用相对路径）
-            String fileUrl = "/uploads/" + type + "/" + fileName;
+            // 返回文件URL（使用相对路径，包含租户ID）
+            String fileUrl = "/uploads/" + tenantId + "/" + type + "/" + fileName;
             log.info("File URL: {}", fileUrl);
             return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
 
@@ -122,9 +133,18 @@ public class FileUploadController extends BladeController {
      * 上传文件（支持视频等多种类型）
      */
     @PostMapping("/admin/upload/file")
-    public ResponseEntity<R<String>> uploadFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<R<String>> uploadFile(
+            @RequestParam("file") MultipartFile file,
+            HttpServletRequest request) {
         try {
+            // 获取租户ID
+            String tenantId = request.getHeader("Tenant-Id");
+            if (tenantId == null || tenantId.isEmpty()) {
+                tenantId = "default";
+            }
+
             log.debug("Upload path: {}", uploadPath);
+            log.debug("Tenant ID: {}", tenantId);
 
             // 检查文件是否为空
             if (file.isEmpty()) {
@@ -146,8 +166,8 @@ public class FileUploadController extends BladeController {
                 return ResponseEntity.badRequest().body(R.fail("不支持的文件类型"));
             }
 
-            // 确保上传目录存在
-            File uploadDir = new File(uploadPath);
+            // 确保上传目录存在（按租户ID分目录）
+            File uploadDir = new File(uploadPath + File.separator + tenantId);
             if (!uploadDir.exists()) {
                 uploadDir.mkdirs();
             }
@@ -164,8 +184,8 @@ public class FileUploadController extends BladeController {
             File dest = new File(uploadDir, fileName);
             file.transferTo(dest);
 
-            // 返回文件URL（使用相对路径）
-            String fileUrl = "/uploads/" + fileName;
+            // 返回文件URL（使用相对路径，包含租户ID）
+            String fileUrl = "/uploads/" + tenantId + "/" + fileName;
             return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
 
         } catch (Exception e) {
@@ -178,10 +198,20 @@ public class FileUploadController extends BladeController {
      * 上传单个文件（前端用户使用）
      */
     @PostMapping("/single")
-    public ResponseEntity<R<String>> uploadSingleFile(@RequestParam("file") MultipartFile file, @RequestParam("type") String type) {
+    public ResponseEntity<R<String>> uploadSingleFile(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("type") String type,
+            HttpServletRequest request) {
         try {
+            // 获取租户ID
+            String tenantId = request.getHeader("Tenant-Id");
+            if (tenantId == null || tenantId.isEmpty()) {
+                tenantId = "default";
+            }
+
             log.debug("Upload path: {}", uploadPath);
             log.debug("File type: {}", type);
+            log.debug("Tenant ID: {}", tenantId);
 
             // 检查文件是否为空
             if (file.isEmpty()) {
@@ -208,8 +238,8 @@ public class FileUploadController extends BladeController {
                 return ResponseEntity.badRequest().body(R.fail("文件大小不能超过5MB"));
             }
 
-            // 确保上传目录存在
-            File uploadDir = new File(uploadPath);
+            // 确保上传目录存在（按租户ID分目录）
+            File uploadDir = new File(uploadPath + File.separator + tenantId);
             log.debug("Upload directory: {}", uploadDir.getAbsolutePath());
             if (!uploadDir.exists()) {
                 boolean created = uploadDir.mkdirs();
@@ -232,8 +262,8 @@ public class FileUploadController extends BladeController {
             file.transferTo(dest);
             log.info("File transferred successfully");
 
-            // 返回文件URL（使用相对路径）
-            String fileUrl = "/uploads/" + fileName;
+            // 返回文件URL（使用相对路径，包含租户ID）
+            String fileUrl = "/uploads/" + tenantId + "/" + fileName;
             log.info("File URL: {}", fileUrl);
             return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
 

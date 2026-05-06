@@ -1,5 +1,6 @@
 package org.springblade.mall.controller;
 
+import org.springblade.core.tenant.annotation.AdminTenant;
 import org.springblade.mall.dto.CategoryDTO;
 import org.springblade.mall.service.CategoryService;
 import org.springblade.mall.vo.CategoryVO;
@@ -129,10 +130,11 @@ public class CategoryController extends BladeController {
      * @return 分类列表
      */
     @GetMapping
+    @AdminTenant
     @Operation(summary = "获取所有分类", description = "获取所有分类")
     public R<List<CategoryVO>> getAllCategories() {
         try {
-            List<CategoryVO> categories = TenantUtil.use(getTenantId(), () -> categoryService.getAllCategoriesWithStatus());
+            List<CategoryVO> categories = categoryService.getAllCategoriesWithStatus();
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());
@@ -144,10 +146,28 @@ public class CategoryController extends BladeController {
      * @return 分类树
      */
     @GetMapping("/tree")
+    @AdminTenant
     @Operation(summary = "获取分类树", description = "获取分类树")
     public R<List<CategoryVO>> getCategoryTree() {
         try {
-            List<CategoryVO> categories = TenantUtil.use(getTenantId(), () -> categoryService.getAllCategoriesWithStatus());
+            List<CategoryVO> categories = categoryService.getAllCategoriesWithStatus();
+            return R.data(categories);
+        } catch (Exception e) {
+            return R.fail(e.getMessage());
+        }
+    }
+
+    /**
+     * 获取分类树（按租户ID分组）
+     * 000000租户获取所有分类并按租户分组，其他租户只获取自己的分类
+     * @return 按租户分组的分类树
+     */
+    @GetMapping("/tree/by-tenant")
+    @AdminTenant
+    @Operation(summary = "获取分类树（按租户分组）", description = "获取分类树（按租户分组）")
+    public R<List<CategoryVO>> getCategoryTreeByTenant() {
+        try {
+            List<CategoryVO> categories = categoryService.getAllCategoriesGroupedByTenant();
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());

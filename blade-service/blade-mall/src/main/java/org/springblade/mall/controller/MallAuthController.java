@@ -24,8 +24,9 @@ import org.springblade.core.launch.constant.TokenConstant;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DigestUtil;
+import org.springblade.core.tool.utils.SM2Util;
+import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.mall.dto.PhoneDTO;
-import org.springblade.mall.dto.WeChatLoginDTO;
 import org.springblade.mall.service.WeChatService;
 import org.springblade.mall.vo.WeChatSessionVO;
 import org.springblade.system.user.entity.User;
@@ -69,7 +70,139 @@ public class MallAuthController {
     @Value("${blade.token.expire:86400}")
     private Long tokenExpire;
 
+    // SM2 国密加密密钥
+    @Value("${blade.auth.public-key:}")
+    private String publicKey;
 
+    @Value("${blade.auth.private-key:}")
+    private String privateKey;
+
+
+
+    /**
+     * 用户登录（手机号登录）
+     */
+    @PostMapping("/login")
+    @Operation(summary = "用户登录", description = "商城用户手机号登录")
+    public R<?> login(@RequestBody LoginRequest request) {
+        try {
+            // 动态获取租户ID
+            String tenantId = org.springblade.core.tool.utils.Func.toStr(
+                org.springblade.core.tool.utils.WebUtil.getRequest().getHeader("Tenant-Id"),
+                "000000"
+            );
+            log.info("登录请求 - tenantId: {}, phone: {}", tenantId, request.getPhone());
+
+            // 参数校验
+            if (request.getPhone() == null || request.getPhone().trim().isEmpty()) {
+                return R.fail("手机号不能为空");
+            }
+            if (!request.getPhone().matches("^1[3-9]\\d{9}$")) {
+                return R.fail("请输入有效的手机号");
+            }
+            if (request.getPassword() == null || request.getPassword().trim().isEmpty()) {
+                return R.fail("密码不能为空");
+            }
+
+            // 根据手机号查询用户
+            R<User> userResult = userClient.getUserByPhone(tenantId, request.getPhone());
+            if (!userResult.isSuccess() || userResult.getData() == null) {
+                return R.fail("手机号或密码错误");
+            }
+
+            User user = userResult.getData();
+
+            // SM2 解密密码并验证
+            String decryptedPassword = decryptSM2Password(request.getPassword());
+            log.info("SM2解密后的密码: {}", decryptedPassword);
+
+            if (StringUtil.isEmpty(decryptedPassword)) {
+                return R.fail("密码解密失败");
+            }
+
+            // 验证密码（将解密后的密码加密后与数据库中的密码比较）
+            if (!user.getPassword().equals(DigestUtil.encrypt(decryptedPassword))) {
+                return R.fail("手机号或密码错误");
+            }
+
+            // 生成Token
+            String token = createJWTToken(user);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("token", token);
+            result.put("user", user);
+            result.put("expiresIn", tokenExpire);
+            result.put("refreshToken", token);
+
+            return R.data(result);
+        } catch (Exception e) {
+            log.error("登录异常: {}", e.getMessage(), e);
+            return R.fail("登录失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 用户登录请求参数
+     */
+    public static class LoginRequest {
+        private String phone;
+        private String password;
+
+        public String getPhone() {
+            return phone;
+        }
+
+        public void setPhone(String phone) {
+            this.phone = phone;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+    }
+
+    /**
+     * SM2 解密密码
+     * @param encryptedPassword 加密后的密码
+     * @return 解密后的密码
+     */
+    private String decryptSM2Password(String encryptedPassword) {
+        // 如果配置了密钥，使用SM2解密
+        if (StringUtil.isNotBlank(publicKey) && StringUtil.isNotBlank(privateKey)) {
+            try {
+                // 处理部分工具类加密不带04前缀的情况
+                if (!StringUtil.startsWithIgnoreCase(encryptedPassword, "04")) {
+                    encryptedPassword = "04" + encryptedPassword;
+                }
+                // 解密密码
+                String decryptedPassword = SM2Util.decrypt(encryptedPassword, privateKey);
+                // 签名校验
+                boolean isVerified = SM2Util.verify(decryptedPassword, SM2Util.sign(decryptedPassword, privateKey), publicKey);
+                if (!isVerified) {
+                    log.warn("SM2签名校验失败");
+                    return "";
+                }
+                return decryptedPassword;
+            } catch (Exception e) {
+                log.error("SM2解密失败: {}", e.getMessage());
+                return "";
+            }
+        }
+        // 未配置SM2密钥：判断是否为SM2密文（长度>50且为十六进制）
+        // 如果是密文说明前端加密了但后端无法解密，返回空让调用方报错提示配置密钥
+        // 如果不是密文说明前端传的是明文（开发模式），直接返回
+        if (encryptedPassword != null && encryptedPassword.length() > 50 && encryptedPassword.matches("^[0-9a-fA-F]+$")) {
+            log.warn("检测到SM2密钥未配置，但前端传来了SM2加密密码！请在Nacos配置 blade.auth.public-key 和 blade.auth.private-key");
+            return "";  // 返回空 → 触发"密码解密失败"提示
+        }
+        // 开发模式：前端未加密，直接当明文使用
+        log.info("SM2密钥未配置，使用明文密码（开发模式）");
+        return encryptedPassword;
+    }
 
     /**
      * 获取微信手机号（无需登录）
@@ -537,6 +670,155 @@ public class MallAuthController {
         } catch (Exception e) {
             log.error("[updateUserInfo] 更新用户信息异常: {}", e.getMessage(), e);
             return R.fail("更新用户信息失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 用户注册请求参数
+     */
+    public static class RegisterRequest {
+        private String email;
+        private String phone;
+        private String password;
+        private String confirmPassword;
+
+        public String getEmail() {
+            return email;
+        }
+
+        public void setEmail(String email) {
+            this.email = email;
+        }
+
+        public String getPhone() {
+            return phone;
+        }
+
+        public void setPhone(String phone) {
+            this.phone = phone;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getConfirmPassword() {
+            return confirmPassword;
+        }
+
+        public void setConfirmPassword(String confirmPassword) {
+            this.confirmPassword = confirmPassword;
+        }
+    }
+
+    /**
+     * 用户注册
+     */
+    @PostMapping("/register")
+    @Operation(summary = "用户注册", description = "商城用户注册")
+    public R<?> register(@RequestBody RegisterRequest request) {
+        try {
+            // 动态获取租户ID
+            String tenantId = org.springblade.core.tool.utils.Func.toStr(
+                org.springblade.core.tool.utils.WebUtil.getRequest().getHeader("Tenant-Id"),
+                "000000"
+            );
+            log.info("注册请求 - tenantId: {}, phone: {}", tenantId, request.getPhone());
+
+            // 参数校验
+            if (request.getPhone() == null || request.getPhone().trim().isEmpty()) {
+                return R.fail("手机号不能为空");
+            }
+            if (!request.getPhone().matches("^1[3-9]\\d{9}$")) {
+                return R.fail("请输入有效的手机号");
+            }
+            if (request.getPassword() == null || request.getPassword().trim().isEmpty()) {
+                return R.fail("密码不能为空");
+            }
+            if (!request.getPassword().equals(request.getConfirmPassword())) {
+                return R.fail("两次输入的密码不一致");
+            }
+
+            // 检查手机号是否已存在（使用动态租户ID）
+            log.info("开始检查手机号是否存在 - tenantId: {}, phone: {}", tenantId, request.getPhone());
+            R<User> existingUserResult = userClient.getUserByPhone(tenantId, request.getPhone());
+            log.info("手机号查询结果 - success: {}, hasData: {}, data: {}, dataClass: {}",
+                existingUserResult.isSuccess(),
+                existingUserResult.getData() != null,
+                existingUserResult.getData(),
+                existingUserResult.getData() != null ? existingUserResult.getData().getClass().getName() : "null");
+            log.info("R对象详情 - code: {}, msg: {}", existingUserResult.getCode(), existingUserResult.getMsg());
+
+            // 只有当查询成功且返回了有效用户（userId 不为 null）时才认为用户已存在
+            if (existingUserResult.isSuccess() && existingUserResult.getData() != null && existingUserResult.getData().getId() != null) {
+                log.warn("手机号已存在，阻止注册 - userId: {}, account: {}",
+                    existingUserResult.getData().getId(),
+                    existingUserResult.getData().getAccount());
+                return R.fail("该手机号已被注册");
+            }
+            log.info("手机号检查通过，可以注册");
+
+            // 创建用户
+            User user = new User();
+            user.setAccount(request.getPhone()); // 使用手机号作为账号
+            user.setEmail(request.getEmail()); // 邮箱可选
+            user.setPhone(request.getPhone());
+            user.setPassword(DigestUtil.encrypt(request.getPassword())); // 加密密码
+            user.setName("用户" + request.getPhone().substring(7)); // 使用手机号后4位作为用户名
+            user.setRealName("用户" + request.getPhone().substring(7));
+            user.setTenantId(tenantId); // 使用动态租户ID
+            user.setRoleId("1123598816738675202"); // 默认角色ID
+            user.setDeptId("1123598813738675201"); // 默认部门ID
+            user.setStatus(1); // 启用状态
+
+            // 调用 Feign 保存用户
+            R<User> saveResult = userClient.saveUser(user);
+            if (!saveResult.isSuccess() || saveResult.getData() == null) {
+                return R.fail("创建用户失败: " + (saveResult.getMsg() != null ? saveResult.getMsg() : "未知错误"));
+            }
+
+            user = saveResult.getData();
+            if (user.getId() == null || user.getId() <= 0) {
+                // 兜底：尝试重新查询（使用动态租户ID）
+                R<User> retryResult = userClient.getUserByAccount(tenantId, request.getPhone());
+                if (retryResult.isSuccess() && retryResult.getData() != null && retryResult.getData().getId() != null && retryResult.getData().getId() > 0) {
+                    user = retryResult.getData();
+                } else {
+                    return R.fail("创建用户后验证失败：无法获取有效的用户ID");
+                }
+            }
+
+            // 保存 OAuth 绑定记录（使用动态租户ID）
+            UserOauth userOauth = new UserOauth();
+            userOauth.setTenantId(tenantId);
+            userOauth.setUuid(String.valueOf(user.getId()));
+            userOauth.setUserId(user.getId());
+            userOauth.setUsername(user.getAccount());
+            userOauth.setNickname(user.getName());
+            userOauth.setSource("mall");
+            try {
+                userClient.saveUserOauth(userOauth);
+            } catch (Exception oauthEx) {
+                log.warn("保存OAuth记录失败（不影响注册）: {}", oauthEx.getMessage());
+            }
+
+            // 生成Token
+            String token = createJWTToken(user);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("token", token);
+            result.put("user", user);
+            result.put("expiresIn", tokenExpire);
+            result.put("refreshToken", token);
+
+            return R.data(result);
+        } catch (Exception e) {
+            log.error("注册异常: {}", e.getMessage(), e);
+            return R.fail("注册失败：" + e.getMessage());
         }
     }
 

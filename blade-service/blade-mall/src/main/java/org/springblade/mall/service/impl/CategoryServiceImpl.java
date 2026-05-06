@@ -179,8 +179,10 @@ public class CategoryServiceImpl implements CategoryService {
     @Override
     public CategoryVO getCategoryById(Long id) {
 
+        String tenantId = TenantUtil.getTenantId();
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("id", id);
+        queryWrapper.eq("tenant_id", tenantId);
         Category category = categoryMapper.selectOne(queryWrapper);
         if (category == null) {
             throw new RuntimeException("分类不存在");
@@ -191,8 +193,11 @@ public class CategoryServiceImpl implements CategoryService {
     @Override
     public List<CategoryVO> getAllCategories() {
         log.info("=== 获取所有分类 ===");
-        log.info("使用的租户ID: {}", TenantUtil.getTenantId());
+        String tenantId = TenantUtil.getTenantId();
+        log.info("使用的租户ID: {}", tenantId);
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("tenant_id", tenantId);
+        queryWrapper.eq("is_deleted", 0);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         log.info("获取到的分类数量: {}", categories.size());
         for (Category category : categories) {
@@ -204,24 +209,93 @@ public class CategoryServiceImpl implements CategoryService {
     /**
      * 获取所有分类（包括禁用状态）
      * 用于管理员系统
+     * 000000租户获取所有分类，普通租户只获取自己的分类
+     * @param tenantId 租户ID，null表示不隔离租户
      * @return 分类树
      */
-    public List<CategoryVO> getAllCategoriesWithStatus() {
+    public List<CategoryVO> getAllCategoriesWithStatus(String tenantId) {
         log.info("=== 获取所有分类（包括禁用状态）===");
-        log.info("使用的租户ID: {}", TenantUtil.getTenantId());
+        log.info("传入的租户ID: {}", tenantId);
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
+
+        // null表示不隔离租户（管理员模式），否则根据租户ID过滤
+        if (tenantId != null && !"000000".equals(tenantId)) {
+            queryWrapper.eq("tenant_id", tenantId);
+        }
+        queryWrapper.eq("is_deleted", 0);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         log.info("获取到的分类数量: {}", categories.size());
         for (Category category : categories) {
-            log.info("分类ID: {}, 名称: {}, 父分类ID: {}", category.getId(), category.getName(), category.getParentId());
+            log.info("分类ID: {}, 名称: {}, 父分类ID: {}, 租户ID: {}", category.getId(), category.getName(), category.getParentId(), category.getTenantId());
         }
         return buildCategoryTree(categories);
     }
 
+    /**
+     * 获取所有分类（包括禁用状态）
+     * 用于管理员系统
+     * @return 分类树
+     */
+    public List<CategoryVO> getAllCategoriesWithStatus() {
+        return getAllCategoriesWithStatus(TenantUtil.getTenantId());
+    }
+
+    /**
+     * 获取所有分类（按租户ID分组）
+     * @param tenantId 租户ID，null表示不隔离租户
+     * @return 按租户分组的分类列表
+     */
+    public List<CategoryVO> getAllCategoriesGroupedByTenant(String tenantId) {
+        log.info("=== 获取所有分类（按租户分组）===");
+        log.info("传入的租户ID: {}", tenantId);
+
+        // 只有000000租户或null租户可以查看所有分类
+        if (tenantId != null && !"000000".equals(tenantId)) {
+            return getAllCategoriesWithStatus(tenantId);
+        }
+
+        QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("is_deleted", 0);
+        queryWrapper.orderByAsc("tenant_id", "sort");
+        List<Category> categories = categoryMapper.selectList(queryWrapper);
+        log.info("获取到的分类数量: {}", categories.size());
+
+        // 按租户ID分组
+        Map<String, List<Category>> categoriesByTenant = categories.stream()
+                .collect(Collectors.groupingBy(c -> c.getTenantId() != null ? c.getTenantId() : "default"));
+
+        // 构建带租户分组的分类树
+        List<CategoryVO> result = new ArrayList<>();
+        categoriesByTenant.forEach((tid, catList) -> {
+            CategoryVO tenantGroup = new CategoryVO();
+            // 使用租户ID+特殊后缀确保唯一性
+            tenantGroup.setId(Long.parseLong(tid + "999"));
+            tenantGroup.setName("租户: " + tid);
+            tenantGroup.setTenantId(tid);
+            tenantGroup.setTenantGroup(true);  // 标识为租户分组，不可操作
+            tenantGroup.setChildren(buildCategoryTree(catList));
+            result.add(tenantGroup);
+        });
+
+        return result;
+    }
+
+    /**
+     * 获取所有分类（按租户ID分组）
+     * 用于000000租户显示租户分组
+     * @return 按租户分组的分类列表
+     */
+    public List<CategoryVO> getAllCategoriesGroupedByTenant() {
+        return getAllCategoriesGroupedByTenant(TenantUtil.getTenantId());
+    }
+
     @Override
     public List<CategoryVO> getSubCategories(Long parentId) {
+        String tenantId = TenantUtil.getTenantId();
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("parent_id", parentId);
+        queryWrapper.eq("tenant_id", tenantId);
+        queryWrapper.eq("is_deleted", 0);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         return categories.stream()
                 .map(this::convertToVO)
@@ -235,8 +309,11 @@ public class CategoryServiceImpl implements CategoryService {
      * @return 子分类列表
      */
     public List<CategoryVO> getSubCategoriesWithStatus(Long parentId) {
+        String tenantId = TenantUtil.getTenantId();
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("parent_id", parentId);
+        queryWrapper.eq("tenant_id", tenantId);
+        queryWrapper.eq("is_deleted", 0);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         return categories.stream()
                 .map(this::convertToVO)
@@ -245,7 +322,11 @@ public class CategoryServiceImpl implements CategoryService {
 
     @Override
     public List<CategoryVO> getActiveCategories() {
+        String tenantId = TenantUtil.getTenantId();
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("tenant_id", tenantId);
+        queryWrapper.eq("is_deleted", 0);
+        queryWrapper.eq("status", 1);
         List<Category> categories = categoryMapper.selectList(queryWrapper);
         return buildCategoryTree(categories);
     }

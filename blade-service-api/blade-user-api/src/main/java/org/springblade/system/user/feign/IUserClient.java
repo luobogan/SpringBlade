@@ -97,4 +97,14 @@ public interface IUserClient {
 	@GetMapping(API_PREFIX + "/user-by-account")
 	R<User> getUserByAccount(@RequestParam("tenantId") String tenantId, @RequestParam("account") String account);
 
+	/**
+	 * 根据租户ID和手机号查询用户
+	 *
+	 * @param tenantId 租户ID
+	 * @param phone    手机号
+	 * @return 用户对象
+	 */
+	@GetMapping(API_PREFIX + "/user-by-phone")
+	R<User> getUserByPhone(@RequestParam("tenantId") String tenantId, @RequestParam("phone") String phone);
+
 }

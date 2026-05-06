@@ -35,6 +35,10 @@ public class CategoryVO {
 
     private LocalDateTime updatedAt;
 
+    private String tenantId;
+
+    private Boolean tenantGroup;
+
     private List<CategoryVO> children;
 }
 

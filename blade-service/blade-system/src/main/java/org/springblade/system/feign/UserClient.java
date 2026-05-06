@@ -18,6 +18,7 @@ package org.springblade.system.feign;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import io.swagger.v3.oas.annotations.Hidden;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DateUtil;
 import org.springblade.system.service.IUserService;
@@ -34,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * @author Chill
  */
+@Slf4j
 @Hidden
 @RestController
 @AllArgsConstructor
@@ -101,6 +103,34 @@ public class UserClient implements IUserClient {
 		User user = service.getOne(Wrappers.<User>query().lambda()
 			.eq(User::getTenantId, tenantId)
 			.eq(User::getAccount, account));
+		return R.data(user);
+	}
+
+	@Override
+	@GetMapping(API_PREFIX + "/user-by-phone")
+	public R<User> getUserByPhone(String tenantId, String phone) {
+		log.info("根据手机号查询用户 - tenantId: {}, phone: {}", tenantId, phone);
+		// 打印 SQL 查询条件
+		log.info("执行 SQL: SELECT * FROM blade_user WHERE tenant_id = '{}' AND phone = '{}'", tenantId, phone);
+		// 使用 list() 避免 TooManyResultsException，取第一条记录
+		java.util.List<User> users = service.list(Wrappers.<User>query().lambda()
+			.eq(User::getTenantId, tenantId)
+			.eq(User::getPhone, phone));
+		log.info("查询结果 - list 数量: {}, list: {}", users != null ? users.size() : 0, users);
+
+		// 只有当查询到有效用户（ID 不为 null）时才返回成功
+		if (users == null || users.isEmpty()) {
+			log.info("未找到用户，返回失败");
+			return R.fail("用户不存在");
+		}
+
+		User user = users.get(0);
+		if (user == null || user.getId() == null) {
+			log.info("用户对象为空或ID为null，返回失败");
+			return R.fail("用户不存在");
+		}
+
+		log.info("最终返回 - 用户存在: true, userId: {}", user.getId());
 		return R.data(user);
 	}
 
