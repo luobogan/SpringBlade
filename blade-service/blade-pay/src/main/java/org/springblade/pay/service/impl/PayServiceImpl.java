@@ -12,6 +12,7 @@ import org.springblade.pay.entity.Refund;
 import org.springblade.pay.mapper.PaymentMapper;
 import org.springblade.pay.mapper.RefundMapper;
 import org.springblade.pay.service.IPayService;
+import org.springblade.pay.vo.PaymentMethodVO;
 import org.springblade.pay.vo.PaymentVO;
 import org.springblade.pay.vo.RefundVO;
 import org.springblade.pay.vo.WechatPayResultVO;
@@ -22,10 +23,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 
@@ -280,5 +284,129 @@ public class PayServiceImpl implements IPayService {
         vo.setCreatedAt(formatDate(refund.getCreateTime()));
         vo.setUpdatedAt(formatDate(refund.getUpdateTime()));
         return vo;
+    }
+
+    @Override
+    public List<PaymentMethodVO> getPaymentMethods() {
+        List<PaymentMethodVO> methods = new ArrayList<>();
+
+        PaymentMethodVO balance = new PaymentMethodVO();
+        balance.setCode("balance");
+        balance.setName("余额支付");
+        balance.setIcon("/icons/balance.png");
+        balance.setFeeRate(BigDecimal.ZERO);
+        balance.setEnabled(true);
+        balance.setRecommended(false);
+        balance.setSort(1);
+        balance.setDescription("使用账户余额支付");
+        methods.add(balance);
+
+        PaymentMethodVO wechat = new PaymentMethodVO();
+        wechat.setCode("wechat");
+        wechat.setName("微信支付");
+        wechat.setIcon("/icons/wechat.png");
+        wechat.setFeeRate(new BigDecimal("0.006"));
+        wechat.setEnabled(true);
+        wechat.setRecommended(true);
+        wechat.setSort(2);
+        wechat.setDescription("使用微信支付，安全便捷");
+        methods.add(wechat);
+
+        PaymentMethodVO alipay = new PaymentMethodVO();
+        alipay.setCode("alipay");
+        alipay.setName("支付宝");
+        alipay.setIcon("/icons/alipay.png");
+        alipay.setFeeRate(new BigDecimal("0.006"));
+        alipay.setEnabled(true);
+        alipay.setRecommended(false);
+        alipay.setSort(3);
+        alipay.setDescription("使用支付宝，快速到账");
+        methods.add(alipay);
+
+        return methods;
+    }
+
+    @Override
+    @Transactional
+    public PaymentVO executePayment(String paymentNo) {
+        QueryWrapper<Payment> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("payment_no", paymentNo);
+        Payment payment = paymentMapper.selectOne(queryWrapper);
+
+        if (payment == null) {
+            throw new RuntimeException("支付单不存在: " + paymentNo);
+        }
+
+        if (!PayConstant.STATUS_PENDING.equals(payment.getPaymentStatus())) {
+            throw new RuntimeException("支付单状态不正确，无法执行支付");
+        }
+
+        payment.setPaymentStatus(PayConstant.STATUS_SUCCESS);
+        payment.setTransactionId("TXN" + UUID.randomUUID().toString().replace("-", ""));
+        payment.setPaymentTime(LocalDateTime.now());
+
+        paymentMapper.updateById(payment);
+
+        log.info("执行支付成功: paymentNo={}, transactionId={}", paymentNo, payment.getTransactionId());
+
+        try {
+            orderClient.updatePayStatus(payment.getOrderNo(), paymentNo);
+        } catch (Exception e) {
+            log.error("通知订单服务支付结果失败: orderNo={}", payment.getOrderNo(), e);
+        }
+
+        return convertToVO(payment);
+    }
+
+    @Override
+    public PaymentVO getPaymentStatus(String paymentNo) {
+        return getByPaymentNo(paymentNo);
+    }
+
+    @Override
+    public PaymentVO getPaymentByOrderNo(String orderNo) {
+        QueryWrapper<Payment> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_no", orderNo);
+        Payment payment = paymentMapper.selectOne(queryWrapper);
+        if (payment == null) {
+            throw new RuntimeException("未找到订单的支付记录: " + orderNo);
+        }
+        return convertToVO(payment);
+    }
+
+    @Override
+    public List<PaymentVO> getUserPayments(Long userId) {
+        QueryWrapper<Payment> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("user_id", userId);
+        queryWrapper.orderByDesc("create_time");
+        List<Payment> payments = paymentMapper.selectList(queryWrapper);
+
+        List<PaymentVO> result = new ArrayList<>();
+        for (Payment payment : payments) {
+            result.add(convertToVO(payment));
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional
+    public PaymentVO cancelPayment(String paymentNo) {
+        QueryWrapper<Payment> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("payment_no", paymentNo);
+        Payment payment = paymentMapper.selectOne(queryWrapper);
+
+        if (payment == null) {
+            throw new RuntimeException("支付单不存在: " + paymentNo);
+        }
+
+        if (!PayConstant.STATUS_PENDING.equals(payment.getPaymentStatus())) {
+            throw new RuntimeException("只有待支付的订单才能取消");
+        }
+
+        payment.setPaymentStatus(PayConstant.STATUS_CANCELLED);
+        paymentMapper.updateById(payment);
+
+        log.info("取消支付成功: paymentNo={}", paymentNo);
+        return convertToVO(payment);
     }
 }

@@ -14,6 +14,9 @@ import java.time.LocalDateTime;
 @TableName("blade_refund")
 public class Refund extends TenantEntity {
 
+    @TableField(exist = false)
+    private Integer status;
+
     private String refundNo;
 
     private String paymentNo;

@@ -2,9 +2,12 @@ package org.springblade.pay.service;
 
 import org.springblade.pay.dto.PaymentDTO;
 import org.springblade.pay.dto.RefundDTO;
+import org.springblade.pay.vo.PaymentMethodVO;
 import org.springblade.pay.vo.PaymentVO;
 import org.springblade.pay.vo.RefundVO;
 import org.springblade.pay.vo.WechatPayResultVO;
+
+import java.util.List;
 
 public interface IPayService {
 
@@ -23,4 +26,16 @@ public interface IPayService {
     RefundVO getByRefundNo(String refundNo);
 
     RefundVO handleRefundCallback(String refundNo, String transactionId);
+
+    List<PaymentMethodVO> getPaymentMethods();
+
+    PaymentVO executePayment(String paymentNo);
+
+    PaymentVO getPaymentStatus(String paymentNo);
+
+    PaymentVO getPaymentByOrderNo(String orderNo);
+
+    List<PaymentVO> getUserPayments(Long userId);
+
+    PaymentVO cancelPayment(String paymentNo);
 }
