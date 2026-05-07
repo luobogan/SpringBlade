@@ -80,9 +80,10 @@ public interface OrderService {
     
     /**
      * 获取所有订单
+     * @param tenantId 租户ID
      * @return 订单列表
      */
-    List<OrderVO> getAllOrders();
+    List<OrderVO> getAllOrders(String tenantId);
     
     /**
      * 根据状态获取订单

@@ -64,6 +64,11 @@ public class ProductDTO {
     @NotNull(message = "品牌ID不能为空")
     private Long brandId;
 
+    /**
+     * 租户ID
+     */
+    private String tenantId;
+
     // ==================== 价格库存字段 ====================
 
     /**

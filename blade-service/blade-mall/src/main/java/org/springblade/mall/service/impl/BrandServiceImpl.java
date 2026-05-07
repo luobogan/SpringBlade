@@ -29,8 +29,10 @@ public class BrandServiceImpl implements BrandService {
     @Override
     @Transactional
     public BrandVO createBrand(BrandDTO brandDTO) {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
+        // 优先使用 DTO 中的 tenantId（000000租户可以选择其他租户），否则从 Token 获取
+        String tenantId = StringUtil.isNotBlank(brandDTO.getTenantId())
+            ? brandDTO.getTenantId()
+            : SecureUtil.getTenantId();
         // 如果租户ID为空，抛出异常
         if (StringUtil.isBlank(tenantId)) {
             throw new RuntimeException("租户ID不能为空");
@@ -39,6 +41,7 @@ public class BrandServiceImpl implements BrandService {
         // 检查品牌名称是否已存在
         QueryWrapper<Brand> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("name", brandDTO.getName());
+        queryWrapper.eq("tenant_id", tenantId);
         Brand existingBrand = brandMapper.selectOne(queryWrapper);
         if (existingBrand != null) {
             throw new RuntimeException("品牌名称已存在");
@@ -118,15 +121,12 @@ public class BrandServiceImpl implements BrandService {
     }
 
     @Override
-    public List<BrandVO> getAllBrands() {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
-        // 如果租户ID为空，直接返回空列表
-        if (StringUtil.isBlank(tenantId)) {
-            return new ArrayList<>();
-        }
-
+    public List<BrandVO> getAllBrands(String tenantId) {
+        // 如果传入了租户ID，使用该租户ID过滤
         QueryWrapper<Brand> queryWrapper = new QueryWrapper<>();
+        if (StringUtil.isNotBlank(tenantId)) {
+            queryWrapper.eq("tenant_id", tenantId);
+        }
         List<Brand> brands = brandMapper.selectList(queryWrapper);
         return brands.stream()
                 .map(this::convertToVO)

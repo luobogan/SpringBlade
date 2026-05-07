@@ -42,7 +42,7 @@ public interface BrandService {
      * 获取所有品牌
      * @return 品牌列表
      */
-    List<BrandVO> getAllBrands();
+    List<BrandVO> getAllBrands(String tenantId);
     
     /**
      * 获取活跃的品牌

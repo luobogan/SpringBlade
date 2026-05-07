@@ -57,7 +57,11 @@ public class CategoryController extends BladeController {
     @Operation(summary = "创建分类", description = "创建分类")
     public R<CategoryVO> createCategory(@Parameter(description = "分类信息") @Valid @RequestBody CategoryDTO categoryDTO) {
         try {
-            CategoryVO categoryVO = TenantUtil.use(getTenantId(), () -> categoryService.createCategory(categoryDTO));
+            // 优先使用前端传来的 tenantId（000000租户可以选择其他租户）
+            String tenantId = org.springblade.core.tool.utils.StringUtil.isNotBlank(categoryDTO.getTenantId()) 
+                ? categoryDTO.getTenantId() 
+                : getTenantId();
+            CategoryVO categoryVO = TenantUtil.use(tenantId, () -> categoryService.createCategory(categoryDTO));
             R<CategoryVO> result = R.data(categoryVO);
             result.setMsg("分类创建成功");
             return result;
@@ -160,14 +164,22 @@ public class CategoryController extends BladeController {
     /**
      * 获取分类树（按租户ID分组）
      * 000000租户获取所有分类并按租户分组，其他租户只获取自己的分类
+     * @param tenantId 租户ID（可选，仅000000租户使用时有效）
      * @return 按租户分组的分类树
      */
     @GetMapping("/tree/by-tenant")
     @AdminTenant
     @Operation(summary = "获取分类树（按租户分组）", description = "获取分类树（按租户分组）")
-    public R<List<CategoryVO>> getCategoryTreeByTenant() {
+    public R<List<CategoryVO>> getCategoryTreeByTenant(@RequestParam(required = false) String tenantId) {
         try {
-            List<CategoryVO> categories = categoryService.getAllCategoriesGroupedByTenant();
+            List<CategoryVO> categories;
+            if (org.springblade.core.tool.utils.StringUtil.isNotBlank(tenantId)) {
+                // 如果传入了租户ID，直接查询该租户的分类（不通过TenantUtil）
+                categories = categoryService.getAllCategoriesWithStatus(tenantId);
+            } else {
+                // 否则返回所有租户的分类并按租户分组
+                categories = categoryService.getAllCategoriesGroupedByTenant();
+            }
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());

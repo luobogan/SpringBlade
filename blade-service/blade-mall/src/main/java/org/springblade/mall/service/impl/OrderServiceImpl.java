@@ -725,15 +725,18 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public List<OrderVO> getAllOrders() {
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
+    public List<OrderVO> getAllOrders(String tenantId) {
+        // 如果未传入租户ID，从 Token 获取
+        if (StringUtil.isBlank(tenantId)) {
+            tenantId = SecureUtil.getTenantId();
+        }
         // 如果租户ID为空，抛出异常
         if (StringUtil.isBlank(tenantId)) {
             throw new RuntimeException("租户ID不能为空");
         }
 
         QueryWrapper<Order> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("tenant_id", tenantId);
         queryWrapper.orderByDesc("created_at");
         List<Order> orders = orderMapper.selectList(queryWrapper);
         return orders.stream()

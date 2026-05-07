@@ -12,6 +12,7 @@ import lombok.AllArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -34,9 +35,10 @@ public class FrontBrandController extends BladeController {
      */
     @GetMapping
     @Operation(summary = "获取所有品牌", description = "获取所有品牌")
-    public R<List<BrandVO>> getAllBrands() {
+    public R<List<BrandVO>> getAllBrands(
+            @Parameter(description = "租户ID") @RequestParam(required = false) String tenantId) {
         try {
-            List<BrandVO> brands = brandService.getAllBrands();
+            List<BrandVO> brands = brandService.getAllBrands(tenantId);
             return R.data(brands);
         } catch (Exception e) {
             return R.fail(e.getMessage());

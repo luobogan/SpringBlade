@@ -38,7 +38,8 @@ public class AdminOrderController extends BladeController {
     public R<Map<String, Object>> getAllOrders(
             Query query,
             @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String tenantId) {
         try {
             List<OrderVO> orders;
 
@@ -46,7 +47,7 @@ public class AdminOrderController extends BladeController {
             if (status != null && !status.isEmpty()) {
                 orders = orderService.getOrdersByStatus(status);
             } else {
-                orders = orderService.getAllOrders();
+                orders = orderService.getAllOrders(tenantId);
             }
 
             // 根据关键词搜索

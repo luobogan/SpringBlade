@@ -46,6 +46,7 @@ public class ProductController extends BladeController {
      * @param maxPrice 最高价格
      * @param sortBy 排序字段
      * @param sortOrder 排序方向
+     * @param tenantId 租户ID
      * @return 商品列表
      */
     @GetMapping
@@ -62,7 +63,8 @@ public class ProductController extends BladeController {
             @RequestParam(required = false) BigDecimal minPrice,
             @RequestParam(required = false) BigDecimal maxPrice,
             @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc") String sortOrder) {
+            @RequestParam(defaultValue = "desc") String sortOrder,
+            @RequestParam(required = false) String tenantId) {
         try {
             ProductQueryDTO queryDTO = new ProductQueryDTO();
             queryDTO.setCurrent(query.getCurrent());
@@ -78,6 +80,7 @@ public class ProductController extends BladeController {
             queryDTO.setMaxPrice(maxPrice);
             queryDTO.setSortBy(sortBy);
             queryDTO.setSortOrder(sortOrder);
+            queryDTO.setTenantId(tenantId);
 
             Map<String, Object> result = productService.getProductsWithFilters(queryDTO);
             return R.data(result);

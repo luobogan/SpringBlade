@@ -26,6 +26,8 @@ public class BrandDTO {
 
     private Integer status;
 
+    private String tenantId;
+
     // Getter and Setter methods
     public String getName() {
         return name;
@@ -97,6 +99,14 @@ public class BrandDTO {
 
     public void setStatus(Integer status) {
         this.status = status;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 }
 

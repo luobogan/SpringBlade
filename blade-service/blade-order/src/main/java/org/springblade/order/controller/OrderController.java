@@ -37,8 +37,8 @@ public class OrderController extends BladeController {
     @GetMapping("/detail")
     @ApiOperationSupport(order = 2)
     @Operation(summary = "查看详情", description = "传入id")
-    public R<OrderVO> getOrderById(@Parameter(description = "订单ID", required = true) @RequestParam Long id, BladeUser user) {
-        OrderVO orderVO = orderService.getOrderById(id, user);
+    public R<OrderVO> getOrderById(@Parameter(description = "订单ID", required = true) @RequestParam String id, BladeUser user) {
+        OrderVO orderVO = orderService.getOrderById(Long.parseLong(id), user);
         return R.data(orderVO);
     }
 
@@ -80,69 +80,69 @@ public class OrderController extends BladeController {
     @PostMapping("/update-status")
     @ApiOperationSupport(order = 7)
     @Operation(summary = "更新订单状态", description = "传入id和status")
-    public R<OrderVO> updateOrderStatus(@Parameter(description = "订单ID", required = true) @RequestParam Long id,
+    public R<OrderVO> updateOrderStatus(@Parameter(description = "订单ID", required = true) @RequestParam String id,
                                         @Parameter(description = "订单状态", required = true) @RequestParam String status) {
-        OrderVO orderVO = orderService.updateOrderStatus(id, status);
+        OrderVO orderVO = orderService.updateOrderStatus(Long.parseLong(id), status);
         return R.data(orderVO, "订单状态更新成功");
     }
 
     @PostMapping("/pay")
     @ApiOperationSupport(order = 8)
     @Operation(summary = "支付订单", description = "传入id、paymentMethod和paymentNo")
-    public R<OrderVO> payOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id,
+    public R<OrderVO> payOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id,
                                @Parameter(description = "支付方式", required = true) @RequestParam String paymentMethod,
                                @Parameter(description = "支付单号", required = true) @RequestParam String paymentNo) {
-        OrderVO orderVO = orderService.payOrder(id, paymentMethod, paymentNo);
+        OrderVO orderVO = orderService.payOrder(Long.parseLong(id), paymentMethod, paymentNo);
         return R.data(orderVO, "订单支付成功");
     }
 
     @PostMapping("/ship")
     @ApiOperationSupport(order = 9)
     @Operation(summary = "发货", description = "传入id、shippingMethod和trackingNo")
-    public R<OrderVO> shipOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id,
+    public R<OrderVO> shipOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id,
                                 @Parameter(description = "配送方式", required = true) @RequestParam String shippingMethod,
                                 @Parameter(description = "物流单号", required = true) @RequestParam String trackingNo) {
-        OrderVO orderVO = orderService.shipOrder(id, shippingMethod, trackingNo);
+        OrderVO orderVO = orderService.shipOrder(Long.parseLong(id), shippingMethod, trackingNo);
         return R.data(orderVO, "订单发货成功");
     }
 
     @PostMapping("/complete")
     @ApiOperationSupport(order = 10)
     @Operation(summary = "完成订单", description = "传入id")
-    public R<OrderVO> completeOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id) {
-        OrderVO orderVO = orderService.completeOrder(id);
+    public R<OrderVO> completeOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
+        OrderVO orderVO = orderService.completeOrder(Long.parseLong(id));
         return R.data(orderVO, "订单完成成功");
     }
 
     @PostMapping("/cancel")
     @ApiOperationSupport(order = 11)
     @Operation(summary = "取消订单", description = "传入id")
-    public R<OrderVO> cancelOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id) {
-        OrderVO orderVO = orderService.cancelOrder(id);
+    public R<OrderVO> cancelOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
+        OrderVO orderVO = orderService.cancelOrder(Long.parseLong(id));
         return R.data(orderVO, "订单取消成功");
     }
 
     @PostMapping("/remove")
     @ApiOperationSupport(order = 12)
     @Operation(summary = "删除订单", description = "传入id")
-    public R<?> deleteOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id) {
-        orderService.deleteOrder(id);
+    public R<?> deleteOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
+        orderService.deleteOrder(Long.parseLong(id));
         return R.success("订单删除成功");
     }
 
     @PostMapping("/review")
     @ApiOperationSupport(order = 13)
     @Operation(summary = "评价订单", description = "传入id")
-    public R<OrderVO> reviewOrder(@Parameter(description = "订单ID", required = true) @RequestParam Long id) {
-        OrderVO orderVO = orderService.reviewOrder(id);
+    public R<OrderVO> reviewOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
+        OrderVO orderVO = orderService.reviewOrder(Long.parseLong(id));
         return R.data(orderVO, "订单评价成功");
     }
 
     @PostMapping("/apply-return")
     @ApiOperationSupport(order = 14)
     @Operation(summary = "申请退换/售后", description = "传入id")
-    public R<OrderVO> applyReturn(@Parameter(description = "订单ID", required = true) @RequestParam Long id) {
-        OrderVO orderVO = orderService.applyReturn(id);
+    public R<OrderVO> applyReturn(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
+        OrderVO orderVO = orderService.applyReturn(Long.parseLong(id));
         return R.data(orderVO, "申请退换/售后成功");
     }
 

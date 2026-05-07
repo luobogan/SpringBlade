@@ -34,8 +34,10 @@ public class CategoryServiceImpl implements CategoryService {
     @Override
     @Transactional
     public CategoryVO createCategory(CategoryDTO categoryDTO) {
-        // 获取当前租户ID（从TenantUtil ThreadLocal或JWT Token中获取）
-        String tenantId = TenantUtil.getTenantId();
+        // 优先使用 DTO 中的 tenantId（000000租户可以选择其他租户），否则从 TenantUtil 获取
+        String tenantId = org.springblade.core.tool.utils.StringUtil.isNotBlank(categoryDTO.getTenantId())
+            ? categoryDTO.getTenantId()
+            : TenantUtil.getTenantId();
 
         // 验证 parentId - 如果为0或负数，设置为null（顶级分类）
         Long parentId = categoryDTO.getParentId();
@@ -218,8 +220,8 @@ public class CategoryServiceImpl implements CategoryService {
         log.info("传入的租户ID: {}", tenantId);
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
 
-        // null表示不隔离租户（管理员模式），否则根据租户ID过滤
-        if (tenantId != null && !"000000".equals(tenantId)) {
+        // 根据租户ID过滤
+        if (tenantId != null) {
             queryWrapper.eq("tenant_id", tenantId);
         }
         queryWrapper.eq("is_deleted", 0);

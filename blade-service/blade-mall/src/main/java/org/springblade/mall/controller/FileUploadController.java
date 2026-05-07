@@ -3,6 +3,7 @@ package org.springblade.mall.controller;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.boot.ctrl.BladeController;
+import org.springblade.core.secure.utils.SecureUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -30,6 +31,26 @@ public class FileUploadController extends BladeController {
 
     @Value("${blade.prop.upload-domain:http://localhost:8085}")
     private String uploadDomain;
+
+    private String getTenantId(HttpServletRequest request) {
+        String tokenTenantId = SecureUtil.getTenantId();
+        if (org.springblade.core.tool.utils.StringUtil.isNotBlank(tokenTenantId)) {
+            if ("000000".equals(tokenTenantId) && request != null) {
+                String headerTenantId = request.getHeader("Tenant-Id");
+                if (org.springblade.core.tool.utils.StringUtil.isNotBlank(headerTenantId)) {
+                    return headerTenantId;
+                }
+            }
+            return tokenTenantId;
+        }
+        if (request != null) {
+            String headerTenantId = request.getHeader("Tenant-Id");
+            if (org.springblade.core.tool.utils.StringUtil.isNotBlank(headerTenantId)) {
+                return headerTenantId;
+            }
+        }
+        return "000000";
+    }
 
     // 初始化上传目录
     @PostConstruct
@@ -59,11 +80,8 @@ public class FileUploadController extends BladeController {
             @RequestParam(value = "type", defaultValue = "product") String type,
             HttpServletRequest request) {
         try {
-            // 获取租户ID
-            String tenantId = request.getHeader("Tenant-Id");
-            if (tenantId == null || tenantId.isEmpty()) {
-                tenantId = "default";
-            }
+            // 获取租户ID（优先从Token获取，其次从请求头，最后默认000000）
+            String tenantId = getTenantId(request);
 
             log.debug("Upload path: {}", uploadPath);
             log.debug("Upload domain: {}", uploadDomain);
@@ -137,11 +155,8 @@ public class FileUploadController extends BladeController {
             @RequestParam("file") MultipartFile file,
             HttpServletRequest request) {
         try {
-            // 获取租户ID
-            String tenantId = request.getHeader("Tenant-Id");
-            if (tenantId == null || tenantId.isEmpty()) {
-                tenantId = "default";
-            }
+            // 获取租户ID（优先从Token获取，其次从请求头，最后默认000000）
+            String tenantId = getTenantId(request);
 
             log.debug("Upload path: {}", uploadPath);
             log.debug("Tenant ID: {}", tenantId);
@@ -203,11 +218,8 @@ public class FileUploadController extends BladeController {
             @RequestParam("type") String type,
             HttpServletRequest request) {
         try {
-            // 获取租户ID
-            String tenantId = request.getHeader("Tenant-Id");
-            if (tenantId == null || tenantId.isEmpty()) {
-                tenantId = "default";
-            }
+            // 获取租户ID（优先从Token获取，其次从请求头，最后默认000000）
+            String tenantId = getTenantId(request);
 
             log.debug("Upload path: {}", uploadPath);
             log.debug("File type: {}", type);

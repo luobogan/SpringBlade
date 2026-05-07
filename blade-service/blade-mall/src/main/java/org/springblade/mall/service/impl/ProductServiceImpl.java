@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.utils.Func;
+import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.mall.dto.ProductDTO;
 import org.springblade.mall.dto.ProductQueryDTO;
 import org.springblade.mall.dto.ProductSkuDTO;
@@ -121,8 +122,14 @@ public class ProductServiceImpl implements ProductService {
             }
         }
 
-        // 获取当前租户ID
-        String tenantId = SecureUtil.getTenantId();
+        // 优先使用 DTO 中的 tenantId（000000租户可以选择其他租户），否则从 Token 获取
+        String tenantId = StringUtil.isNotBlank(productDTO.getTenantId())
+            ? productDTO.getTenantId()
+            : SecureUtil.getTenantId();
+        // 如果租户ID为空，抛出异常
+        if (StringUtil.isBlank(tenantId)) {
+            throw new RuntimeException("租户ID不能为空");
+        }
 
         // 创建商品实体
         Product product = new Product();
@@ -1241,6 +1248,11 @@ public class ProductServiceImpl implements ProductService {
 
         QueryWrapper<Product> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("is_deleted", 0);
+
+        // 租户ID过滤
+        if (queryDTO.getTenantId() != null && !queryDTO.getTenantId().isEmpty()) {
+            queryWrapper.eq("tenant_id", queryDTO.getTenantId());
+        }
 
         // 只在status不为null时添加状态过滤
         // 对于admin端，status为null时查询所有状态的商品

@@ -98,8 +98,9 @@ public class OrderController extends BladeController {
     @GetMapping("/list")
     @ApiOperationSupport(order = 5)
     @Operation(summary = "获取所有订单", description = "无需参数")
-    public R<List<OrderVO>> getAllOrders() {
-        List<OrderVO> orders = orderService.getAllOrders();
+    public R<List<OrderVO>> getAllOrders(
+            @Parameter(description = "租户ID") @RequestParam(required = false) String tenantId) {
+        List<OrderVO> orders = orderService.getAllOrders(tenantId);
         return R.data(orders);
     }
 

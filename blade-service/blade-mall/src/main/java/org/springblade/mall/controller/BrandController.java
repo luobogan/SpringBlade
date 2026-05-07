@@ -161,13 +161,15 @@ public class BrandController extends BladeController {
     @GetMapping
     public ResponseEntity<R<Map<String, Object>>> getAllBrands(
             @RequestParam(defaultValue = "1") Integer current,
-            @RequestParam(defaultValue = "10") Integer pageSize) {
+            @RequestParam(defaultValue = "10") Integer pageSize,
+            @RequestParam(required = false) String tenantId) {
         try {
             log.debug("=== 获取品牌列表 ===");
             log.debug("current: {}", current);
             log.debug("pageSize: {}", pageSize);
+            log.debug("tenantId: {}", tenantId);
 
-            List<BrandVO> brands = brandService.getAllBrands();
+            List<BrandVO> brands = brandService.getAllBrands(tenantId);
 
             // 模拟分页
             int start = (current - 1) * pageSize;

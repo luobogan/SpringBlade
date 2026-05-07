@@ -26,6 +26,8 @@ public class CategoryDTO {
     private Integer sort;
 
     private Integer status;
+
+    private String tenantId;
 }
 
 

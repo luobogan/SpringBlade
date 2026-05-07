@@ -79,6 +79,11 @@ public class ProductQueryDTO {
      */
     private String sortOrder = "desc";
 
+    /**
+     * 租户ID
+     */
+    private String tenantId;
+
 }
 
 
