@@ -17,11 +17,20 @@ public class CategoryDTO {
 
     private Long parentId;
 
-    private String icon;
+    /**
+     * 分类图标ID（关联ImageFile表）
+     */
+    private Long iconId;
 
-    private String image;
+    /**
+     * 分类图片ID（关联ImageFile表）
+     */
+    private Long imageId;
 
-    private String banner;
+    /**
+     * 分类Banner ID（关联ImageFile表）
+     */
+    private Long bannerId;
 
     private Integer sort;
 
@@ -29,6 +38,3 @@ public class CategoryDTO {
 
     private String tenantId;
 }
-
-
-

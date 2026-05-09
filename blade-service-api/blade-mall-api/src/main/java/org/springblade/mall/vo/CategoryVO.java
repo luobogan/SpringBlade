@@ -21,11 +21,35 @@ public class CategoryVO {
 
     private Integer level;
 
-    private String icon;
+    /**
+     * 分类图标ID（关联ImageFile表）
+     */
+    private Long iconId;
 
-    private String image;
+    /**
+     * 分类图标完整信息
+     */
+    private ImageFileInfo iconInfo;
 
-    private String banner;
+    /**
+     * 分类图片ID（关联ImageFile表）
+     */
+    private Long imageId;
+
+    /**
+     * 分类图片完整信息
+     */
+    private ImageFileInfo imageInfo;
+
+    /**
+     * 分类Banner ID（关联ImageFile表）
+     */
+    private Long bannerId;
+
+    /**
+     * 分类Banner完整信息
+     */
+    private ImageFileInfo bannerInfo;
 
     private Integer sort;
 
@@ -40,7 +64,15 @@ public class CategoryVO {
     private Boolean tenantGroup;
 
     private List<CategoryVO> children;
+
+    @Data
+    public static class ImageFileInfo {
+        private Long id;
+        private String filename;
+        private String url;
+        private Long filesize;
+        private String filetype;
+        private Integer iszip;
+        private Boolean encrypt;
+    }
 }
-
-
-

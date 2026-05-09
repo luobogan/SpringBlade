@@ -1,290 +1,287 @@
 package org.springblade.mall.controller;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springblade.core.boot.file.BladeFile;
+import org.springblade.core.boot.file.BladeFileProxyFactory;
+import org.springblade.core.boot.file.ImageFileEntity;
+import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.boot.ctrl.BladeController;
-import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.mall.entity.ImageFile;
+import org.springblade.mall.mapper.ImageFileMapper;
+import org.springblade.mall.service.ImageFileService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
-import java.io.File;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * 文件上传控制器
- */
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+
 @RestController
 @RequestMapping("/")
 @Tag(name = "文件上传", description = "文件上传接口")
 public class FileUploadController extends BladeController {
 
-    private static final Logger log = LoggerFactory.getLogger(FileUploadController.class);
+	private static final Logger log = LoggerFactory.getLogger(FileUploadController.class);
 
-    @Value("${blade.prop.upload-path:uploads}")
-    private String uploadPath;
+	@Value("${blade.prop.upload-domain:http://localhost:8085}")
+	private String uploadDomain;
 
-    @Value("${blade.prop.upload-domain:http://localhost:8085}")
-    private String uploadDomain;
+	@Autowired
+	private ImageFileService imageFileService;
 
-    private String getTenantId(HttpServletRequest request) {
-        String tokenTenantId = SecureUtil.getTenantId();
-        if (org.springblade.core.tool.utils.StringUtil.isNotBlank(tokenTenantId)) {
-            if ("000000".equals(tokenTenantId) && request != null) {
-                String headerTenantId = request.getHeader("Tenant-Id");
-                if (org.springblade.core.tool.utils.StringUtil.isNotBlank(headerTenantId)) {
-                    return headerTenantId;
-                }
-            }
-            return tokenTenantId;
-        }
-        if (request != null) {
-            String headerTenantId = request.getHeader("Tenant-Id");
-            if (org.springblade.core.tool.utils.StringUtil.isNotBlank(headerTenantId)) {
-                return headerTenantId;
-            }
-        }
-        return "000000";
-    }
+	@Autowired
+	private ImageFileMapper imageFileMapper;
 
-    // 初始化上传目录
-    @PostConstruct
-    public void init() {
-        // 确保上传目录是绝对路径
-        File uploadDir = new File(uploadPath);
-        if (!uploadDir.isAbsolute()) {
-            // 如果是相对路径，使用当前工作目录作为基础
-            uploadPath = System.getProperty("user.dir") + File.separator + uploadPath;
-            uploadDir = new File(uploadPath);
-        }
+	@PostMapping("/admin/upload/image")
+	public ResponseEntity<R<Map<String, Object>>> uploadImage(
+			@RequestParam("file") MultipartFile file,
+			@RequestParam(value = "type", defaultValue = "product") String type) {
+		try {
+			log.debug("Upload type: {}", type);
 
-        // 确保上传目录存在
-        if (!uploadDir.exists()) {
-            uploadDir.mkdirs();
-        }
+			if (file.isEmpty()) {
+				return ResponseEntity.badRequest().body(R.fail("文件不能为空"));
+			}
 
-        log.info("Upload directory: {}", uploadPath);
-    }
+			String contentType = file.getContentType();
+			if (contentType == null || !contentType.startsWith("image/")) {
+				return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
+			}
 
-    /**
-     * 上传图片（管理后台）
-     */
-    @PostMapping("/admin/upload/image")
-    public ResponseEntity<R<String>> uploadImage(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "type", defaultValue = "product") String type,
-            HttpServletRequest request) {
-        try {
-            // 获取租户ID（优先从Token获取，其次从请求头，最后默认000000）
-            String tenantId = getTenantId(request);
+			long fileSize = file.getSize();
+			String fileContentType = file.getContentType();
+			String tenantId = SecureUtil.getTenantId();
 
-            log.debug("Upload path: {}", uploadPath);
-            log.debug("Upload domain: {}", uploadDomain);
-            log.debug("Upload type: {}", type);
-            log.debug("Tenant ID: {}", tenantId);
+			BladeFile bladeFile = getFile(file, type);
+			bladeFile.setTenantId(tenantId);
+			BladeFileProxyFactory.UploadResult result = bladeFile.transferEnhanced();
 
-            // 检查文件是否为空
-            if (file.isEmpty()) {
-                return ResponseEntity.badRequest().body(R.fail("文件不能为空"));
-            }
+			boolean isZip = result != null && result.getFilePath() != null && result.getFilePath().endsWith(".zip");
+			boolean isEncrypt = result != null && result.getAesCode() != null;
+			String aesCode = (result != null) ? result.getAesCode() : null;
 
-            // 检查文件类型
-            String contentType = file.getContentType();
-            log.debug("File content type: {}", contentType);
-            // 检查文件扩展名
-            String originalFilename = file.getOriginalFilename();
-            log.debug("Original filename: {}", originalFilename);
-            if (originalFilename == null || !originalFilename.contains(".")) {
-                return ResponseEntity.badRequest().body(R.fail("文件名无效"));
-            }
-            String fileExtension = originalFilename.toLowerCase().substring(originalFilename.lastIndexOf('.'));
-            log.debug("File extension: {}", fileExtension);
+			Long fileId = null;
 
-            // 允许的文件类型
-            boolean isAllowedExtension = ".jpg,.jpeg,.png,.ico".contains(fileExtension);
-            boolean isAllowedContentType = contentType != null && (contentType.startsWith("image/") || "image/x-icon".equals(contentType) || "image/vnd.microsoft.icon".equals(contentType));
+			if ((result == null || result.getFileId() == null) && imageFileService != null) {
+				ImageFileEntity entity = ImageFileService.buildEntity(
+					bladeFile.getOriginalFileName(),
+					fileContentType,
+					bladeFile.getUploadPath(),
+					fileSize,
+					isZip,
+					isEncrypt,
+					aesCode,
+					tenantId
+				);
+				fileId = imageFileService.saveFile(entity);
+				log.info("文件已通过 MallImageFileService 保存到ImageFile表，fileId={}, tenantId={}", fileId, tenantId);
+			} else if (result != null && result.getFileId() != null) {
+				fileId = result.getFileId();
+			}
 
-            log.debug("Is allowed extension: {}", isAllowedExtension);
-            log.debug("Is allowed content type: {}", isAllowedContentType);
+			Map<String, Object> response = new HashMap<>();
+			response.put("id", fileId);
+			response.put("url", bladeFile.getUploadVirtualPath());
+			response.put("filename", bladeFile.getOriginalFileName());
+			response.put("filesize", fileSize);
+			response.put("isZip", isZip);
 
-            if (!isAllowedExtension && !isAllowedContentType) {
-                return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
-            }
+			log.info("Image uploaded successfully: path={}, fileId={}, zip={}, encrypt={}, tenantId={}",
+				bladeFile.getUploadVirtualPath(),
+				fileId,
+				isZip, isEncrypt, tenantId);
 
-            // 确保上传目录存在（按租户ID分目录）
-            File uploadDir = new File(uploadPath + File.separator + tenantId + File.separator + type);
-            log.debug("Upload directory: {}", uploadDir.getAbsolutePath());
-            if (!uploadDir.exists()) {
-                boolean created = uploadDir.mkdirs();
-                log.debug("Directory created: {}", created);
-            }
+			return ResponseEntity.ok(R.data(response, "上传成功"));
 
-            // 生成唯一文件名
-            log.debug("Original filename: {}", originalFilename);
-            String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
-            String fileName = UUID.randomUUID().toString() + extension;
-            log.debug("Generated filename: {}", fileName);
+		} catch (Exception e) {
+			log.error("Upload image failed", e);
+			return ResponseEntity.internalServerError().body(R.fail("上传失败: " + e.getMessage()));
+		}
+	}
 
-            // 保存文件
-            File dest = new File(uploadDir, fileName);
-            log.debug("Destination file: {}", dest.getAbsolutePath());
-            file.transferTo(dest);
-            log.info("File transferred successfully");
+	@PostMapping("/admin/upload/file")
+	public ResponseEntity<R<Map<String, Object>>> uploadFile(@RequestParam("file") MultipartFile file) {
+		try {
+			if (file.isEmpty()) {
+				return ResponseEntity.badRequest().body(R.fail("文件不能为空"));
+			}
 
-            // 返回文件URL（使用相对路径，包含租户ID）
-            String fileUrl = "/uploads/" + tenantId + "/" + type + "/" + fileName;
-            log.info("File URL: {}", fileUrl);
-            return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
+			long fileSize = file.getSize();
+			String fileContentType = file.getContentType();
+			String tenantId = SecureUtil.getTenantId();
 
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.internalServerError().body(R.fail("上传失败: " + e.getMessage()));
-        }
-    }
+			BladeFile bladeFile = getFile(file, "common");
+			bladeFile.setTenantId(tenantId);
+			BladeFileProxyFactory.UploadResult result = bladeFile.transferEnhanced();
 
-    /**
-     * 上传文件（支持视频等多种类型）
-     */
-    @PostMapping("/admin/upload/file")
-    public ResponseEntity<R<String>> uploadFile(
-            @RequestParam("file") MultipartFile file,
-            HttpServletRequest request) {
-        try {
-            // 获取租户ID（优先从Token获取，其次从请求头，最后默认000000）
-            String tenantId = getTenantId(request);
+			boolean isZip = result != null && result.getFilePath() != null && result.getFilePath().endsWith(".zip");
+			boolean isEncrypt = result != null && result.getAesCode() != null;
+			String aesCode = (result != null) ? result.getAesCode() : null;
 
-            log.debug("Upload path: {}", uploadPath);
-            log.debug("Tenant ID: {}", tenantId);
+			Long fileId = null;
 
-            // 检查文件是否为空
-            if (file.isEmpty()) {
-                return ResponseEntity.badRequest().body(R.fail("文件不能为空"));
-            }
+			if ((result == null || result.getFileId() == null) && imageFileService != null) {
+				ImageFileEntity entity = ImageFileService.buildEntity(
+					bladeFile.getOriginalFileName(),
+					fileContentType,
+					bladeFile.getUploadPath(),
+					fileSize,
+					isZip,
+					isEncrypt,
+					aesCode,
+					tenantId
+				);
+				fileId = imageFileService.saveFile(entity);
+				log.info("文件已通过 MallImageFileService 保存到ImageFile表，fileId={}, tenantId={}", fileId, tenantId);
+			} else if (result != null && result.getFileId() != null) {
+				fileId = result.getFileId();
+			}
 
-            // 检查文件类型
-            String contentType = file.getContentType();
-            if (contentType == null) {
-                return ResponseEntity.badRequest().body(R.fail("文件类型无效"));
-            }
+			Map<String, Object> response = new HashMap<>();
+			response.put("id", fileId);
+			response.put("url", bladeFile.getUploadVirtualPath());
+			response.put("filename", bladeFile.getOriginalFileName());
+			response.put("filesize", fileSize);
+			response.put("isZip", isZip);
 
-            // 允许的文件类型
-            boolean isAllowedType = contentType.startsWith("image/") ||
-                                   contentType.startsWith("video/") ||
-                                   contentType.startsWith("audio/") ||
-                                   contentType.equals("application/pdf");
-            if (!isAllowedType) {
-                return ResponseEntity.badRequest().body(R.fail("不支持的文件类型"));
-            }
+			log.info("File uploaded successfully: path={}, zip={}, encrypt={}, tenantId={}",
+				bladeFile.getUploadVirtualPath(), isZip, isEncrypt, tenantId);
 
-            // 确保上传目录存在（按租户ID分目录）
-            File uploadDir = new File(uploadPath + File.separator + tenantId);
-            if (!uploadDir.exists()) {
-                uploadDir.mkdirs();
-            }
+			return ResponseEntity.ok(R.data(response, "上传成功"));
 
-            // 生成唯一文件名
-            String originalFilename = file.getOriginalFilename();
-            if (originalFilename == null || !originalFilename.contains(".")) {
-                return ResponseEntity.badRequest().body(R.fail("文件名无效"));
-            }
-            String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
-            String fileName = UUID.randomUUID().toString() + extension;
+		} catch (Exception e) {
+			log.error("Upload file failed", e);
+			return ResponseEntity.internalServerError().body(R.fail("上传失败: " + e.getMessage()));
+		}
+	}
 
-            // 保存文件
-            File dest = new File(uploadDir, fileName);
-            file.transferTo(dest);
+	@PostMapping("/single")
+	public ResponseEntity<R<Map<String, Object>>> uploadSingleFile(
+			@RequestParam("file") MultipartFile file,
+			@RequestParam("type") String type) {
+		try {
+			log.debug("File type: {}", type);
 
-            // 返回文件URL（使用相对路径，包含租户ID）
-            String fileUrl = "/uploads/" + tenantId + "/" + fileName;
-            return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
+			if (file.isEmpty()) {
+				return ResponseEntity.badRequest().body(R.fail("文件不能为空"));
+			}
 
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.internalServerError().body(R.fail("上传失败: " + e.getMessage()));
-        }
-    }
+			String contentType = file.getContentType();
+			if ("avatar".equals(type)) {
+				if (contentType == null || !contentType.startsWith("image/")) {
+					return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
+				}
+			}
 
-    /**
-     * 上传单个文件（前端用户使用）
-     */
-    @PostMapping("/single")
-    public ResponseEntity<R<String>> uploadSingleFile(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("type") String type,
-            HttpServletRequest request) {
-        try {
-            // 获取租户ID（优先从Token获取，其次从请求头，最后默认000000）
-            String tenantId = getTenantId(request);
+			long fileSize = file.getSize();
+			String fileContentType = file.getContentType();
+			String tenantId = SecureUtil.getTenantId();
 
-            log.debug("Upload path: {}", uploadPath);
-            log.debug("File type: {}", type);
-            log.debug("Tenant ID: {}", tenantId);
+			long maxSize = 5 * 1024 * 1024;
+			if (fileSize > maxSize) {
+				return ResponseEntity.badRequest().body(R.fail("文件大小不能超过5MB"));
+			}
 
-            // 检查文件是否为空
-            if (file.isEmpty()) {
-                return ResponseEntity.badRequest().body(R.fail("文件不能为空"));
-            }
+			BladeFile bladeFile = getFile(file, type);
+			bladeFile.setTenantId(tenantId);
+			BladeFileProxyFactory.UploadResult result = bladeFile.transferEnhanced();
 
-            // 检查文件类型
-            String contentType = file.getContentType();
-            log.debug("File content type: {}", contentType);
-            if (contentType == null) {
-                return ResponseEntity.badRequest().body(R.fail("文件类型无效"));
-            }
+			boolean isZip = result != null && result.getFilePath() != null && result.getFilePath().endsWith(".zip");
+			boolean isEncrypt = result != null && result.getAesCode() != null;
+			String aesCode = (result != null) ? result.getAesCode() : null;
 
-            // 对于头像类型，只允许图片
-            if ("avatar".equals(type)) {
-                if (!contentType.startsWith("image/")) {
-                    return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
-                }
-            }
+			Long fileId = null;
 
-            // 检查文件大小（限制为5MB）
-            long maxSize = 5 * 1024 * 1024; // 5MB
-            if (file.getSize() > maxSize) {
-                return ResponseEntity.badRequest().body(R.fail("文件大小不能超过5MB"));
-            }
+			if ((result == null || result.getFileId() == null) && imageFileService != null) {
+				ImageFileEntity entity = ImageFileService.buildEntity(
+					bladeFile.getOriginalFileName(),
+					fileContentType,
+					bladeFile.getUploadPath(),
+					fileSize,
+					isZip,
+					isEncrypt,
+					aesCode,
+					tenantId
+				);
+				fileId = imageFileService.saveFile(entity);
+				log.info("文件已通过 MallImageFileService 保存到ImageFile表，fileId={}, tenantId={}", fileId, tenantId);
+			} else if (result != null && result.getFileId() != null) {
+				fileId = result.getFileId();
+			}
 
-            // 确保上传目录存在（按租户ID分目录）
-            File uploadDir = new File(uploadPath + File.separator + tenantId);
-            log.debug("Upload directory: {}", uploadDir.getAbsolutePath());
-            if (!uploadDir.exists()) {
-                boolean created = uploadDir.mkdirs();
-                log.debug("Directory created: {}", created);
-            }
+			Map<String, Object> response = new HashMap<>();
+			response.put("id", fileId);
+			response.put("url", bladeFile.getUploadVirtualPath());
+			response.put("filename", bladeFile.getOriginalFileName());
+			response.put("filesize", fileSize);
+			response.put("isZip", isZip);
 
-            // 生成唯一文件名
-            String originalFilename = file.getOriginalFilename();
-            log.debug("Original filename: {}", originalFilename);
-            if (originalFilename == null || !originalFilename.contains(".")) {
-                return ResponseEntity.badRequest().body(R.fail("文件名无效"));
-            }
-            String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
-            String fileName = UUID.randomUUID().toString() + extension;
-            log.debug("Generated filename: {}", fileName);
+			log.info("Single file uploaded successfully: path={}, zip={}, encrypt={}, tenantId={}",
+				bladeFile.getUploadVirtualPath(), isZip, isEncrypt, tenantId);
 
-            // 保存文件
-            File dest = new File(uploadDir, fileName);
-            log.debug("Destination file: {}", dest.getAbsolutePath());
-            file.transferTo(dest);
-            log.info("File transferred successfully");
+			return ResponseEntity.ok(R.data(response, "上传成功"));
 
-            // 返回文件URL（使用相对路径，包含租户ID）
-            String fileUrl = "/uploads/" + tenantId + "/" + fileName;
-            log.info("File URL: {}", fileUrl);
-            return ResponseEntity.ok(R.data(fileUrl, "上传成功"));
+		} catch (Exception e) {
+			log.error("Upload single file failed", e);
+			return ResponseEntity.internalServerError().body(R.fail("上传失败: " + e.getMessage()));
+		}
+	}
 
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.internalServerError().body(R.fail("上传失败: " + e.getMessage()));
-        }
-    }
+	@GetMapping("/file/download/{fileId}")
+	public ResponseEntity<org.springframework.core.io.Resource> downloadFile(@PathVariable Long fileId) {
+		try {
+			ImageFile imageFile = imageFileMapper.selectById(fileId);
+			if (imageFile == null) {
+				return ResponseEntity.notFound().build();
+			}
+
+			String filePath = imageFile.getFilerealpath();
+			if (filePath == null || filePath.isEmpty()) {
+				return ResponseEntity.notFound().build();
+			}
+
+			File file = new File(filePath);
+			if (!file.exists()) {
+				log.warn("File not found on disk: {}", filePath);
+				return ResponseEntity.notFound().build();
+			}
+
+			InputStream inputStream = new FileInputStream(file);
+			org.springframework.core.io.InputStreamResource resource =
+				new org.springframework.core.io.InputStreamResource(inputStream);
+
+			String filename = imageFile.getImagefilename();
+			if (filename == null || filename.isEmpty()) {
+				filename = file.getName();
+			}
+
+			String contentType = imageFile.getImagefiletype();
+			if (contentType == null || contentType.isEmpty()) {
+				contentType = "application/octet-stream";
+			}
+
+			return ResponseEntity.ok()
+				.contentType(MediaType.parseMediaType(contentType))
+				.contentLength(file.length())
+				.header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
+				.body(resource);
+
+		} catch (IOException e) {
+			log.error("File download failed: fileId={}", fileId, e);
+			return ResponseEntity.internalServerError().build();
+		}
+	}
 }
-
-
-

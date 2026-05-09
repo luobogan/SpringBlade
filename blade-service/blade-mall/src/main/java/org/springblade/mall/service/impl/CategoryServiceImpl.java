@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.springblade.core.tenant.TenantUtil;
 import org.springblade.mall.dto.CategoryDTO;
 import org.springblade.mall.entity.Category;
+import org.springblade.mall.entity.ImageFile;
 import org.springblade.mall.mapper.MallCategoryMapper;
+import org.springblade.mall.mapper.ImageFileMapper;
 import org.springblade.mall.service.CategoryService;
 import org.springblade.mall.utils.FileUploadUtil;
 import org.springblade.mall.vo.CategoryVO;
@@ -31,6 +33,9 @@ public class CategoryServiceImpl implements CategoryService {
     @Autowired
     private MallCategoryMapper categoryMapper;
 
+    @Autowired
+    private ImageFileMapper imageFileMapper;
+
     @Override
     @Transactional
     public CategoryVO createCategory(CategoryDTO categoryDTO) {
@@ -51,14 +56,15 @@ public class CategoryServiceImpl implements CategoryService {
         category.setParentId(parentId);
         category.setTenantId(tenantId);
 
-        // 处理图片上传 - 将 base64 转换为文件路径
-        if (categoryDTO.getBanner() != null && categoryDTO.getBanner().startsWith("data:image")) {
-            String bannerPath = FileUploadUtil.uploadBase64Image(categoryDTO.getBanner(), "category");
-            category.setBanner(bannerPath);
+        // 处理图片ID - 从DTO中获取图片ID
+        if (categoryDTO.getBannerId() != null) {
+            category.setBannerId(categoryDTO.getBannerId());
         }
-        if (categoryDTO.getImage() != null && categoryDTO.getImage().startsWith("data:image")) {
-            String imagePath = FileUploadUtil.uploadBase64Image(categoryDTO.getImage(), "category");
-            category.setImage(imagePath);
+        if (categoryDTO.getImageId() != null) {
+            category.setImageId(categoryDTO.getImageId());
+        }
+        if (categoryDTO.getIconId() != null) {
+            category.setIconId(categoryDTO.getIconId());
         }
 
         // 处理字段映射差异
@@ -85,28 +91,15 @@ public class CategoryServiceImpl implements CategoryService {
             throw new RuntimeException("分类不存在");
         }
 
-        // 处理图片上传 - 将 base64 转换为文件路径
-        if (categoryDTO.getBanner() != null && categoryDTO.getBanner().startsWith("data:image")) {
-            // 删除旧图片
-            if (category.getBanner() != null) {
-                FileUploadUtil.deleteFile(category.getBanner());
-            }
-            String bannerPath = FileUploadUtil.uploadBase64Image(categoryDTO.getBanner(), "category");
-            category.setBanner(bannerPath);
-        } else if (categoryDTO.getBanner() != null && !categoryDTO.getBanner().equals(category.getBanner())) {
-            // 如果传了新的路径，但不是 base64，直接更新
-            category.setBanner(categoryDTO.getBanner());
+        // 处理图片ID - 从DTO中获取图片ID
+        if (categoryDTO.getBannerId() != null) {
+            category.setBannerId(categoryDTO.getBannerId());
         }
-
-        if (categoryDTO.getImage() != null && categoryDTO.getImage().startsWith("data:image")) {
-            // 删除旧图片
-            if (category.getImage() != null) {
-                FileUploadUtil.deleteFile(category.getImage());
-            }
-            String imagePath = FileUploadUtil.uploadBase64Image(categoryDTO.getImage(), "category");
-            category.setImage(imagePath);
-        } else if (categoryDTO.getImage() != null && !categoryDTO.getImage().equals(category.getImage())) {
-            category.setImage(categoryDTO.getImage());
+        if (categoryDTO.getImageId() != null) {
+            category.setImageId(categoryDTO.getImageId());
+        }
+        if (categoryDTO.getIconId() != null) {
+            category.setIconId(categoryDTO.getIconId());
         }
 
         // 更新其他字段
@@ -118,7 +111,6 @@ public class CategoryServiceImpl implements CategoryService {
             parentIds = null;
         }
         category.setParentId(parentIds);
-        category.setIcon(categoryDTO.getIcon());
         category.setSortOrder(categoryDTO.getSort());
         category.setStatus(categoryDTO.getStatus());
         category.setUpdatedAt(LocalDateTime.now());
@@ -343,7 +335,57 @@ public class CategoryServiceImpl implements CategoryService {
         BeanUtils.copyProperties(category, categoryVO);
         // 处理字段映射差异
         categoryVO.setSort(category.getSortOrder());
+
+        // 查询并填充图片信息
+        if (category.getIconId() != null) {
+            categoryVO.setIconInfo(buildImageFileInfo(category.getIconId()));
+        }
+        if (category.getImageId() != null) {
+            categoryVO.setImageInfo(buildImageFileInfo(category.getImageId()));
+        }
+        if (category.getBannerId() != null) {
+            categoryVO.setBannerInfo(buildImageFileInfo(category.getBannerId()));
+        }
+
         return categoryVO;
+    }
+
+    /**
+     * 构建图片信息对象
+     * @param imageFileId 图片文件ID
+     * @return 图片信息
+     */
+    private CategoryVO.ImageFileInfo buildImageFileInfo(Long imageFileId) {
+        try {
+            ImageFile imageFile = imageFileMapper.selectById(imageFileId);
+            if (imageFile != null) {
+                CategoryVO.ImageFileInfo info = new CategoryVO.ImageFileInfo();
+                info.setId(imageFile.getImagefileid());
+                info.setFilename(imageFile.getImagefilename());
+                info.setUrl(buildImageUrl(imageFile));
+                info.setFilesize(imageFile.getFilesize());
+                info.setFiletype(imageFile.getImagefiletype());
+                info.setIszip(imageFile.getIszip());
+                info.setEncrypt(imageFile.getIsaesencrypt() != null && imageFile.getIsaesencrypt() == 1);
+                return info;
+            }
+        } catch (Exception e) {
+            log.warn("查询图片信息失败, imageFileId={}: {}", imageFileId, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 构建图片访问URL
+     * @param imageFile 图片文件实体
+     * @return 访问URL
+     */
+    private String buildImageUrl(ImageFile imageFile) {
+        if (imageFile == null || imageFile.getImagefileid() == null) {
+            return null;
+        }
+        // 构建文件下载URL：/api/file/download/{imagefileid}
+        return "/api/blade-mall/file/download/" + imageFile.getImagefileid();
     }
 
     /**

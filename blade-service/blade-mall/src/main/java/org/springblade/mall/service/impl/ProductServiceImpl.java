@@ -30,7 +30,6 @@ import org.springblade.mall.vo.ProductAlbumImageVO;
 import org.springblade.mall.utils.SkuMatrixGenerator;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
@@ -85,13 +84,13 @@ public class ProductServiceImpl implements ProductService {
     private BrandMapper brandMapper;
 
     @Autowired
+    private ImageFileMapper imageFileMapper;
+
+    @Autowired
     private ProductSpecAttributeMapper productSpecAttributeMapper;
 
     @Autowired
     private ProductSpecValueMapper productSpecValueMapper;
-
-    @Value("${blade.prop.upload-domain:http://127.0.0.1:81}")
-    private String uploadDomain;
 
     @Override
     @Transactional
@@ -968,12 +967,28 @@ public class ProductServiceImpl implements ProductService {
         productVO.setSold(product.getSales());
 
         // ==================== 图片字段映射 ====================
-        // 处理图片URL，将相对路径转换为完整URL
-        String mainImageUrl = convertImageUrl(product.getMainImage());
-        // 兼容旧字段名 image
-        productVO.setImage(mainImageUrl);
-        // 新字段名 mainImage
-        productVO.setMainImage(mainImageUrl);
+        productVO.setMainImageId(product.getMainImageId());
+
+        // 查询主图完整信息
+        if (product.getMainImageId() != null) {
+            try {
+                ImageFile imageFile = imageFileMapper.selectById(product.getMainImageId());
+                if (imageFile != null) {
+                    ProductVO.ImageFileInfo info = new ProductVO.ImageFileInfo();
+                    info.setId(imageFile.getImagefileid());
+                    info.setFilename(imageFile.getImagefilename());
+                    info.setUrl(buildFileDownloadUrl(imageFile.getImagefileid()));
+                    info.setFilesize(imageFile.getFilesize());
+                    info.setFiletype(imageFile.getImagefiletype());
+                    info.setIszip(imageFile.getIszip());
+                    info.setEncrypt(imageFile.getIsaesencrypt() != null && imageFile.getIsaesencrypt() == 1);
+                    productVO.setMainImageInfo(info);
+                }
+            } catch (Exception e) {
+                log.warn("查询主图信息失败, productId={}, mainImageId={}: {}",
+                    product.getId(), product.getMainImageId(), e.getMessage());
+            }
+        }
 
         // ==================== 状态字段映射 ====================
         productVO.setStatus(product.getStatus() != null && product.getStatus() == 1 ? "active" : "inactive");
@@ -1233,6 +1248,19 @@ public class ProductServiceImpl implements ProductService {
         }
         // 保持相对路径，前端会处理完整URL构建
         return imageUrl;
+    }
+
+    /**
+     * 构建文件下载URL
+     * @param imageFileId 图片文件ID
+     * @return 文件下载URL
+     */
+    private String buildFileDownloadUrl(Long imageFileId) {
+        if (imageFileId == null) {
+            return null;
+        }
+        // 构建文件下载URL：/api/file/download/{imagefileid}
+        return "/api/blade-mall/file/download/" + imageFileId;
     }
 
     @Override

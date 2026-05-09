@@ -7,9 +7,11 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.mall.dto.CartDTO;
 import org.springblade.mall.entity.Cart;
+import org.springblade.mall.entity.ImageFile;
 import org.springblade.mall.entity.Product;
 import org.springblade.mall.entity.ProductSku;
 import org.springblade.mall.mapper.CartMapper;
+import org.springblade.mall.mapper.ImageFileMapper;
 import org.springblade.mall.mapper.ProductMapper;
 import org.springblade.mall.mapper.ProductSkuMapper;
 import org.springblade.mall.service.CartService;
@@ -37,6 +39,9 @@ public class CartServiceImpl extends ServiceImpl<CartMapper, Cart> implements Ca
 
     @Autowired
     private ProductSkuMapper productSkuMapper;
+
+    @Autowired
+    private ImageFileMapper imageFileMapper;
 
     @Override
     public List<CartVO> getCartList(Long userId) {
@@ -167,7 +172,17 @@ public class CartServiceImpl extends ServiceImpl<CartMapper, Cart> implements Ca
             cart.setSkuId(cartDTO.getSkuId());
             cart.setQuantity(cartDTO.getQuantity());
             cart.setProductName(product.getName());
-            cart.setProductImage(product.getMainImage());
+            // 从ImageFile表查询商品主图URL
+            if (product.getMainImageId() != null) {
+                try {
+                    ImageFile imageFile = imageFileMapper.selectById(product.getMainImageId());
+                    if (imageFile != null) {
+                        cart.setProductImage("/api/blade-mall/file/download/" + imageFile.getImagefileid());
+                    }
+                } catch (Exception e) {
+                    log.warn("查询商品主图失败, productId={}: {}", product.getId(), e.getMessage());
+                }
+            }
             cart.setProductPrice(product.getPrice());
             cart.setSelected(0);
             cart.setSelectedSpecs(cartDTO.getSelectedSpecs());

@@ -245,9 +245,9 @@ public class DataInitializer implements CommandLineRunner {
             product.setCategoryId(CATEGORY_ELECTRONICS);
             product.setBrandId(brands[i]);
 
-            // 图片 - 使用与产品相关的图片
-            String imagePrompt = productNames[i].replace(" ", "%20");
-            product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
+            // 图片 - 测试数据使用外部URL（生产环境应通过ImageFile表管理）
+            // String imagePrompt = productNames[i].replace(" ", "%20");
+            // product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
 
             // 状态标识
             product.setIsNew(random.nextInt(3) == 0 ? 1 : 0);
@@ -354,9 +354,9 @@ public class DataInitializer implements CommandLineRunner {
             product.setCategoryId(CATEGORY_FASHION);
             product.setBrandId(brands[i]);
 
-            // 图片 - 使用与产品相关的图片
-            String imagePrompt = productNames[i].replace(" ", "%20");
-            product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
+            // 图片 - 测试数据使用外部URL（生产环境应通过ImageFile表管理）
+            // String imagePrompt = productNames[i].replace(" ", "%20");
+            // product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
 
             product.setIsNew(random.nextInt(4) == 0 ? 1 : 0);
             product.setIsHot(random.nextInt(3) == 0 ? 1 : 0);
@@ -460,9 +460,9 @@ public class DataInitializer implements CommandLineRunner {
             product.setCategoryId(CATEGORY_HOME);
             product.setBrandId(brands[i]);
 
-            // 图片 - 使用与产品相关的图片
-            String imagePrompt = productNames[i].replace(" ", "%20");
-            product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
+            // 图片 - 测试数据使用外部URL（生产环境应通过ImageFile表管理）
+            // String imagePrompt = productNames[i].replace(" ", "%20");
+            // product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
 
             product.setIsNew(random.nextInt(5) == 0 ? 1 : 0);
             product.setIsHot(random.nextInt(4) == 0 ? 1 : 0);
@@ -567,9 +567,9 @@ public class DataInitializer implements CommandLineRunner {
             product.setCategoryId(CATEGORY_COMPUTER);
             product.setBrandId(brands[i]);
 
-            // 图片 - 使用与产品相关的图片
-            String imagePrompt = productNames[i].replace(" ", "%20");
-            product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
+            // 图片 - 测试数据使用外部URL（生产环境应通过ImageFile表管理）
+            // String imagePrompt = productNames[i].replace(" ", "%20");
+            // product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
 
             product.setIsNew(random.nextInt(3) == 0 ? 1 : 0);
             product.setIsHot(random.nextInt(4) == 0 ? 1 : 0);
@@ -673,9 +673,9 @@ public class DataInitializer implements CommandLineRunner {
             product.setCategoryId(CATEGORY_AUTO_PARTS);
             product.setBrandId(brands[i]);
 
-            // 图片 - 使用与产品相关的图片
-            String imagePrompt = productNames[i].replace(" ", "%20");
-            product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
+            // 图片 - 测试数据使用外部URL（生产环境应通过ImageFile表管理）
+            // String imagePrompt = productNames[i].replace(" ", "%20");
+            // product.setMainImage(String.format("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=%s%%20product%%20photo&image_size=square", imagePrompt));
 
             product.setIsNew(random.nextInt(4) == 0 ? 1 : 0);
             product.setIsHot(random.nextInt(3) == 0 ? 1 : 0);

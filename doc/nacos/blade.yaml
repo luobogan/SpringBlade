@@ -132,6 +132,24 @@ swagger:
 #blade配置
 blade:
   upload-path: d:\workproject\springbladeandreact\springBlade\uploads
+
+  # =============================================
+  # 文件上传统一配置（所有服务共用）
+  # =============================================
+  file:
+    # 是否启用增强功能（加密、压缩、数据库存储）
+    enabled: true
+    # 统一上传目录
+    upload-dir: upload
+    # 是否ZIP压缩（true=所有上传的文件都会压缩成zip格式）
+    zip-enabled: true
+    # 是否AES加密（true=所有上传的文件都会AES加密）
+    encrypt-enabled: true
+    # 是否保存到ImageFile数据库表（true=所有文件元数据存入ImageFile表）
+    save-to-db: true
+    # 图片尺寸压缩（仅对图片生效，减小图片分辨率/质量）
+    image-compress: true
+
   auth:
     #使用 @org.springblade.test.Sm2KeyGenerator 获取,用于国密sm2验签,需和前端保持一致
     public-key: 04ac02fe94f4cac62a57a2335cc96a075a1ee41cea3b211bd7acbb9cf579b7e601b9ece2b0cfab64dca268b6942bf556af67cfe226a5cf28d936039c43e4bb12c1

@@ -194,14 +194,14 @@ public class ProductVO {
     // ==================== 图片标识字段 ====================
 
     /**
-     * 主图（兼容旧字段名）
+     * 主图ID（关联ImageFile表）
      */
-    private String image;
+    private Long mainImageId;
 
     /**
-     * 主图（新字段名，与数据库字段一致）
+     * 主图完整信息
      */
-    private String mainImage;
+    private ImageFileInfo mainImageInfo;
 
     /**
      * 商品图片列表
@@ -427,6 +427,17 @@ public class ProductVO {
      */
     public boolean hasOriginalPrice() {
         return originalPrice != null && originalPrice.compareTo(price) > 0;
+    }
+
+    @Data
+    public static class ImageFileInfo {
+        private Long id;
+        private String filename;
+        private String url;
+        private Long filesize;
+        private String filetype;
+        private Integer iszip;
+        private Boolean encrypt;
     }
 }
 

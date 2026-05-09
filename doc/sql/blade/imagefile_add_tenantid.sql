@@ -1,0 +1,1 @@
+ALTER TABLE blade.imagefile ADD COLUMN tenantid VARCHAR(50) NOT NULL DEFAULT '' COMMENT '租户ID';

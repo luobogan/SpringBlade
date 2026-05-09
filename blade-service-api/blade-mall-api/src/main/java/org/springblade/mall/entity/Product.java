@@ -191,10 +191,10 @@ public class Product extends MallTenantEntity {
     // ==================== 图片标识字段 ====================
 
     /**
-     * 主图
+     * 主图ID（关联ImageFile表主键）
      */
-    @TableField("main_image")
-    private String mainImage;
+    @TableField("main_image_id")
+    private Long mainImageId;
 
     // ==================== 状态标识字段 ====================
 

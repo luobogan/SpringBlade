@@ -48,27 +48,25 @@ public class Category extends MallTenantEntity {
     private Integer sortOrder;
 
     /**
-     * 分类图标
+     * 分类图标ID（关联ImageFile表主键）
      */
-    private String icon;
+    @TableField("icon_id")
+    private Long iconId;
 
     /**
-     * 分类图片
+     * 分类图片ID（关联ImageFile表主键）
      */
-    private String image;
+    @TableField("image_id")
+    private Long imageId;
 
     /**
-     * 分类banner
+     * 分类Banner图片ID（关联ImageFile表主键）
      */
-    private String banner;
+    @TableField("banner_id")
+    private Long bannerId;
 
     /**
      * 租户ID
      */
     private String tenantId;
 }
-
-
-
-
-
