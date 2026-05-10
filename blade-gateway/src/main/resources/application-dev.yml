@@ -13,10 +13,12 @@ blade:
 spring:
   cloud:
     gateway:
-      routes:
-        - id: blade-mall
-          uri: lb://blade-mall
-          predicates:
-            - Path=/blade-mall/**
-          filters:
-            - StripPrefix=1
+      server:
+        webflux:
+          routes:
+            - id: blade-mall
+              uri: lb://blade-mall
+              predicates:
+                - Path=/blade-mall/**
+              filters:
+                - StripPrefix=1

@@ -189,6 +189,7 @@ blade:
       - /blade-mall/uploads/**
       - /blade-mall/auth/**
       - /blade-mall/upload/**
+      - /blade-mall/file/download/**
       - /front/**
       - /uploads/**
       - /auth/**

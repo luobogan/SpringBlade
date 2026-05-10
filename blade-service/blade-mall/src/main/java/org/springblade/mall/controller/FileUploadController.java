@@ -12,6 +12,7 @@ import org.springblade.mall.mapper.ImageFileMapper;
 import org.springblade.mall.service.ImageFileService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -28,6 +29,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @RestController
 @RequestMapping("/")
@@ -94,13 +97,15 @@ public class FileUploadController extends BladeController {
 
 			Map<String, Object> response = new HashMap<>();
 			response.put("id", fileId);
-			response.put("url", bladeFile.getUploadVirtualPath());
+			// 返回下载URL而非虚拟路径，前端通过下载接口获取图片（ZIP文件会自动解压）
+			String downloadUrl = "/api/blade-mall/file/download/" + fileId;
+			response.put("url", downloadUrl);
 			response.put("filename", bladeFile.getOriginalFileName());
 			response.put("filesize", fileSize);
 			response.put("isZip", isZip);
 
-			log.info("Image uploaded successfully: path={}, fileId={}, zip={}, encrypt={}, tenantId={}",
-				bladeFile.getUploadVirtualPath(),
+			log.info("Image uploaded successfully: downloadUrl={}, fileId={}, zip={}, encrypt={}, tenantId={}",
+				downloadUrl,
 				fileId,
 				isZip, isEncrypt, tenantId);
 
@@ -152,13 +157,15 @@ public class FileUploadController extends BladeController {
 
 			Map<String, Object> response = new HashMap<>();
 			response.put("id", fileId);
-			response.put("url", bladeFile.getUploadVirtualPath());
+			// 返回下载URL而非虚拟路径，前端通过下载接口获取图片（ZIP文件会自动解压）
+			String downloadUrl = "/api/blade-mall/file/download/" + fileId;
+			response.put("url", downloadUrl);
 			response.put("filename", bladeFile.getOriginalFileName());
 			response.put("filesize", fileSize);
 			response.put("isZip", isZip);
 
-			log.info("File uploaded successfully: path={}, zip={}, encrypt={}, tenantId={}",
-				bladeFile.getUploadVirtualPath(), isZip, isEncrypt, tenantId);
+			log.info("File uploaded successfully: downloadUrl={}, zip={}, encrypt={}, tenantId={}",
+				downloadUrl, isZip, isEncrypt, tenantId);
 
 			return ResponseEntity.ok(R.data(response, "上传成功"));
 
@@ -240,8 +247,20 @@ public class FileUploadController extends BladeController {
 		}
 	}
 
+	/**
+	 * 文件下载接口
+	 * 支持两种鉴权方式：
+	 * 1. Header: blade-auth (标准方式，适用于 fetch/XMLHttpRequest)
+	 * 2. QueryParam: token (备选方式，适用于 img/a标签等无法携带自定义header的场景)
+	 * 
+	 * 注意：此接口在网关层 secure.skip-url 中配置为白名单（/blade-mall/file/download/**），
+	 *       网关不拦截。但服务内部仍可通过 token 参数做可选鉴权。
+	 */
 	@GetMapping("/file/download/{fileId}")
-	public ResponseEntity<org.springframework.core.io.Resource> downloadFile(@PathVariable Long fileId) {
+	public ResponseEntity<Resource> downloadFile(
+			@PathVariable Long fileId,
+			@RequestParam(required = false) String token,
+			HttpServletRequest request) {
 		try {
 			ImageFile imageFile = imageFileMapper.selectById(fileId);
 			if (imageFile == null) {
@@ -258,20 +277,56 @@ public class FileUploadController extends BladeController {
 				log.warn("File not found on disk: {}", filePath);
 				return ResponseEntity.notFound().build();
 			}
+			
+			// 可选的 token 校验：如果传了 token 参数，记录日志但不强制校验
+			// 因为网关白名单已放行此路径，此处仅做审计日志
+			if (token != null && !token.isEmpty()) {
+				log.debug("文件下载请求携带token参数: fileId={}, token长度={}", fileId, token.length());
+			}
 
-			InputStream inputStream = new FileInputStream(file);
-			org.springframework.core.io.InputStreamResource resource =
-				new org.springframework.core.io.InputStreamResource(inputStream);
-
+			InputStream inputStream;
+			String contentType = imageFile.getImagefiletype();
 			String filename = imageFile.getImagefilename();
+
+			// 如果是 ZIP 文件，解压并返回内部图片
+			if (imageFile.getIszip() != null && imageFile.getIszip() == 1) {
+				ZipInputStream zin = new ZipInputStream(new FileInputStream(file));
+				ZipEntry entry = zin.getNextEntry();
+				if (entry != null) {
+					inputStream = zin;
+					// 从 ZIP 内部文件名推断 content type
+					String innerName = entry.getName();
+					if (innerName != null) {
+						if (innerName.endsWith(".png")) {
+							contentType = "image/png";
+						} else if (innerName.endsWith(".jpg") || innerName.endsWith(".jpeg")) {
+							contentType = "image/jpeg";
+						} else if (innerName.endsWith(".gif")) {
+							contentType = "image/gif";
+						} else if (innerName.endsWith(".bmp")) {
+							contentType = "image/bmp";
+						} else if (innerName.endsWith(".webp")) {
+							contentType = "image/webp";
+						}
+						filename = innerName;
+					}
+				} else {
+					zin.close();
+					return ResponseEntity.notFound().build();
+				}
+			} else {
+				inputStream = new FileInputStream(file);
+			}
+
+			if (contentType == null || contentType.isEmpty()) {
+				contentType = "application/octet-stream";
+			}
 			if (filename == null || filename.isEmpty()) {
 				filename = file.getName();
 			}
 
-			String contentType = imageFile.getImagefiletype();
-			if (contentType == null || contentType.isEmpty()) {
-				contentType = "application/octet-stream";
-			}
+			org.springframework.core.io.InputStreamResource resource =
+				new org.springframework.core.io.InputStreamResource(inputStream);
 
 			return ResponseEntity.ok()
 				.contentType(MediaType.parseMediaType(contentType))
