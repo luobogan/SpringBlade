@@ -10,15 +10,18 @@ blade:
       - 192.168.0.*
       - 127.0.0.1
 
+# HTTP 服务端配置（Netty 底层）
+server:
+  netty:
+    connection-timeout: 30s       # 连接超时
+  # WebFlux 超时配置
+  shutdown: graceful
+
+# 网关 HTTP 客户端超时配置
 spring:
   cloud:
     gateway:
       server:
         webflux:
-          routes:
-            - id: blade-mall
-              uri: lb://blade-mall
-              predicates:
-                - Path=/blade-mall/**
-              filters:
-                - StripPrefix=1
+          httpclient:
+            response-timeout: PT3M

@@ -50,6 +50,7 @@ public class AuthProvider {
 		DEFAULT_SKIP_URL.add("/blade-mall/upload/**");
 		DEFAULT_SKIP_URL.add("/blade-mall/auth/**");
 		DEFAULT_SKIP_URL.add("/blade-mall/file/download/**");
+		DEFAULT_SKIP_URL.add("/file/download/**");
 	}
 
 	/**

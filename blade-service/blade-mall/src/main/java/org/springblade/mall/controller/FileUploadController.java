@@ -26,7 +26,6 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.ZipEntry;
@@ -252,7 +251,11 @@ public class FileUploadController extends BladeController {
 	 * 支持两种鉴权方式：
 	 * 1. Header: blade-auth (标准方式，适用于 fetch/XMLHttpRequest)
 	 * 2. QueryParam: token (备选方式，适用于 img/a标签等无法携带自定义header的场景)
-	 * 
+	 *
+	 * 资源管理策略：
+	 * - 普通文件：使用 FileSystemResource（Spring 自动管理生命周期）
+	 * - ZIP 文件：先解压到内存（ByteArrayInputStream），立即关闭底层文件流，避免嵌套流泄漏
+	 *
 	 * 注意：此接口在网关层 secure.skip-url 中配置为白名单（/blade-mall/file/download/**），
 	 *       网关不拦截。但服务内部仍可通过 token 参数做可选鉴权。
 	 */
@@ -277,45 +280,35 @@ public class FileUploadController extends BladeController {
 				log.warn("File not found on disk: {}", filePath);
 				return ResponseEntity.notFound().build();
 			}
-			
+
 			// 可选的 token 校验：如果传了 token 参数，记录日志但不强制校验
 			// 因为网关白名单已放行此路径，此处仅做审计日志
 			if (token != null && !token.isEmpty()) {
 				log.debug("文件下载请求携带token参数: fileId={}, token长度={}", fileId, token.length());
 			}
 
-			InputStream inputStream;
 			String contentType = imageFile.getImagefiletype();
 			String filename = imageFile.getImagefilename();
 
-			// 如果是 ZIP 文件，解压并返回内部图片
+			org.springframework.core.io.Resource resource;
+
+			// 如果是 ZIP 文件，解压到内存后返回 ByteArrayInputStream（避免嵌套流泄漏）
 			if (imageFile.getIszip() != null && imageFile.getIszip() == 1) {
-				ZipInputStream zin = new ZipInputStream(new FileInputStream(file));
-				ZipEntry entry = zin.getNextEntry();
-				if (entry != null) {
-					inputStream = zin;
-					// 从 ZIP 内部文件名推断 content type
-					String innerName = entry.getName();
-					if (innerName != null) {
-						if (innerName.endsWith(".png")) {
-							contentType = "image/png";
-						} else if (innerName.endsWith(".jpg") || innerName.endsWith(".jpeg")) {
-							contentType = "image/jpeg";
-						} else if (innerName.endsWith(".gif")) {
-							contentType = "image/gif";
-						} else if (innerName.endsWith(".bmp")) {
-							contentType = "image/bmp";
-						} else if (innerName.endsWith(".webp")) {
-							contentType = "image/webp";
-						}
-						filename = innerName;
-					}
-				} else {
-					zin.close();
+				ZipExtractResult zipResult = extractZipToMemory(file);
+				if (zipResult == null || zipResult.resource == null) {
 					return ResponseEntity.notFound().build();
 				}
+				resource = zipResult.resource;
+				// 用 ZIP 内部文件的 content type 和 filename 覆盖默认值
+				if (zipResult.contentType != null) {
+					contentType = zipResult.contentType;
+				}
+				if (zipResult.filename != null) {
+					filename = zipResult.filename;
+				}
 			} else {
-				inputStream = new FileInputStream(file);
+				// 普通文件使用 FileSystemResource（Spring 自动管理文件句柄关闭）
+				resource = new org.springframework.core.io.FileSystemResource(file);
 			}
 
 			if (contentType == null || contentType.isEmpty()) {
@@ -325,18 +318,101 @@ public class FileUploadController extends BladeController {
 				filename = file.getName();
 			}
 
-			org.springframework.core.io.InputStreamResource resource =
-				new org.springframework.core.io.InputStreamResource(inputStream);
-
-			return ResponseEntity.ok()
+			ResponseEntity.BodyBuilder responseBuilder = ResponseEntity.ok()
 				.contentType(MediaType.parseMediaType(contentType))
-				.contentLength(file.length())
-				.header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
-				.body(resource);
+				.header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"");
+
+			// 非 ZIP 文件设置准确的 contentLength；ZIP 解压后的内存流也已知长度
+			long contentLength = resource.contentLength();
+			if (contentLength > 0) {
+				responseBuilder.contentLength(contentLength);
+			}
+
+			return responseBuilder.body(resource);
 
 		} catch (IOException e) {
 			log.error("File download failed: fileId={}", fileId, e);
 			return ResponseEntity.internalServerError().build();
 		}
+	}
+
+	/**
+	 * ZIP 解压结果容器
+	 */
+	private static class ZipExtractResult {
+		final org.springframework.core.io.Resource resource;
+		final String contentType;
+		final String filename;
+
+		ZipExtractResult(org.springframework.core.io.Resource resource, String contentType, String filename) {
+			this.resource = resource;
+			this.contentType = contentType;
+			this.filename = filename;
+		}
+	}
+
+	/**
+	 * 将 ZIP 文件中的第一个条目提取到内存中
+	 *
+	 * 解决的问题：
+	 * 1. ZipInputStream(FileInputStream) 嵌套流 → InputStreamResource 无法正确关闭底层文件句柄
+	 * 2. 客户端 PrematureCloseException 断连时，嵌套流泄漏导致文件句柄不释放
+	 * 3. ZIP 解压后 contentLength 未知导致网关无法优化传输
+	 *
+	 * 策略：完全读取到 byte[] → 立即关闭所有流 → 返回 ByteArrayResource（无底层句柄）
+	 */
+	private ZipExtractResult extractZipToMemory(File zipFile) throws IOException {
+
+		// 使用 try-with-resources 确保 ZipInputStream 和底层 FileInputStream 都被正确关闭
+		try (ZipInputStream zin = new ZipInputStream(new FileInputStream(zipFile))) {
+			ZipEntry entry = zin.getNextEntry();
+			if (entry == null) {
+				log.warn("ZIP 文件中没有找到条目: {}", zipFile.getAbsolutePath());
+				return null;
+			}
+
+			// 读取整个条目内容到内存（图片通常 < 10MB，内存压力可接受）
+			java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream(8192);
+			byte[] buffer = new byte[8192];
+			int bytesRead;
+			while ((bytesRead = zin.read(buffer)) != -1) {
+				baos.write(buffer, 0, bytesRead);
+			}
+			zin.closeEntry();
+
+			byte[] fileData = baos.toByteArray();
+
+			// 根据内部文件名推断 content type
+			String innerContentType = null;
+			String innerFilename = entry.getName();
+			if (innerFilename != null) {
+				if (innerFilename.endsWith(".png")) {
+					innerContentType = "image/png";
+				} else if (innerFilename.endsWith(".jpg") || innerFilename.endsWith(".jpeg")) {
+					innerContentType = "image/jpeg";
+				} else if (innerFilename.endsWith(".gif")) {
+					innerContentType = "image/gif";
+				} else if (innerFilename.endsWith(".bmp")) {
+					innerContentType = "image/bmp";
+				} else if (innerFilename.endsWith(".webp")) {
+					innerContentType = "image/webp";
+				}
+			}
+
+			log.debug("ZIP 解压完成: {} → {} bytes, filename={}",
+				zipFile.getName(), fileData.length, innerFilename);
+
+			// 返回基于内存的 Resource + 元信息（无底层文件句柄，不存在泄漏问题）
+			org.springframework.core.io.Resource memoryResource =
+				new org.springframework.core.io.ByteArrayResource(fileData) {
+					@Override
+					public String getFilename() {
+						return innerFilename != null ? innerFilename : super.getFilename();
+					}
+				};
+
+			return new ZipExtractResult(memoryResource, innerContentType, innerFilename);
+		}
+		// ← try-with-resources 自动关闭 zin 和其内部的 FileInputStream
 	}
 }
