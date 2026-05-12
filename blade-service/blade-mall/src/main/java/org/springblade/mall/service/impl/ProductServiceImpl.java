@@ -135,6 +135,11 @@ public class ProductServiceImpl implements ProductService {
         BeanUtils.copyProperties(productDTO, product);
         // 设置租户ID
         product.setTenantId(tenantId);
+        // 处理主图URL，转换为mainImageId
+        if (StringUtil.isNotBlank(productDTO.getMainImage())) {
+            Long mainImageId = extractImageIdFromUrl(productDTO.getMainImage());
+            product.setMainImageId(mainImageId);
+        }
         // 调试：检查富文本内容
         if (product.getDetailDescription() != null) {
             log.debug("=== 准备保存富文本内容调试 ===");
@@ -243,6 +248,12 @@ public class ProductServiceImpl implements ProductService {
         Integer originalUserReviewCount = product.getUserReviewCount();
 
         BeanUtils.copyProperties(productDTO, product);
+
+        // 处理主图URL，转换为mainImageId
+        if (StringUtil.isNotBlank(productDTO.getMainImage())) {
+            Long mainImageId = extractImageIdFromUrl(productDTO.getMainImage());
+            product.setMainImageId(mainImageId);
+        }
 
         // 恢复不可编辑的字段
         product.setSales(originalSales);
@@ -605,6 +616,29 @@ public class ProductServiceImpl implements ProductService {
     }
 
     /**
+     * 从图片URL中提取图片ID
+     * URL格式: /api/blade-mall/file/download/1778581247356
+     * @param imageUrl 图片URL
+     * @return 图片ID
+     */
+    private Long extractImageIdFromUrl(String imageUrl) {
+        if (StringUtil.isBlank(imageUrl)) {
+            return null;
+        }
+        try {
+            // URL格式: /api/blade-mall/file/download/{imageId}
+            String[] parts = imageUrl.split("/");
+            if (parts.length > 0) {
+                String lastPart = parts[parts.length - 1];
+                return Long.parseLong(lastPart);
+            }
+        } catch (Exception e) {
+            log.warn("从URL提取图片ID失败: {}, error: {}", imageUrl, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
      * 保存商品图片
      */
     private void saveProductImages(Long productId, List<String> images) {
@@ -717,12 +751,10 @@ public class ProductServiceImpl implements ProductService {
     }
 
     /**
-     * 删除商品属性值
+     * 删除商品属性值（使用物理删除绕过@TableLogic限制）
      */
     private void deleteProductAttributeValues(Long productId) {
-        QueryWrapper<ProductAttributeValue> queryWrapper = new QueryWrapper<>();
-        queryWrapper.eq("product_id", productId);
-        productAttributeValueMapper.delete(queryWrapper);
+        productAttributeValueMapper.deletePhysicalByProductId(productId);
     }
 
     /**
@@ -983,6 +1015,7 @@ public class ProductServiceImpl implements ProductService {
                     info.setIszip(imageFile.getIszip());
                     info.setEncrypt(imageFile.getIsaesencrypt() != null && imageFile.getIsaesencrypt() == 1);
                     productVO.setMainImageInfo(info);
+                    productVO.setMainImage(info.getUrl());
                 }
             } catch (Exception e) {
                 log.warn("查询主图信息失败, productId={}, mainImageId={}: {}",

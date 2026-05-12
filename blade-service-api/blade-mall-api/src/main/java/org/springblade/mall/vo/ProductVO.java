@@ -204,6 +204,11 @@ public class ProductVO {
     private ImageFileInfo mainImageInfo;
 
     /**
+     * 主图URL（方便前端直接使用，等同于mainImageInfo.url）
+     */
+    private String mainImage;
+
+    /**
      * 商品图片列表
      */
     private List<String> images;
