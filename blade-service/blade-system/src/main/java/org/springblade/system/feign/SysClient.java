@@ -82,7 +82,7 @@ public class SysClient implements ISysClient {
 
 	@Override
 	@GetMapping(API_PREFIX + "/getRole")
-	public Role getRole(Long id) {
+	public Role getRole(@RequestParam("id") Long id) {
 		return roleService.getById(id);
 	}
 

@@ -44,10 +44,10 @@ public class CategoryServiceImpl implements CategoryService {
             ? categoryDTO.getTenantId()
             : TenantUtil.getTenantId();
 
-        // 验证 parentId - 如果为0或负数，设置为null（顶级分类）
+        // 验证 parentId - 如果为0或负数，设置为0（顶级分类）
         Long parentId = categoryDTO.getParentId();
-        if (parentId != null && parentId <= 0) {
-            parentId = null;
+        if (parentId == null || parentId <= 0) {
+            parentId = 0L;
         }
 
         // 创建分类实体
@@ -105,10 +105,10 @@ public class CategoryServiceImpl implements CategoryService {
         // 更新其他字段
         category.setName(categoryDTO.getName());
         category.setDescription(categoryDTO.getDescription());
-        // 验证 parentId - 如果为0或负数，设置为null（顶级分类）
+        // 验证 parentId - 如果为0或负数，设置为0（顶级分类）
         Long parentIds = categoryDTO.getParentId();
-        if (parentIds != null && parentIds <= 0) {
-            parentIds = null;
+        if (parentIds == null || parentIds <= 0) {
+            parentIds = 0L;
         }
         category.setParentId(parentIds);
         category.setSortOrder(categoryDTO.getSort());

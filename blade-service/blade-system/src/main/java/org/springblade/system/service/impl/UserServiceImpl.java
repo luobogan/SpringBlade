@@ -319,8 +319,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 			user.setTenantId(userOauth.getTenantId());
 		}
 		R<Tenant> result = sysClient.getTenant(user.getTenantId());
-		Tenant tenant = result.getData();
-		if (!result.isSuccess() || tenant == null || tenant.getId() == null) {
+		Tenant tenantInfo = result.getData();
+		if (!result.isSuccess() || tenantInfo == null || tenantInfo.getId() == null) {
 			throw new ServiceException("租户信息错误!");
 		}
 		user.setRealName(user.getName());

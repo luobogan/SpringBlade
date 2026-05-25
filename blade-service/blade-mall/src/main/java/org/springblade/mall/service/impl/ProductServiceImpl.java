@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.mall.dto.ProductDTO;
@@ -479,10 +480,15 @@ public class ProductServiceImpl implements ProductService {
 
         List<Long> categoryIds = getCategoryAndChildrenIds(categoryId);
 
-        // 筛选出启用状态的分类
+        // 筛选出启用状态的分类（需要考虑租户隔离）
         QueryWrapper<Category> categoryQuery = new QueryWrapper<>();
         categoryQuery.in("id", categoryIds);
         categoryQuery.eq("status", 1);
+        // 添加租户过滤
+        String tenantId = TenantUtil.getTenantId();
+        if (tenantId != null && !tenantId.isEmpty()) {
+            categoryQuery.eq("tenant_id", tenantId);
+        }
         List<Category> activeCategories = categoryMapper.selectList(categoryQuery);
         List<Long> activeCategoryIds = activeCategories.stream()
                 .map(Category::getId)
@@ -496,6 +502,10 @@ public class ProductServiceImpl implements ProductService {
         queryWrapper.in("category_id", activeCategoryIds);
         queryWrapper.eq("status", 1);
         queryWrapper.eq("is_deleted", 0);
+        // 添加租户过滤
+        if (tenantId != null && !tenantId.isEmpty()) {
+            queryWrapper.eq("tenant_id", tenantId);
+        }
         List<Product> products = productMapper.selectList(queryWrapper);
         return products.stream()
                 .map(this::convertToVO)
@@ -511,8 +521,8 @@ public class ProductServiceImpl implements ProductService {
         List<Long> categoryIds = new ArrayList<>();
         categoryIds.add(categoryId);
 
-        // 递归获取所有子分类（只考虑启用状态的分类）
-        getChildCategoryIds(categoryId, categoryIds);
+        // 递归获取所有子分类（只考虑启用状态的分类，考虑租户隔离）
+        getChildCategoryIds(categoryId, categoryIds, TenantUtil.getTenantId());
 
         return categoryIds;
     }
@@ -521,17 +531,22 @@ public class ProductServiceImpl implements ProductService {
      * 递归获取子分类ID
      * @param parentId 父分类ID
      * @param categoryIds 分类ID列表，用于存储结果
+     * @param tenantId 租户ID，用于租户隔离
      */
-    private void getChildCategoryIds(Long parentId, List<Long> categoryIds) {
+    private void getChildCategoryIds(Long parentId, List<Long> categoryIds, String tenantId) {
         QueryWrapper<Category> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("parent_id", parentId);
         queryWrapper.eq("status", 1); // 只考虑启用状态的分类
+        // 添加租户过滤
+        if (tenantId != null && !tenantId.isEmpty()) {
+            queryWrapper.eq("tenant_id", tenantId);
+        }
         List<Category> subCategories = categoryMapper.selectList(queryWrapper);
 
         for (Category category : subCategories) {
             categoryIds.add(category.getId());
             // 递归获取子分类
-            getChildCategoryIds(category.getId(), categoryIds);
+            getChildCategoryIds(category.getId(), categoryIds, tenantId);
         }
     }
 
@@ -1311,8 +1326,9 @@ public class ProductServiceImpl implements ProductService {
         queryWrapper.eq("is_deleted", 0);
 
         // 租户ID过滤
-        if (queryDTO.getTenantId() != null && !queryDTO.getTenantId().isEmpty()) {
-            queryWrapper.eq("tenant_id", queryDTO.getTenantId());
+        String tenantId = TenantUtil.getTenantId();
+        if (tenantId != null && !tenantId.isEmpty()) {
+            queryWrapper.eq("tenant_id", tenantId);
         }
 
         // 只在status不为null时添加状态过滤
@@ -1322,9 +1338,13 @@ public class ProductServiceImpl implements ProductService {
         }
 
         // 添加分类状态筛选：只返回所属分类处于启用状态的产品
-        // 先查询所有启用状态的分类ID
+        // 先查询所有启用状态的分类ID（需要考虑租户隔离）
         QueryWrapper<Category> categoryQuery = new QueryWrapper<>();
         categoryQuery.eq("status", 1);
+        // 添加租户过滤，确保只获取当前租户的启用分类
+        if (tenantId != null && !tenantId.isEmpty()) {
+            categoryQuery.eq("tenant_id", tenantId);
+        }
         List<Category> activeCategories = categoryMapper.selectList(categoryQuery);
         List<Long> activeCategoryIds = activeCategories.stream()
                 .map(Category::getId)
