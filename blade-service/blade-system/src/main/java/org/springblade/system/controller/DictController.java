@@ -26,7 +26,9 @@ import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import org.springblade.core.boot.ctrl.BladeController;
 import org.springblade.core.mp.support.Condition;
+import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
+import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.system.entity.Dict;
 import org.springblade.system.service.IDictService;
@@ -49,6 +51,7 @@ import static org.springblade.common.cache.CacheNames.DICT_VALUE;
 @RestController
 @AllArgsConstructor
 @RequestMapping("/dict")
+@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 @Tag(name = "字典", description = "字典")
 public class DictController extends BladeController {
 

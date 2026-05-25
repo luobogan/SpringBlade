@@ -26,7 +26,9 @@ import org.springblade.core.boot.ctrl.BladeController;
 import org.springblade.core.cache.utils.CacheUtil;
 import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
+import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
+import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.system.entity.ApiScope;
 import org.springblade.system.service.IApiScopeService;
@@ -44,6 +46,7 @@ import static org.springblade.core.cache.constant.CacheConstant.SYS_CACHE;
 @RestController
 @AllArgsConstructor
 @RequestMapping("/api-scope")
+@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 @Tag(name = "接口权限", description = "接口权限")
 public class ApiScopeController extends BladeController {
 

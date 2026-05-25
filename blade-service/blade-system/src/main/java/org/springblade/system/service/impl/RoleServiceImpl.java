@@ -15,11 +15,16 @@
  */
 package org.springblade.system.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.AllArgsConstructor;
+import org.springblade.core.cache.utils.CacheUtil;
+import org.springblade.core.log.exception.ServiceException;
+import org.springblade.core.mp.support.Condition;
 import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.core.tenant.TenantGuard;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.node.ForestNodeMerger;
 import org.springblade.core.tool.utils.CollectionUtil;
@@ -34,6 +39,7 @@ import org.springblade.system.service.IRoleScopeService;
 import org.springblade.system.service.IRoleService;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.vo.RoleVO;
+import org.springblade.system.wrapper.RoleWrapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.annotation.Validated;
@@ -42,10 +48,12 @@ import jakarta.validation.constraints.NotEmpty;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.springblade.common.constant.CommonConstant.API_SCOPE_CATEGORY;
 import static org.springblade.common.constant.CommonConstant.DATA_SCOPE_CATEGORY;
+import static org.springblade.core.tenant.TenantGuard.EntityType.ROLE;
 
 /**
  * 服务实现类
@@ -68,6 +76,38 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements IR
 
 	@Override
 	public List<RoleVO> tree(String tenantId) {
+		String resolvedTenantId = SecureUtil.isAdministrator()
+			? Func.toStr(tenantId, SecureUtil.getTenantId())
+			: SecureUtil.getTenantId();
+		return doTree(resolvedTenantId);
+	}
+
+	@Override
+	public List<RoleVO> treeById(Long roleId) {
+		String resolvedTenantId;
+		if (SecureUtil.isAdministrator()) {
+			Role role = getById(roleId);
+			resolvedTenantId = Func.notNull(role) ? role.getTenantId() : SecureUtil.getTenantId();
+		} else {
+			resolvedTenantId = SecureUtil.getTenantId();
+		}
+		return doTree(resolvedTenantId);
+	}
+
+	@Override
+	public List<RoleVO> selectList(Map<String, Object> role) {
+		QueryWrapper<Role> queryWrapper = Condition.getQueryWrapper(role, Role.class);
+		if (!SecureUtil.isAdministrator()) {
+			queryWrapper.lambda().eq(Role::getTenantId, SecureUtil.getTenantId());
+		}
+		return RoleWrapper.build().listNodeVO(list(queryWrapper));
+	}
+
+	/**
+	 * 树形构建复用方法：根据当前用户角色决定是否需要排除内置 admin 角色，
+	 * 然后委派给底层 mapper。
+	 */
+	private List<RoleVO> doTree(String tenantId) {
 		String userRole = SecureUtil.getUserRole();
 		String excludeRole = null;
 		if (!CollectionUtil.contains(Func.toStrArray(userRole), RoleConstant.ADMIN)) {
@@ -77,8 +117,28 @@ public class RoleServiceImpl extends ServiceImpl<RoleMapper, Role> implements IR
 	}
 
 	@Override
+	@Transactional(rollbackFor = Exception.class)
 	public boolean grant(@NotEmpty List<Long> roleIds, List<Long> menuIds, List<Long> dataScopeIds, List<Long> apiScopeIds) {
+		TenantGuard.verifyBatch(this, roleIds, ROLE);
+		CacheUtil.clear(CacheUtil.SYS_CACHE);
 		return grantRoleMenu(roleIds, menuIds) && grantDataScope(roleIds, dataScopeIds) && grantApiScope(roleIds, apiScopeIds);
+	}
+
+	@Override
+	public boolean submit(Role role) {
+		CacheUtil.clear(CacheUtil.SYS_CACHE);
+		TenantGuard.bindTenant(this, role, ROLE);
+		if (Func.isEmpty(role.getTenantId())) {
+			throw new ServiceException("租户ID不能为空");
+		}
+		return saveOrUpdate(role);
+	}
+
+	@Override
+	public boolean remove(List<Long> ids) {
+		CacheUtil.clear(CacheUtil.SYS_CACHE);
+		TenantGuard.verifyBatch(this, ids, ROLE);
+		return removeByIds(ids);
 	}
 
 	private boolean grantRoleMenu(List<Long> roleIds, List<Long> menuIds) {
