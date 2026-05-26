@@ -1325,8 +1325,10 @@ public class ProductServiceImpl implements ProductService {
         QueryWrapper<Product> queryWrapper = new QueryWrapper<>();
         queryWrapper.eq("is_deleted", 0);
 
-        // 租户ID过滤
-        String tenantId = TenantUtil.getTenantId();
+        // 租户ID过滤：优先使用DTO中的tenantId（000000租户可以选择其他租户），否则从TenantUtil获取
+        String tenantId = StringUtil.isNotBlank(queryDTO.getTenantId()) 
+            ? queryDTO.getTenantId() 
+            : TenantUtil.getTenantId();
         if (tenantId != null && !tenantId.isEmpty()) {
             queryWrapper.eq("tenant_id", tenantId);
         }

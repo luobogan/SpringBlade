@@ -14,6 +14,12 @@
 		},
 		{
 			"path": "../../springandreact"
+		},
+		{
+			"path": "../../../Weaver2020"
+		},
+		{
+			"path": "../../ecology"
 		}
 	],
 	"settings": {
