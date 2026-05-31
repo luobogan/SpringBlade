@@ -24,6 +24,7 @@
         <module>blade-mall-api</module>
         <module>blade-order-api</module>
         <module>blade-pay-api</module>
+        <module>blade-formmode-api</module>
     </modules>
 
     <dependencies>

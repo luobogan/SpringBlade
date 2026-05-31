@@ -1,0 +1,12 @@
+#文件上传配置
+spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+
+#表单建模 API 配置（服务标识）
+blade:
+  api:
+    name: formmode
+    version: 1.0.0

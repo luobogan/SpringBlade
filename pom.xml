@@ -95,6 +95,11 @@
                 <artifactId>blade-pay-api</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>org.springblade</groupId>
+                <artifactId>blade-formmode-api</artifactId>
+                <version>${revision}</version>
+            </dependency>
             <!-- dynamic-datasource -->
             <dependency>
                 <groupId>com.baomidou</groupId>
