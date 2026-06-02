@@ -30,4 +30,10 @@ public interface IBrowserService {
      */
     List<Map<String, Object>> executeBrowserSql(String sqlText, Map<String, Object> params);
 
+    /**
+     * 获取浏览按钮类型完整分类列表（35+种）
+     * 用于前端 BrowserTypePicker 分类选择弹窗
+     */
+    List<Map<String, Object>> getBrowserTypes();
+
 }

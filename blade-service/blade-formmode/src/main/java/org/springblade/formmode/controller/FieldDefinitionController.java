@@ -29,8 +29,8 @@ public class FieldDefinitionController {
     @GetMapping
     @Operation(summary = "获取字段列表", description = "根据表单ID获取字段定义列表")
     public R<List<FieldDefinition>> list(
-            @Parameter(description = "表单ID") @RequestParam Long billId) {
-        List<FieldDefinition> list = fieldDefinitionService.getByFormId(billId);
+            @Parameter(description = "表单ID") @RequestParam Long formId) {
+        List<FieldDefinition> list = fieldDefinitionService.getByFormId(formId);
         return R.data(list);
     }
 

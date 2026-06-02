@@ -106,4 +106,50 @@ public class FieldDefinition extends Model<FieldDefinition> {
     @TableField("tenant_id")
     @Schema(name = "租户ID")
     private String tenantId;
+
+    // ==================== 泛微E9标准字段 ====================
+
+    @TableField("textheight")
+    @Schema(name = "文本高度（多行文本）")
+    private Integer textHeight;
+
+    @TableField("ismand")
+    @Schema(name = "是否必填（0否 1是）")
+    private Integer isMand;
+
+    @TableField("fieldorder")
+    @Schema(name = "显示顺序")
+    private Integer fieldOrder;
+
+    @TableField("isused")
+    @Schema(name = "是否启用（0否 1是）")
+    private Integer isUsed;
+
+    @TableField("description")
+    @Schema(name = "字段描述")
+    private String description;
+
+    @TableField("quicktype")
+    @Schema(name = "快速录入类型")
+    private Integer quickType;
+
+    @TableField("impcheck")
+    @Schema(name = "导入验证类型（0不验证 1电话 2手机 3邮编 4身份证 5日期 6时间 7email 8自定义）")
+    private Integer impCheck;
+
+    @TableField("checkexpression")
+    @Schema(name = "验证表达式（正则表达式）")
+    private String checkExpression;
+
+    @TableField("placeholder")
+    @Schema(name = "提示信息（输入框占位符）")
+    private String placeholder;
+
+    @TableField("needlog")
+    @Schema(name = "是否记录字段修改日志（0否 1是）")
+    private Integer needLog;
+
+    @TableField("neeedcel")
+    @Schema(name = "是否允许Excel导入（0否 1是）")
+    private Integer needExcel;
 }

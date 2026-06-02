@@ -5,10 +5,14 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.formmode.entity.FieldDefinition;
+import org.springblade.formmode.entity.FieldExtend;
+import org.springblade.formmode.entity.FieldOption;
 import org.springblade.formmode.entity.WorkflowBill;
 import org.springblade.formmode.mapper.FieldDefinitionMapper;
 import org.springblade.formmode.service.IDynamicTableService;
 import org.springblade.formmode.service.IFieldDefinitionService;
+import org.springblade.formmode.service.IFieldExtendService;
+import org.springblade.formmode.service.IFieldOptionService;
 import org.springblade.formmode.service.IWorkflowBillService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,6 +30,8 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     private final JdbcTemplate jdbcTemplate;
     private final IDynamicTableService dynamicTableService;
     private final IWorkflowBillService workflowBillService;
+    private final IFieldExtendService fieldExtendService;
+    private final IFieldOptionService fieldOptionService;
 
     @Override
     public List<FieldDefinition> getByFormId(Long billId) {
@@ -37,6 +43,16 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
 
     @Override
     public boolean createFieldWithColumn(FieldDefinition field) {
+        return createFieldWithColumn(field, null, null);
+    }
+
+    /**
+     * 创建字段并添加列到数据库表（支持扩展属性和选项数据）
+     * @param field 字段定义
+     * @param fieldExtend 扩展属性（可为 null）
+     * @param options 选项列表（可为 null，用于选择框/单选/复选）
+     */
+    public boolean createFieldWithColumn(FieldDefinition field, FieldExtend fieldExtend, java.util.List<FieldOption> options) {
         // 1. 保存字段定义
         boolean saved = this.save(field);
 
@@ -59,6 +75,22 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
                     log.warn("表 {} 不存在，跳过添加列，由 createTable 统一处理", tableName);
                 }
             }
+
+            // 3. 保存扩展属性
+            if (fieldExtend != null) {
+                fieldExtend.setFieldId(field.getId());
+                fieldExtend.setFormId(field.getBillId());
+                fieldExtendService.save(fieldExtend);
+            }
+
+            // 4. 保存选项数据
+            if (options != null && !options.isEmpty()) {
+                for (FieldOption option : options) {
+                    option.setFieldId(field.getId());
+                    option.setFormId(field.getBillId());
+                }
+                fieldOptionService.saveBatch(options);
+            }
         }
 
         return saved;
@@ -66,6 +98,13 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
 
     @Override
     public boolean updateFieldWithColumn(FieldDefinition field) {
+        return updateFieldWithColumn(field, null, null);
+    }
+
+    /**
+     * 更新字段并更新数据库列（支持扩展属性和选项数据）
+     */
+    public boolean updateFieldWithColumn(FieldDefinition field, FieldExtend fieldExtend, java.util.List<FieldOption> options) {
         // 1. 更新字段定义
         boolean updated = this.updateById(field);
 
@@ -82,6 +121,18 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
                     dynamicTableService.addColumnToTable(tableName, columnName, columnType, length);
                 }
             }
+
+            // 3. 更新扩展属性
+            if (fieldExtend != null) {
+                fieldExtend.setFieldId(field.getId());
+                fieldExtend.setFormId(field.getBillId());
+                fieldExtendService.saveOrUpdateByFieldId(fieldExtend);
+            }
+
+            // 4. 更新选项数据
+            if (options != null) {
+                fieldOptionService.saveOptions(field.getId(), field.getBillId(), options);
+            }
         }
 
         return updated;
@@ -94,7 +145,13 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
             return false;
         }
 
-        // 1. 删除数据库列
+        // 1. 删除扩展属性
+        fieldExtendService.deleteByFieldId(fieldId);
+
+        // 2. 删除选项数据
+        fieldOptionService.deleteByFieldId(fieldId);
+
+        // 3. 删除数据库列
         String tableName = getTableName(field.getBillId());
         if (tableName != null) {
             String columnName = field.getFieldDbName();
@@ -103,8 +160,31 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
             }
         }
 
-        // 2. 删除字段定义
+        // 4. 删除字段定义
         return this.removeById(fieldId);
+    }
+
+    /**
+     * 获取字段详情（包含扩展属性和选项数据）
+     * @param fieldId 字段ID
+     * @return 包含扩展属性和选项数据的 Map
+     */
+    public java.util.Map<String, Object> getFieldDetail(Long fieldId) {
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        
+        // 1. 获取字段定义
+        FieldDefinition field = this.getById(fieldId);
+        result.put("field", field);
+        
+        // 2. 获取扩展属性
+        FieldExtend fieldExtend = fieldExtendService.getByFieldId(fieldId);
+        result.put("extend", fieldExtend);
+        
+        // 3. 获取选项数据
+        java.util.List<FieldOption> options = fieldOptionService.getByFieldId(fieldId);
+        result.put("options", options);
+        
+        return result;
     }
 
     /**

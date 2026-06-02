@@ -18,7 +18,7 @@ import java.util.Map;
  * 对应 ecology 的 FormModeDialogController / FormModeCptController
  */
 @RestController
-@RequestMapping("/api/blade-formmode/browser")
+@RequestMapping("/browser")
 @Tag(name = "浏览框", description = "浏览框数据查询")
 @RequiredArgsConstructor
 public class FormBrowserController extends BladeController {
@@ -59,6 +59,15 @@ public class FormBrowserController extends BladeController {
                                                       @RequestParam String keyword,
                                                       @RequestParam(required = false) Map<String, Object> params) {
         return R.data(browserService.searchBrowserDataByName(browserId, keyword, params));
+    }
+
+    /**
+     * 获取浏览按钮类型完整分类列表（35+种）
+     * 用于前端 BrowserTypePicker 分类选择弹窗
+     */
+    @GetMapping("/types")
+    public R<List<Map<String, Object>>> getBrowserTypes() {
+        return R.data(browserService.getBrowserTypes());
     }
 
 }
