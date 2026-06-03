@@ -513,3 +513,25 @@ CREATE TABLE IF NOT EXISTS `mode_expressionbase` (
 -- 以上 SQL 执行完成后，blade 数据库包含全部配置表
 -- 动态数据表（formtable_main_xxx）在运行时通过 DynamicTableNameInterceptor 自动创建
 -- ============================================================================
+
+-- ============================================================================
+-- 批次8：表单布局表（Excel设计器）
+-- ============================================================================
+
+-- 8.1 表单布局表（form_layout）
+-- 用于存储Excel风格的表单布局，JSON格式，兼容泛微E9实际格式
+CREATE TABLE IF NOT EXISTS `form_layout` (
+    `id`            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '布局ID',
+    `form_id`       BIGINT       NOT NULL COMMENT '表单ID（关联workflow_bill）',
+    `layout_name`   VARCHAR(200) DEFAULT NULL COMMENT '布局名称',
+    `layout_json`   LONGTEXT     DEFAULT NULL COMMENT '布局JSON（兼容泛微E9格式）',
+    `layout_config`  TEXT         DEFAULT NULL COMMENT '布局配置JSON',
+    `status`         INT          DEFAULT 1 COMMENT '状态：1启用 0禁用',
+    `tenant_id`      VARCHAR(32)  DEFAULT '000000' COMMENT '租户ID',
+    `create_time`    DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`    DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_form_id` (`form_id`),
+    KEY `idx_tenant` (`tenant_id`),
+    CONSTRAINT `fk_layout_form` FOREIGN KEY (`form_id`) REFERENCES `workflow_bill`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表单布局（Excel设计器）';
