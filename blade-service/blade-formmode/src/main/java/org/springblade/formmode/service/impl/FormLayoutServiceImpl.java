@@ -1,11 +1,15 @@
 package org.springblade.formmode.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.formmode.entity.FormLayout;
+import org.springblade.formmode.entity.WorkflowBill;
 import org.springblade.formmode.mapper.FormLayoutMapper;
+import org.springblade.formmode.mapper.WorkflowBillMapper;
 import org.springblade.formmode.service.IFormLayoutService;
 import org.springframework.stereotype.Service;
 
@@ -17,20 +21,42 @@ import java.util.*;
  */
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLayout> implements IFormLayoutService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final WorkflowBillMapper workflowBillMapper;
 
     @Override
     public FormLayout getByFormId(Long formId) {
-        return lambdaQuery()
+        // 使用 list() 替代 one()，避免重复数据导致异常
+        // 如果存在多条记录，按创建时间排序取最新的
+        List<FormLayout> list = lambdaQuery()
                 .eq(FormLayout::getFormId, formId)
                 .eq(FormLayout::getStatus, 1)
-                .one();
+                .orderByDesc(FormLayout::getCreateTime)
+                .list();
+        
+        if (list != null && !list.isEmpty()) {
+            if (list.size() > 1) {
+                log.warn("发现多条相同 formId 的布局记录, formId={}, 记录数={}, 返回最新一条", formId, list.size());
+            }
+            return list.get(0);
+        }
+        return null;
     }
 
     @Override
     public boolean saveFormLayout(FormLayout formLayout) {
+        // 检查 formId 是否存在于 workflow_bill 表
+        if (formLayout.getFormId() != null) {
+            WorkflowBill bill = workflowBillMapper.selectById(formLayout.getFormId());
+            if (bill == null) {
+                log.error("保存表单布局失败: formId={} 不存在于 workflow_bill 表", formLayout.getFormId());
+                throw new IllegalArgumentException("表单ID不存在: " + formLayout.getFormId());
+            }
+        }
+        
         if (formLayout.getId() == null) {
             return save(formLayout);
         } else {
