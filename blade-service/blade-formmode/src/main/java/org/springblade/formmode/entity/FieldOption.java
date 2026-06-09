@@ -47,4 +47,14 @@ public class FieldOption extends Model<FieldOption> {
     @TableField("isdefault")
     @Schema(name = "是否默认选中（0否 1是）")
     private Integer isDefault;
+
+    // =================== 逻辑删除字段 ===================
+
+    @TableField("is_deleted")
+    @Schema(name = "是否删除（0未删除 1已删除）")
+    private Integer isDeleted;
+
+    @TableField("status")
+    @Schema(name = "状态（1正常 0禁用 -1已删除）")
+    private Integer status;
 }

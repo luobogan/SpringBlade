@@ -51,4 +51,14 @@ public class FieldExtend extends Model<FieldExtend> {
     @TableField("modifytime")
     @Schema(name = "修改时间")
     private String modifyTime;
+
+    // =================== 逻辑删除字段 ===================
+
+    @TableField("is_deleted")
+    @Schema(name = "是否删除（0未删除 1已删除）")
+    private Integer isDeleted;
+
+    @TableField("status")
+    @Schema(name = "状态（1正常 0禁用 -1已删除）")
+    private Integer status;
 }

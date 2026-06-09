@@ -4,12 +4,15 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
 import org.springblade.formmode.entity.FieldDefinition;
 import org.springblade.formmode.service.IFieldDefinitionService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 字段定义控制器
@@ -19,6 +22,7 @@ import java.util.List;
 @RequestMapping("/field-definition")
 @Tag(name = "字段定义管理", description = "字段定义管理")
 @RequiredArgsConstructor
+@Slf4j
 public class FieldDefinitionController {
 
     private final IFieldDefinitionService fieldDefinitionService;
@@ -85,6 +89,30 @@ public class FieldDefinitionController {
             @Parameter(description = "字段ID") @PathVariable Long id) {
         boolean result = fieldDefinitionService.deleteFieldWithColumn(id);
         return result ? R.success("字段删除成功") : R.fail("字段删除失败");
+    }
+
+    /**
+     * 批量删除字段
+     * 前端传参格式：{"ids": ["1", "2"]}
+     */
+    @PostMapping("/batch-delete")
+    @Operation(summary = "批量删除字段", description = "批量删除字段定义（逻辑删除）")
+    public R<Boolean> batchDelete(@RequestBody Map<String, Object> request) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<Integer> idList = (List<Integer>) request.get("ids");
+            if (idList == null || idList.isEmpty()) {
+                return R.fail("请选择要删除的字段");
+            }
+            List<Long> longIds = idList.stream()
+                    .map(id -> Long.valueOf(id.longValue()))
+                    .collect(Collectors.toList());
+            boolean result = fieldDefinitionService.batchDeleteFieldWithColumn(longIds);
+            return result ? R.success("批量删除成功") : R.fail("批量删除失败");
+        } catch (Exception e) {
+            log.error("批量删除字段失败", e);
+            return R.fail("批量删除失败：" + e.getMessage());
+        }
     }
 
     /**

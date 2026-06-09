@@ -12,23 +12,24 @@ import lombok.EqualsAndHashCode;
 /**
  * 字段定义实体类
  * 对应数据库表：workflow_billfield
+ * 对标泛微E9 workflowBillfield 表
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
 @TableName("workflow_billfield")
-@Schema(name = "字段定义", description = "字段定义实体")
+@Schema(name = "字段定义", description = "字段定义实体（对标泛微E9 workflowBillfield）")
 public class FieldDefinition extends Model<FieldDefinition> {
 
     @TableId(value = "id", type = IdType.AUTO)
-    @Schema(name = "字段ID")
+    @Schema(name = "主键ID")
     private Long id;
 
     @TableField("billid")
-    @Schema(name = "所属表单ID")
+    @Schema(name = "表单ID")
     private Long billId;
 
     @TableField("fieldname")
-    @Schema(name = "字段名")
+    @Schema(name = "字段名称（数据库列名）")
     private String fieldName;
 
     @TableField("fieldlabel")
@@ -36,43 +37,43 @@ public class FieldDefinition extends Model<FieldDefinition> {
     private String fieldLabel;
 
     @TableField("fielddbname")
-    @Schema(name = "数据库列名")
+    @Schema(name = "数据库字段名")
     private String fieldDbName;
 
     @TableField("fieldhtmltype")
-    @Schema(name = "HTML表单元素类型")
+    @Schema(name = "字段HTML类型（1输入框 2选择框 3浏览按钮 4其他）")
     private Integer fieldHtmlType;
 
     @TableField("fieldtype")
-    @Schema(name = "字段类型")
-    private Integer fieldType;
+    @Schema(name = "字段类型（文本、整数、浮点数等）")
+    private String fieldType;
 
     @TableField("fieldlen")
     @Schema(name = "字段长度")
     private Integer fieldLen;
 
     @TableField("decimaldigit")
-    @Schema(name = "小数点位数")
+    @Schema(name = "小数位数")
     private Integer decimalDigit;
 
     @TableField("defaultvalue")
     @Schema(name = "默认值")
     private String defaultValue;
 
-    @TableField("dsporder")
+    @TableField("dsorder")
     @Schema(name = "显示顺序")
     private Integer dsOrder;
 
     @TableField("isnull")
-    @Schema(name = "是否必填")
+    @Schema(name = "是否允许空（0否 1是）")
     private Integer isNull;
 
     @TableField("uniquevalue")
-    @Schema(name = "是否唯一")
+    @Schema(name = "是否唯一（0否 1是）")
     private Integer uniqueValue;
 
     @TableField("fieldmsg")
-    @Schema(name = "字段提示")
+    @Schema(name = "字段提示信息")
     private String fieldMsg;
 
     @TableField("fielddbtype")
@@ -80,23 +81,23 @@ public class FieldDefinition extends Model<FieldDefinition> {
     private String fieldDbType;
 
     @TableField("browtype")
-    @Schema(name = "浏览框类型")
-    private Integer browType;
+    @Schema(name = "浏览按钮类型")
+    private String browType;
 
     @TableField("browserurlid")
-    @Schema(name = "浏览框URL ID")
+    @Schema(name = "浏览器URL ID")
     private Integer browserUrlId;
 
     @TableField("selectitem")
-    @Schema(name = "选项数据")
+    @Schema(name = "选择项配置")
     private String selectItem;
 
     @TableField("detailtable")
-    @Schema(name = "关联明细表ID")
+    @Schema(name = "明细表索引（1开始）")
     private Integer detailTable;
 
     @TableField("ismain")
-    @Schema(name = "是否主表字段")
+    @Schema(name = "是否主表字段（0否 1是）")
     private Integer isMain;
 
     @TableField("remark")
@@ -105,9 +106,7 @@ public class FieldDefinition extends Model<FieldDefinition> {
 
     @TableField("tenant_id")
     @Schema(name = "租户ID")
-    private String tenantId;
-
-    // ==================== 泛微E9标准字段 ====================
+    private Long tenantId;
 
     @TableField("textheight")
     @Schema(name = "文本高度（多行文本）")
@@ -149,7 +148,17 @@ public class FieldDefinition extends Model<FieldDefinition> {
     @Schema(name = "是否记录字段修改日志（0否 1是）")
     private Integer needLog;
 
-    @TableField("neeedcel")
+    @TableField("needexcel")
     @Schema(name = "是否允许Excel导入（0否 1是）")
     private Integer needExcel;
+
+    // ==================== 逻辑删除字段 ====================
+
+    @TableField("is_deleted")
+    @Schema(name = "是否删除（0未删除 1已删除）")
+    private Integer isDeleted;
+
+    @TableField("status")
+    @Schema(name = "状态（1正常 0禁用 -1已删除）")
+    private Integer status;
 }

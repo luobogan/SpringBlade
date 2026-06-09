@@ -16,6 +16,7 @@ import org.springblade.formmode.service.IFieldOptionService;
 import org.springblade.formmode.service.IWorkflowBillService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -33,45 +34,91 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     private final IFieldExtendService fieldExtendService;
     private final IFieldOptionService fieldOptionService;
 
+    // ==================== 查询方法 ====================
+
     @Override
     public List<FieldDefinition> getByFormId(Long billId) {
+        LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(FieldDefinition::getBillId, billId);
+        // 过滤逻辑删除的字段：is_deleted != 1 且 status != -1
+        wrapper.ne(FieldDefinition::getIsDeleted, 1);
+        wrapper.ne(FieldDefinition::getStatus, -1);
+        wrapper.orderByAsc(FieldDefinition::getDsOrder);
+        return this.list(wrapper);
+    }
+
+    @Override
+    public List<FieldDefinition> getByFormIdIncludeDeleted(Long billId) {
+        // 包含所有字段（用于管理后台）
         LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldDefinition::getBillId, billId);
         wrapper.orderByAsc(FieldDefinition::getDsOrder);
         return this.list(wrapper);
     }
 
+    /**
+     * 获取字段详情（包含扩展属性和选项数据）
+     */
+    public java.util.Map<String, Object> getFieldDetail(Long fieldId) {
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+
+        // 1. 获取字段定义（过滤逻辑删除）
+        FieldDefinition field = this.getById(fieldId);
+        if (field == null) {
+            return null;
+        }
+        // 如果已逻辑删除，返回 null
+        if (Integer.valueOf(1).equals(field.getIsDeleted()) || Integer.valueOf(-1).equals(field.getStatus())) {
+            return null;
+        }
+        result.put("field", field);
+
+        // 2. 获取扩展属性
+        FieldExtend fieldExtend = fieldExtendService.getByFieldId(fieldId);
+        result.put("extend", fieldExtend);
+
+        // 3. 获取选项数据
+        List<FieldOption> options = fieldOptionService.getByFieldId(fieldId);
+        result.put("options", options);
+
+        return result;
+    }
+
+    // ==================== 新增方法 ====================
+
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean createFieldWithColumn(FieldDefinition field) {
         return createFieldWithColumn(field, null, null);
     }
 
     /**
      * 创建字段并添加列到数据库表（支持扩展属性和选项数据）
-     * @param field 字段定义
-     * @param fieldExtend 扩展属性（可为 null）
-     * @param options 选项列表（可为 null，用于选择框/单选/复选）
      */
+    @Transactional(rollbackFor = Exception.class)
     public boolean createFieldWithColumn(FieldDefinition field, FieldExtend fieldExtend, java.util.List<FieldOption> options) {
-        // 1. 保存字段定义
+        // 1. 保存字段定义（初始化逻辑删除字段）
+        if (field.getIsDeleted() == null) {
+            field.setIsDeleted(0);
+        }
+        if (field.getStatus() == null) {
+            field.setStatus(1);
+        }
         boolean saved = this.save(field);
 
         if (saved) {
             // 2. 添加列到数据库表
             String tableName = getTableName(field.getBillId());
             if (tableName != null) {
-                // 先检查表是否存在
                 if (dynamicTableService.tableExists(tableName)) {
                     String columnName = field.getFieldDbName();
                     String columnType = getSqlType(field);
                     Integer length = field.getFieldLen();
 
-                    // 检查列是否已存在
                     if (!columnExists(tableName, columnName)) {
                         dynamicTableService.addColumnToTable(tableName, columnName, columnType, length);
                     }
                 } else {
-                    // 表尚未创建，由 "创建数据库表" 流程统一处理
                     log.warn("表 {} 不存在，跳过添加列，由 createTable 统一处理", tableName);
                 }
             }
@@ -96,7 +143,10 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         return saved;
     }
 
+    // ==================== 更新方法 ====================
+
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean updateFieldWithColumn(FieldDefinition field) {
         return updateFieldWithColumn(field, null, null);
     }
@@ -104,14 +154,13 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     /**
      * 更新字段并更新数据库列（支持扩展属性和选项数据）
      */
+    @Transactional(rollbackFor = Exception.class)
     public boolean updateFieldWithColumn(FieldDefinition field, FieldExtend fieldExtend, java.util.List<FieldOption> options) {
         // 1. 更新字段定义
         boolean updated = this.updateById(field);
 
         if (updated) {
             // 2. 更新数据库列（如果需要）
-            // 注意：修改列名或类型需要 ALTER TABLE MODIFY COLUMN
-            // 这里简化实现，仅处理新增列的情况
             String tableName = getTableName(field.getBillId());
             if (tableName != null) {
                 String columnName = field.getFieldDbName();
@@ -138,20 +187,74 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         return updated;
     }
 
+    // ==================== 删除方法（逻辑删除）====================
+
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean deleteFieldWithColumn(Long fieldId) {
+        FieldDefinition field = this.getById(fieldId);
+        if (field == null) {
+            log.warn("字段不存在：fieldId={}", fieldId);
+            return false;
+        }
+
+        // 检查是否已逻辑删除
+        if (Integer.valueOf(1).equals(field.getIsDeleted())) {
+            log.warn("字段已删除：fieldId={}", fieldId);
+            return true;
+        }
+
+        // 1. 逻辑删除扩展属性（不物理删除）
+        fieldExtendService.deleteByFieldIdLogical(fieldId);
+
+        // 2. 逻辑删除选项数据（不物理删除）
+        fieldOptionService.deleteByFieldIdLogical(fieldId);
+
+        // 3. 【可选】是否删除数据库列（根据业务需求决定）
+        // 注意：逻辑删除模式下，通常保留数据库列，只标记字段为删除状态
+        // 如果确实需要删除列，取消下面注释：
+        /*
+        String tableName = getTableName(field.getBillId());
+        if (tableName != null) {
+            String columnName = field.getFieldDbName();
+            if (columnExists(tableName, columnName)) {
+                dynamicTableService.dropColumnFromTable(tableName, columnName);
+            }
+        }
+        */
+
+        // 4. 逻辑删除字段定义（设置 isDeleted=1, status=-1）
+        FieldDefinition updateField = new FieldDefinition();
+        updateField.setId(fieldId);
+        updateField.setIsDeleted(1);
+        updateField.setStatus(-1);
+        boolean deleted = this.updateById(updateField);
+
+        if (deleted) {
+            log.info("字段逻辑删除成功：fieldId={}, fieldName={}", fieldId, field.getFieldName());
+        }
+
+        return deleted;
+    }
+
+    /**
+     * 物理删除字段（慎用！用于数据清理）
+     * 只有管理员在清理已逻辑删除的数据时才调用此方法
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean physicalDeleteField(Long fieldId) {
         FieldDefinition field = this.getById(fieldId);
         if (field == null) {
             return false;
         }
 
-        // 1. 删除扩展属性
+        // 1. 物理删除扩展属性
         fieldExtendService.deleteByFieldId(fieldId);
 
-        // 2. 删除选项数据
+        // 2. 物理删除选项数据
         fieldOptionService.deleteByFieldId(fieldId);
 
-        // 3. 删除数据库列
+        // 3. 物理删除数据库列
         String tableName = getTableName(field.getBillId());
         if (tableName != null) {
             String columnName = field.getFieldDbName();
@@ -160,36 +263,58 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
             }
         }
 
-        // 4. 删除字段定义
+        // 4. 物理删除字段定义记录
         return this.removeById(fieldId);
     }
 
+    // ==================== 恢复删除的字段 ====================
+
     /**
-     * 获取字段详情（包含扩展属性和选项数据）
-     * @param fieldId 字段ID
-     * @return 包含扩展属性和选项数据的 Map
+     * 恢复已逻辑删除的字段
      */
-    public java.util.Map<String, Object> getFieldDetail(Long fieldId) {
-        java.util.Map<String, Object> result = new java.util.HashMap<>();
-        
-        // 1. 获取字段定义
-        FieldDefinition field = this.getById(fieldId);
-        result.put("field", field);
-        
-        // 2. 获取扩展属性
-        FieldExtend fieldExtend = fieldExtendService.getByFieldId(fieldId);
-        result.put("extend", fieldExtend);
-        
-        // 3. 获取选项数据
-        java.util.List<FieldOption> options = fieldOptionService.getByFieldId(fieldId);
-        result.put("options", options);
-        
-        return result;
+    @Transactional(rollbackFor = Exception.class)
+    public boolean restoreField(Long fieldId) {
+        FieldDefinition field = new FieldDefinition();
+        field.setId(fieldId);
+        field.setIsDeleted(0);
+        field.setStatus(1);
+        boolean restored = this.updateById(field);
+
+        if (restored) {
+            log.info("字段恢复成功：fieldId={}", fieldId);
+        }
+
+        return restored;
     }
+
+    // ==================== 批量删除方法 ====================
+
+    /**
+     * 批量逻辑删除字段
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean batchDeleteFieldWithColumn(List<Long> fieldIds) {
+        if (fieldIds == null || fieldIds.isEmpty()) {
+            return true;
+        }
+        
+        for (Long fieldId : fieldIds) {
+            try {
+                deleteFieldWithColumn(fieldId);
+            } catch (Exception e) {
+                log.error("批量删除字段异常：fieldId=" + fieldId, e);
+                throw e; // 重新抛出异常以触发回滚
+            }
+        }
+        
+        return true;
+    }
+
+    // ==================== 私有辅助方法 ====================
 
     /**
      * 根据表单ID获取配置的表名
-     * 从 workflow_bill 表查询真实的 table_name，避免使用旧的 formtable_main_{billId} 规则
      */
     private String getTableName(Long billId) {
         try {
@@ -214,7 +339,6 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
             return "VARCHAR(255)";
         }
 
-        // 根据 fieldDbType 映射到 SQL 类型
         switch (fieldDbType.toLowerCase()) {
             case "varchar":
                 Integer length = field.getFieldLen();
