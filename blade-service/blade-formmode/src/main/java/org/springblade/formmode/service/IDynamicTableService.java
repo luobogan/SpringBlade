@@ -1,5 +1,10 @@
 package org.springblade.formmode.service;
 
+import org.springblade.formmode.entity.FieldDefinition;
+
+import java.util.List;
+import java.util.Map;
+
 /**
  * 动态表管理服务接口
  *
@@ -57,4 +62,31 @@ public interface IDynamicTableService {
      */
     String getDetailTableName(Long billId, int detailIndex);
 
+    // ==================== 表结构同步（新增）====================
+
+    /**
+     * 同步表结构（根据字段定义自动创建/更新表结构）
+     * @param billId 表单ID
+     * @param tableName 表名
+     * @return 同步结果 Map，包含：
+     *   - success: 是否成功
+     *   - msg: 消息
+     *   - warnings: 警告列表
+     *   - executedSql: 执行的SQL列表
+     */
+    Map<String, Object> syncTableStructure(Long billId, String tableName);
+
+    /**
+     * 获取表的列信息
+     * @param tableName 表名
+     * @return 列信息列表
+     */
+    List<Map<String, Object>> getTableColumns(String tableName);
+
+    /**
+     * 检查数据兼容性
+     * @param tableName 表名
+     * @return 兼容性检查结果
+     */
+    Map<String, Object> checkDataCompatibility(String tableName);
 }

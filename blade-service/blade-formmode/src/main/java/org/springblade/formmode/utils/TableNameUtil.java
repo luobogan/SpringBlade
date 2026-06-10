@@ -3,11 +3,10 @@ package org.springblade.formmode.utils;
 /**
  * 动态表名工具类
  *
- * 遵循 ecology 的表名生成规则：
- * - formtable_main_{billId}  — 主数据表
- * - formtable_main_{billId}_dt1 — 明细表1
- * - formtable_main_{billId}_dt2 — 明细表2
- * - formtable_main_{billId}_history — 历史表
+ * - formtable_main_1  — 主数据表
+ * - formtable_main_1_dt1 — 明细表1
+ * - formtable_main_1_dt2 — 明细表2
+ * - formtable_main_1_history — 历史表
  */
 public class TableNameUtil {
 
@@ -19,10 +18,13 @@ public class TableNameUtil {
     }
 
     /**
-     * 获取明细表名
+     * 获取明细表名（根据主表名生成）
+     * @param mainTableName 主表名称
+     * @param detailIndex 明细表索引
+     * @return 明细表名称，格式为 {主表名}_dt{索引}
      */
-    public static String getDetailTableName(Long billId, int detailIndex) {
-        return "formtable_main_" + billId + "_dt" + detailIndex;
+    public static String getDetailTableName(String mainTableName, int detailIndex) {
+        return mainTableName + "_dt" + detailIndex;
     }
 
     /**

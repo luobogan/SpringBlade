@@ -130,4 +130,21 @@ public class FieldDefinitionController {
             return R.fail("无效的表单ID");
         }
     }
+
+    /**
+     * 根据表单ID和是否主表字段获取字段列表
+     */
+    @GetMapping("/by-form/{formId}/is-main/{isMain}")
+    @Operation(summary = "根据表单ID和isMain获取字段", description = "根据表单ID和是否主表字段获取字段定义列表")
+    public R<List<FieldDefinition>> getByFormIdAndIsMain(
+            @Parameter(description = "表单ID") @PathVariable String formId,
+            @Parameter(description = "是否主表字段（1-主表，0-明细表）") @PathVariable Integer isMain) {
+        try {
+            Long billId = Long.parseLong(formId);
+            List<FieldDefinition> list = fieldDefinitionService.getByFormIdAndIsMain(billId, isMain);
+            return R.data(list);
+        } catch (NumberFormatException e) {
+            return R.fail("无效的表单ID");
+        }
+    }
 }

@@ -9,6 +9,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.io.Serial;
+
 /**
  * 字段定义实体类
  * 对应数据库表：workflow_billfield
@@ -19,6 +21,9 @@ import lombok.EqualsAndHashCode;
 @TableName("workflow_billfield")
 @Schema(name = "字段定义", description = "字段定义实体（对标泛微E9 workflowBillfield）")
 public class FieldDefinition extends Model<FieldDefinition> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
 
     @TableId(value = "id", type = IdType.AUTO)
     @Schema(name = "主键ID")

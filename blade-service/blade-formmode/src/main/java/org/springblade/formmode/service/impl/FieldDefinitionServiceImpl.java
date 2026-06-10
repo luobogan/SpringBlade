@@ -56,6 +56,18 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         return this.list(wrapper);
     }
 
+    @Override
+    public List<FieldDefinition> getByFormIdAndIsMain(Long billId, Integer isMain) {
+        LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(FieldDefinition::getBillId, billId);
+        wrapper.eq(FieldDefinition::getIsMain, isMain);
+        // 过滤逻辑删除的字段：is_deleted != 1 且 status != -1
+        wrapper.ne(FieldDefinition::getIsDeleted, 1);
+        wrapper.ne(FieldDefinition::getStatus, -1);
+        wrapper.orderByAsc(FieldDefinition::getDsOrder);
+        return this.list(wrapper);
+    }
+
     /**
      * 获取字段详情（包含扩展属性和选项数据）
      */

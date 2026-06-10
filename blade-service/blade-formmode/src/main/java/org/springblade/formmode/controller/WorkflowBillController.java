@@ -284,6 +284,34 @@ public class WorkflowBillController extends BladeController {
     }
 
     /**
+     * 同步数据库表结构（根据字段定义自动创建/更新表结构）
+     * 保存表单时自动调用，包含数据兼容性检查
+     */
+    @PostMapping("/{id}/sync-table-structure")
+    @Operation(summary = "同步表结构", description = "根据字段定义自动同步数据库表结构，包含数据兼容性检查")
+    public R<Map<String, Object>> syncTableStructure(
+            @Parameter(description = "表单ID") @PathVariable String id) {
+        try {
+            WorkflowBill workflowBill = workflowBillService.getById(id);
+            if (workflowBill == null) {
+                return R.fail("表单不存在");
+            }
+
+            String tableName = workflowBill.getTableName();
+            if (tableName == null || tableName.isEmpty()) {
+                return R.fail("表单表名未配置");
+            }
+
+            // 调用服务同步表结构
+            Map<String, Object> result = dynamicTableService.syncTableStructure(Long.parseLong(id), tableName);
+            return R.data(result);
+        } catch (Exception e) {
+            log.error("同步表结构失败: " + id, e);
+            return R.fail("同步表结构失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 将字段数据库类型映射为SQL类型
      */
     private String mapDbTypeToSql(String dbType, Integer length) {

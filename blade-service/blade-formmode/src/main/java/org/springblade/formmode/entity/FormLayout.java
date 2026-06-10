@@ -27,19 +27,19 @@ public class FormLayout implements Serializable {
     @Schema(name = "布局ID")
     private Long id;
 
-    @TableField("formid")
+    @TableField("form_id")
     @Schema(name = "表单ID（关联workflow_bill）")
     private Long formId;
 
-    @TableField("layoutname")
+    @TableField("layout_name")
     @Schema(name = "布局名称")
     private String layoutName;
 
-    @TableField("layoutjson")
+    @TableField("layout_json")
     @Schema(name = "布局JSON（兼容泛微E9格式）")
     private String layoutJson;
 
-    @TableField("layoutconfig")
+    @TableField("layout_config")
     @Schema(name = "布局配置JSON")
     private String layoutConfig;
 
@@ -51,17 +51,11 @@ public class FormLayout implements Serializable {
     @Schema(name = "租户ID")
     private String tenantId;
 
-    @TableField("createtime")
+    @TableField("create_time")
     @Schema(name = "创建时间")
     private Date createTime;
 
-    @TableField("updatetime")
+    @TableField("update_time")
     @Schema(name = "修改时间")
     private Date updateTime;
-
-    // ==================== 逻辑删除字段 ====================
-
-    @TableField("is_deleted")
-    @Schema(name = "是否删除（0未删除 1已删除）")
-    private Integer isDeleted;
 }

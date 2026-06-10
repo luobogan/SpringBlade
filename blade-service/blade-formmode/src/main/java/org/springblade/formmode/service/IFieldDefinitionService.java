@@ -24,6 +24,14 @@ public interface IFieldDefinitionService extends IService<FieldDefinition> {
     List<FieldDefinition> getByFormIdIncludeDeleted(Long billId);
 
     /**
+     * 根据表单ID和 isMain 获取字段列表
+     * @param billId 表单ID
+     * @param isMain 是否主表字段（1-主表，0-明细表）
+     * @return 字段列表
+     */
+    List<FieldDefinition> getByFormIdAndIsMain(Long billId, Integer isMain);
+
+    /**
      * 创建字段并添加列到数据库表
      */
     boolean createFieldWithColumn(FieldDefinition field);
