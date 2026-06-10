@@ -1,6 +1,7 @@
 package org.springblade.formmode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +44,12 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         // 过滤逻辑删除的字段：is_deleted != 1 且 status != -1
         wrapper.ne(FieldDefinition::getIsDeleted, 1);
         wrapper.ne(FieldDefinition::getStatus, -1);
+        // 过滤系统保留字段（这些字段是数据库表自带的系统字段，不应该作为用户字段显示）
+        wrapper.notIn(FieldDefinition::getFieldName,
+            "id", "request_id", "modedatacreator", "modedatacreatedate",
+            "modedatacreatetime", "modedatamodifier", "modedatamodifydate",
+            "modedatamodifytime", "mode_uuid", "main_id", "is_deleted"
+        );
         wrapper.orderByAsc(FieldDefinition::getDsOrder);
         return this.list(wrapper);
     }
@@ -64,6 +71,12 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         // 过滤逻辑删除的字段：is_deleted != 1 且 status != -1
         wrapper.ne(FieldDefinition::getIsDeleted, 1);
         wrapper.ne(FieldDefinition::getStatus, -1);
+        // 过滤系统保留字段（这些字段是数据库表自带的系统字段，不应该作为用户字段显示）
+        wrapper.notIn(FieldDefinition::getFieldName,
+            "id", "request_id", "modedatacreator", "modedatacreatedate",
+            "modedatacreatetime", "modedatamodifier", "modedatamodifydate",
+            "modedatamodifytime", "mode_uuid", "main_id", "is_deleted"
+        );
         wrapper.orderByAsc(FieldDefinition::getDsOrder);
         return this.list(wrapper);
     }
@@ -116,9 +129,15 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         if (field.getStatus() == null) {
             field.setStatus(1);
         }
+
+        log.info("[FieldDefinition] 创建字段: fieldName={}, billId={}, isMain={}, fieldDbName={}",
+                field.getFieldName(), field.getBillId(), field.getIsMain(), field.getFieldDbName());
+
         boolean saved = this.save(field);
 
         if (saved) {
+            log.info("[FieldDefinition] 字段定义保存成功: id={}, fieldName={}", field.getId(), field.getFieldName());
+
             // 2. 添加列到数据库表
             String tableName = getTableName(field.getBillId());
             if (tableName != null) {
@@ -128,31 +147,40 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
                     Integer length = field.getFieldLen();
 
                     if (!columnExists(tableName, columnName)) {
+                        log.info("[FieldDefinition] 添加列到数据库: tableName={}, columnName={}, columnType={}",
+                                tableName, columnName, columnType);
                         dynamicTableService.addColumnToTable(tableName, columnName, columnType, length);
+                    } else {
+                        log.warn("[FieldDefinition] 列已存在，跳过: tableName={}, columnName={}", tableName, columnName);
                     }
                 } else {
-                    log.warn("表 {} 不存在，跳过添加列，由 createTable 统一处理", tableName);
+                    log.warn("[FieldDefinition] 表 {} 不存在，跳过添加列，由 createTable 统一处理", tableName);
                 }
+            } else {
+                log.warn("[FieldDefinition] 无法获取表名，billId={}", field.getBillId());
             }
-
-            // 3. 保存扩展属性
-            if (fieldExtend != null) {
-                fieldExtend.setFieldId(field.getId());
-                fieldExtend.setFormId(field.getBillId());
-                fieldExtendService.save(fieldExtend);
-            }
-
-            // 4. 保存选项数据
-            if (options != null && !options.isEmpty()) {
-                for (FieldOption option : options) {
-                    option.setFieldId(field.getId());
-                    option.setFormId(field.getBillId());
-                }
-                fieldOptionService.saveBatch(options);
-            }
+        } else {
+            log.error("[FieldDefinition] 字段定义保存失败: fieldName={}, billId={}", field.getFieldName(), field.getBillId());
+            return false;
         }
 
-        return saved;
+        // 3. 保存扩展属性
+        if (fieldExtend != null) {
+            fieldExtend.setFieldId(field.getId());
+            fieldExtend.setFormId(field.getBillId());
+            fieldExtendService.save(fieldExtend);
+        }
+
+        // 4. 保存选项数据
+        if (options != null && !options.isEmpty()) {
+            for (FieldOption option : options) {
+                option.setFieldId(field.getId());
+                option.setFormId(field.getBillId());
+            }
+            fieldOptionService.saveBatch(options);
+        }
+
+        return true;
     }
 
     // ==================== 更新方法 ====================
@@ -310,7 +338,7 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         if (fieldIds == null || fieldIds.isEmpty()) {
             return true;
         }
-        
+
         for (Long fieldId : fieldIds) {
             try {
                 deleteFieldWithColumn(fieldId);
@@ -319,8 +347,46 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
                 throw e; // 重新抛出异常以触发回滚
             }
         }
-        
+
         return true;
+    }
+
+    /**
+     * 根据表单ID批量逻辑删除字段定义
+     * 直接使用 update 语句更新所有字段，不需要先查询再删除，效率更高
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int deleteByFormIdLogical(Long billId) {
+        if (billId == null) {
+            return 0;
+        }
+
+        // 1. 获取要删除的字段数量（用于日志记录）
+        LambdaQueryWrapper<FieldDefinition> countWrapper = new LambdaQueryWrapper<>();
+        countWrapper.eq(FieldDefinition::getBillId, billId);
+        int count = (int) this.count(countWrapper);
+
+        if (count == 0) {
+            log.info("表单 {} 没有字段定义需要删除", billId);
+            return 0;
+        }
+
+        // 2. 逻辑删除字段定义（设置 is_deleted=1, status=-1）
+        LambdaUpdateWrapper<FieldDefinition> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(FieldDefinition::getBillId, billId);
+        updateWrapper.set(FieldDefinition::getIsDeleted, 1);
+        updateWrapper.set(FieldDefinition::getStatus, -1);
+        this.update(updateWrapper);
+
+        // 3. 删除关联的扩展属性
+        fieldExtendService.deleteByFormIdLogical(billId);
+
+        // 4. 删除关联的选项数据
+        fieldOptionService.deleteByFormIdLogical(billId);
+
+        log.info("已成功删除表单 {} 的 {} 个字段定义", billId, count);
+        return count;
     }
 
     // ==================== 私有辅助方法 ====================

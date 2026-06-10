@@ -85,4 +85,11 @@ public interface IFieldDefinitionService extends IService<FieldDefinition> {
      * @return 是否全部删除成功
      */
     boolean batchDeleteFieldWithColumn(List<Long> fieldIds);
+
+    /**
+     * 根据表单ID批量逻辑删除字段定义
+     * @param billId 表单ID
+     * @return 删除的字段数量
+     */
+    int deleteByFormIdLogical(Long billId);
 }

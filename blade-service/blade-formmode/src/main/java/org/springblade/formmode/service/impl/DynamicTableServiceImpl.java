@@ -160,7 +160,7 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                 rowCount = 0L;
             }
 
-            // 3. 如果存在数据，提示用户清理数据，不执行删表和建表操作
+            // 3. 如果存在数据，提示用户清理数据，不执行删表和建表操作，也不删除字段定义
             if (rowCount != null && rowCount > 0) {
                 result.put("success", false);
                 result.put("msg", "表 " + tableName + " 中已有 " + rowCount + " 条数据，请先清理数据后再执行同步操作");
@@ -170,6 +170,10 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
             }
 
             // 4. 如果不存在数据，直接执行删表和创建表操作，无需判断表是否存在
+            // 同时删除字段定义
+            log.info("========== 开始删除旧字段定义 ==========");
+            deleteFieldDefinitionsByBillId(billId);
+            log.info("========== 旧字段定义删除完成 ==========");
             log.info("表 {} 无数据，开始执行删表和建表操作", tableName);
 
             // 区分主表字段和明细表字段
@@ -219,10 +223,27 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                 log.info("已创建明细表 {}（包含明细表字段）: {}", detailIndex, detailTableName);
             }
 
+            // 6. 创建新字段定义（重新保存传入的字段列表）
+            int createdFieldCount = 0;
+            for (FieldDefinition field : fields) {
+                try {
+                    // 重置ID为null，以便创建新记录
+                    field.setId(null);
+                    field.setIsDeleted(0);
+                    field.setStatus(1);
+                    getFieldDefinitionService().save(field);
+                    createdFieldCount++;
+                } catch (Exception e) {
+                    log.warn("创建字段定义失败: fieldName={}, error={}", field.getFieldName(), e.getMessage());
+                }
+            }
+            log.info("已重新创建 {} 个字段定义", createdFieldCount);
+
             result.put("success", true);
             result.put("msg", "数据库表同步成功");
             result.put("warnings", warnings);
             result.put("executedSql", executedSql);
+            result.put("createdFieldCount", createdFieldCount);
             log.info("========== 表结构同步成功 ==========");
 
         } catch (Exception e) {
@@ -266,7 +287,7 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
 
         // 使用Set去重，避免重复字段
         Set<String> addedColumns = new HashSet<>();
-        
+
         // 添加用户定义的字段
         for (FieldDefinition field : fields) {
             String columnName = field.getFieldDbName();
@@ -413,13 +434,33 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
      */
     private boolean isSystemColumn(String columnName) {
         Set<String> systemColumns = new HashSet<>(Arrays.asList(
-                "id", "request_id", "modedatacreator", "modedatacreatedate",
-                "modedatacreatetime", "modedatamodifier", "modedatamodifydate",
+                "id", "request_id", "modedatacreator", "modedatamodifier",
+                "modedatacreatedate", "modedatacreatetime", "modedatamodifydate",
                 "modedatamodifytime", "mode_uuid", "main_id", "is_deleted",
                 "create_time", "update_time", "create_user", "update_user",
                 "create_dept", "tenant_id"
         ));
         return systemColumns.contains(columnName.toLowerCase());
+    }
+
+    /**
+     * 删除指定表单的所有字段定义
+     * 用于同步表结构时清空旧的字段定义
+     */
+    private void deleteFieldDefinitionsByBillId(Long billId) {
+        log.info("[deleteFieldDefinitionsByBillId] 开始删除表单 {} 的所有字段定义", billId);
+        try {
+            // 使用新的高效批量删除方法，直接根据表单ID删除，不需要先查询
+            int deletedCount = getFieldDefinitionService().deleteByFormIdLogical(billId);
+
+            if (deletedCount > 0) {
+                log.info("[deleteFieldDefinitionsByBillId] 已成功删除表单 {} 的 {} 个字段定义", billId, deletedCount);
+            } else {
+                log.info("[deleteFieldDefinitionsByBillId] 表单 {} 没有字段定义需要删除", billId);
+            }
+        } catch (Exception e) {
+            log.error("[deleteFieldDefinitionsByBillId] 删除表单 {} 的字段定义失败", billId, e);
+        }
     }
 
     /**
