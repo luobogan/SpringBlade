@@ -40,7 +40,7 @@ public class FieldOptionController {
     @GetMapping("/by-form/{formId}")
     @Operation(summary = "根据表单ID获取选项列表", description = "根据表单ID获取字段选项列表")
     public R<List<FieldOption>> getByFormId(
-            @Parameter(description = "表单ID") @PathVariable Long formId) {
+            @Parameter(description = "表单ID") @PathVariable String formId) {
         List<FieldOption> list = fieldOptionService.getByFormId(formId);
         return R.data(list);
     }
@@ -52,7 +52,7 @@ public class FieldOptionController {
     @Operation(summary = "保存字段选项列表", description = "保存字段选项列表（先删除再插入）")
     public R<Boolean> saveOptions(
             @Parameter(description = "字段ID") @RequestParam Long fieldId,
-            @Parameter(description = "表单ID") @RequestParam Long formId,
+            @Parameter(description = "表单ID") @RequestParam String formId,
             @RequestBody List<FieldOption> options) {
         boolean result = fieldOptionService.saveOptions(fieldId, formId, options);
         return result ? R.success("保存成功") : R.fail("保存失败");

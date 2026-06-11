@@ -38,7 +38,7 @@ public class FieldExtendController {
     @GetMapping("/by-form/{formId}")
     @Operation(summary = "根据表单ID获取扩展属性列表", description = "根据表单ID获取字段扩展属性列表")
     public R<java.util.List<FieldExtend>> getByFormId(
-            @Parameter(description = "表单ID") @PathVariable Long formId) {
+            @Parameter(description = "表单ID") @PathVariable String formId) {
         java.util.List<FieldExtend> list = fieldExtendService.getByFormId(formId);
         return R.data(list);
     }

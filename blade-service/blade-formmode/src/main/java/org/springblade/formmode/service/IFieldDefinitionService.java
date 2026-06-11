@@ -16,12 +16,12 @@ public interface IFieldDefinitionService extends IService<FieldDefinition> {
     /**
      * 根据表单ID获取字段列表（过滤逻辑删除的字段）
      */
-    List<FieldDefinition> getByFormId(Long billId);
+    List<FieldDefinition> getByFormId(String billId);
 
     /**
      * 根据表单ID获取字段列表（包含已删除的字段，用于管理后台）
      */
-    List<FieldDefinition> getByFormIdIncludeDeleted(Long billId);
+    List<FieldDefinition> getByFormIdIncludeDeleted(String billId);
 
     /**
      * 根据表单ID和 isMain 获取字段列表
@@ -29,7 +29,7 @@ public interface IFieldDefinitionService extends IService<FieldDefinition> {
      * @param isMain 是否主表字段（1-主表，0-明细表）
      * @return 字段列表
      */
-    List<FieldDefinition> getByFormIdAndIsMain(Long billId, Integer isMain);
+    List<FieldDefinition> getByFormIdAndIsMain(String billId, Integer isMain);
 
     /**
      * 创建字段并添加列到数据库表
@@ -91,5 +91,5 @@ public interface IFieldDefinitionService extends IService<FieldDefinition> {
      * @param billId 表单ID
      * @return 删除的字段数量
      */
-    int deleteByFormIdLogical(Long billId);
+    int deleteByFormIdLogical(String billId);
 }

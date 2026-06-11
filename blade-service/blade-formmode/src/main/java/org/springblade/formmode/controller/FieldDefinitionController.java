@@ -33,7 +33,7 @@ public class FieldDefinitionController {
     @GetMapping
     @Operation(summary = "获取字段列表", description = "根据表单ID获取字段定义列表")
     public R<List<FieldDefinition>> list(
-            @Parameter(description = "表单ID") @RequestParam Long formId) {
+            @Parameter(description = "表单ID") @RequestParam String formId) {
         List<FieldDefinition> list = fieldDefinitionService.getByFormId(formId);
         return R.data(list);
     }
@@ -123,11 +123,11 @@ public class FieldDefinitionController {
     public R<List<FieldDefinition>> getByFormId(
             @Parameter(description = "表单ID") @PathVariable String formId) {
         try {
-            Long billId = Long.parseLong(formId);
-            List<FieldDefinition> list = fieldDefinitionService.getByFormId(billId);
+            List<FieldDefinition> list = fieldDefinitionService.getByFormId(formId);
             return R.data(list);
-        } catch (NumberFormatException e) {
-            return R.fail("无效的表单ID");
+        } catch (Exception e) {
+            log.error("获取字段失败: formId={}", formId, e);
+            return R.fail("获取字段失败: " + e.getMessage());
         }
     }
 
@@ -140,11 +140,11 @@ public class FieldDefinitionController {
             @Parameter(description = "表单ID") @PathVariable String formId,
             @Parameter(description = "是否主表字段（1-主表，0-明细表）") @PathVariable Integer isMain) {
         try {
-            Long billId = Long.parseLong(formId);
-            List<FieldDefinition> list = fieldDefinitionService.getByFormIdAndIsMain(billId, isMain);
+            List<FieldDefinition> list = fieldDefinitionService.getByFormIdAndIsMain(formId, isMain);
             return R.data(list);
-        } catch (NumberFormatException e) {
-            return R.fail("无效的表单ID");
+        } catch (Exception e) {
+            log.error("获取字段失败: formId={}, isMain={}", formId, isMain, e);
+            return R.fail("获取字段失败: " + e.getMessage());
         }
     }
 }

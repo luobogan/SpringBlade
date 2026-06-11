@@ -30,7 +30,7 @@ public class FieldOption extends Model<FieldOption> {
 
     @TableField("formid")
     @Schema(name = "表单ID")
-    private Long formId;
+    private String formId;
 
     @TableField("optionvalue")
     @Schema(name = "选项值")

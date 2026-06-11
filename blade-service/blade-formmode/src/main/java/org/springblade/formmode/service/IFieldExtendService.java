@@ -19,7 +19,7 @@ public interface IFieldExtendService extends IService<FieldExtend> {
     /**
      * 根据表单ID获取扩展属性列表
      */
-    List<FieldExtend> getByFormId(Long formId);
+    List<FieldExtend> getByFormId(String formId);
 
     /**
      * 保存或更新字段扩展属性
@@ -41,5 +41,5 @@ public interface IFieldExtendService extends IService<FieldExtend> {
     /**
      * 根据表单ID逻辑删除扩展属性
      */
-    boolean deleteByFormIdLogical(Long formId);
+    boolean deleteByFormIdLogical(String formId);
 }

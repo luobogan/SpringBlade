@@ -31,7 +31,7 @@ public class FieldDefinition extends Model<FieldDefinition> {
 
     @TableField("billid")
     @Schema(name = "表单ID")
-    private Long billId;
+    private String billId;
 
     @TableField("fieldname")
     @Schema(name = "字段名称（数据库列名）")
@@ -156,6 +156,18 @@ public class FieldDefinition extends Model<FieldDefinition> {
     @TableField("needexcel")
     @Schema(name = "是否允许Excel导入（0否 1是）")
     private Integer needExcel;
+
+    @TableField("isreadonly")
+    @Schema(name = "是否只读（0否 1是）")
+    private Integer isReadOnly;
+
+    @TableField("issystemfield")
+    @Schema(name = "是否系统字段（0否 1是）")
+    private Integer isSystemField;
+
+    @TableField("listdisplay")
+    @Schema(name = "是否列表显示（0否 1是）")
+    private Integer listDisplay;
 
     // ==================== 逻辑删除字段 ====================
 

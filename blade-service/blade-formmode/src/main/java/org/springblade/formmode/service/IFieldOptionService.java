@@ -19,12 +19,12 @@ public interface IFieldOptionService extends IService<FieldOption> {
     /**
      * 根据表单ID获取选项列表（过滤逻辑删除）
      */
-    List<FieldOption> getByFormId(Long formId);
+    List<FieldOption> getByFormId(String formId);
 
     /**
      * 保存字段选项列表（先删除再插入，逻辑删除模式下使用更新）
      */
-    boolean saveOptions(Long fieldId, Long formId, List<FieldOption> options);
+    boolean saveOptions(Long fieldId, String formId, List<FieldOption> options);
 
     /**
      * 物理删除字段选项（根据字段ID，向后兼容）
@@ -40,7 +40,7 @@ public interface IFieldOptionService extends IService<FieldOption> {
     /**
      * 逻辑删除字段选项（根据表单ID）
      */
-    boolean deleteByFormIdLogical(Long formId);
+    boolean deleteByFormIdLogical(String formId);
 
     /**
      * 恢复已逻辑删除的选项

@@ -1,5 +1,6 @@
 package org.springblade.formmode.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.formmode.entity.FieldDefinition;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -130,23 +132,31 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
     // ==================== 表结构同步实现 ====================
 
     @Override
-    public Map<String, Object> syncTableStructure(Long billId, String tableName) {
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> syncTableStructure(String billId, String tableName) {
+        log.info("========== 同步表结构（从数据库获取字段定义）==========");
+        // 从数据库获取字段定义，然后调用带字段列表的方法
+        List<FieldDefinition> fields = getFieldDefinitionService().getByFormId(billId);
+        log.info("从数据库获取到 {} 个字段定义", fields.size());
+        return syncTableStructure(billId, tableName, fields);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> syncTableStructure(String billId, String tableName, List<FieldDefinition> fields) {
         Map<String, Object> result = new HashMap<>();
         List<String> warnings = new ArrayList<>();
         List<String> executedSql = new ArrayList<>();
 
         try {
-            log.info("========== 开始同步表结构 ==========");
+            log.info("========== 开始同步表结构（使用前端传入的字段定义）==========");
             log.info("billId: {}, tableName: {}", billId, tableName);
-
-            // 1. 获取表单的所有字段定义（排除已删除的）
-            List<FieldDefinition> fields = getFieldDefinitionService().getByFormId(billId);
-            log.info("获取到 {} 个字段定义", fields.size());
 
             // 打印字段信息
             for (FieldDefinition field : fields) {
-                log.info("字段: id={}, name={}, dbName={}, dbType={}",
-                    field.getId(), field.getFieldName(), field.getFieldDbName(), field.getFieldDbType());
+                log.info("字段: id={}, name={}, dbName={}, dbType={}, isMain={}, detailTable={}",
+                    field.getId(), field.getFieldName(), field.getFieldDbName(), field.getFieldDbType(),
+                    field.getIsMain(), field.getDetailTable());
             }
 
             // 2. 检查表是否存在数据
@@ -172,7 +182,13 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
             // 4. 如果不存在数据，直接执行删表和创建表操作，无需判断表是否存在
             // 同时删除字段定义
             log.info("========== 开始删除旧字段定义 ==========");
+            // 在删除前再次确认当前字段数量
+            int beforeDeleteCount = (int) getFieldDefinitionService().count(new LambdaQueryWrapper<FieldDefinition>().eq(FieldDefinition::getBillId, billId));
+            log.info("删除前字段数量: {}", beforeDeleteCount);
             deleteFieldDefinitionsByBillId(billId);
+            // 在删除后确认字段数量
+            int afterDeleteCount = (int) getFieldDefinitionService().count(new LambdaQueryWrapper<FieldDefinition>().eq(FieldDefinition::getBillId, billId));
+            log.info("删除后字段数量: {}", afterDeleteCount);
             log.info("========== 旧字段定义删除完成 ==========");
             log.info("表 {} 无数据，开始执行删表和建表操作", tableName);
 
@@ -190,32 +206,43 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                     // 明细表字段
                     detailFields.add(field);
                     Integer detailTable = field.getDetailTable();
-                    if (detailTable != null) {
-                        detailTableIndices.add(detailTable);
+                    // 如果 detailTable 为 null，设置默认值为 1
+                    if (detailTable == null) {
+                        detailTable = 1;
+                        field.setDetailTable(detailTable); // 更新字段对象中的值
+                        log.warn("明细表字段 {} 的 detailTable 为 null，已设置默认值为 1", field.getFieldName());
                     }
+                    log.info("明细表字段: fieldName={}, isMain={}, detailTable={}", field.getFieldName(), isMain, detailTable);
+                    detailTableIndices.add(detailTable);
                 }
             }
 
-            log.info("主表字段: {}, 明细表字段: {}, 明细表索引: {}", mainFields.size(), detailFields.size(), detailTableIndices);
+            log.info("主表字段: {}, 明细表字段: {}, 明细表索引集合: {}", mainFields.size(), detailFields.size(), detailTableIndices);
 
-            // 删除主表（如果存在）
+            // ========== 处理主表 ==========
+            // 2. 删除主表（如果存在）
+            log.info("========== 删除主表 {} ==========", tableName);
             dropTable(tableName);
             log.info("已删除主表（如果存在）: {}", tableName);
 
-            // 创建主表（只包含主表字段）
+            // 3. 创建主表（只包含主表字段）
+            log.info("========== 创建主表 {} ==========", tableName);
             createTableWithAllColumns(tableName, mainFields, executedSql, true);
             log.info("已创建主表（包含主表字段）: {}", tableName);
 
-            // 删除并创建明细表（如果有明细表字段）
+            // ========== 处理明细表（与主表一并处理）==========
             for (Integer detailIndex : detailTableIndices) {
                 // 使用 TableNameUtil 根据主表名称生成明细表名称
                 // 格式为：{主表名}_dt{索引}，例如：formtable_main_1_dt1, formtable_main_1_dt2
                 String detailTableName = TableNameUtil.getDetailTableName(tableName, detailIndex);
 
-                // 删除明细表（如果存在）
+                // 4. 删除明细表（如果存在）
+                log.info("========== 删除明细表 {} ==========", detailTableName);
                 dropTable(detailTableName);
                 log.info("已删除明细表 {}（如果存在）: {}", detailIndex, detailTableName);
 
+                // 5. 创建明细表（包含明细表字段）
+                log.info("========== 创建明细表 {} ==========", detailTableName);
                 List<FieldDefinition> currentDetailFields = detailFields.stream()
                         .filter(f -> detailIndex.equals(f.getDetailTable()))
                         .collect(Collectors.toList());
@@ -224,8 +251,23 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
             }
 
             // 6. 创建新字段定义（重新保存传入的字段列表）
+            // 使用Set去重，避免重复创建字段
+            Set<String> createdFieldNames = new HashSet<>();
             int createdFieldCount = 0;
+            int skippedDuplicateCount = 0;
+
             for (FieldDefinition field : fields) {
+                String fieldKey = field.getFieldName() + "_" + (field.getIsMain() != null ? field.getIsMain() : 1) + "_" + (field.getDetailTable() != null ? field.getDetailTable() : 0);
+
+                // 跳过重复字段
+                if (createdFieldNames.contains(fieldKey)) {
+                    log.warn("跳过重复字段定义: fieldName={}, isMain={}, detailTable={}",
+                        field.getFieldName(), field.getIsMain(), field.getDetailTable());
+                    skippedDuplicateCount++;
+                    continue;
+                }
+                createdFieldNames.add(fieldKey);
+
                 try {
                     // 重置ID为null，以便创建新记录
                     field.setId(null);
@@ -233,11 +275,13 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                     field.setStatus(1);
                     getFieldDefinitionService().save(field);
                     createdFieldCount++;
+                    log.info("创建字段定义成功: fieldName={}, isMain={}, detailTable={}",
+                        field.getFieldName(), field.getIsMain(), field.getDetailTable());
                 } catch (Exception e) {
                     log.warn("创建字段定义失败: fieldName={}, error={}", field.getFieldName(), e.getMessage());
                 }
             }
-            log.info("已重新创建 {} 个字段定义", createdFieldCount);
+            log.info("已重新创建 {} 个字段定义，跳过 {} 个重复字段", createdFieldCount, skippedDuplicateCount);
 
             result.put("success", true);
             result.put("msg", "数据库表同步成功");
@@ -295,9 +339,17 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                 columnName = field.getFieldName();
             }
 
-            // 跳过系统保留字段
-            if (isSystemColumn(columnName)) {
-                log.info("跳过系统保留字段: {}.{}", tableName, columnName);
+            // 如果字段名是中文，自动生成英文列名
+            if (isChinese(columnName)) {
+                String generatedName = generateEnglishColumnName(columnName, addedColumns.size() + 1);
+                log.info("字段名 {} 是中文，自动生成英文列名: {}", columnName, generatedName);
+                columnName = generatedName;
+            }
+
+            // 只跳过已经在表中定义的系统字段（如 id），其他系统字段允许用户自定义
+            // 这样用户可以添加 create_time, update_time, create_user, update_user, create_dept, tenant_id 等字段
+            if ("id".equals(columnName.toLowerCase())) {
+                log.info("跳过已存在的主键字段: {}.{}", tableName, columnName);
                 continue;
             }
 
@@ -310,6 +362,7 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
 
             String sqlType = getSqlType(field);
             sql.append("`").append(columnName).append("` ").append(sqlType).append(" DEFAULT NULL COMMENT '").append(field.getFieldName()).append("',");
+            log.info("添加字段到表: {}.{} ({})", tableName, columnName, sqlType);
         }
 
         // 添加主键
@@ -444,10 +497,55 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
     }
 
     /**
+     * 检查字符串是否包含中文
+     */
+    private boolean isChinese(String str) {
+        if (str == null || str.isEmpty()) {
+            return false;
+        }
+        for (char c : str.toCharArray()) {
+            if (Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 根据中文名称生成英文列名
+     */
+    private String generateEnglishColumnName(String chineseName, int index) {
+        // 移除特殊字符，只保留中文和字母数字
+        StringBuilder sb = new StringBuilder();
+        for (char c : chineseName.toCharArray()) {
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(c);
+            }
+        }
+
+        // 如果处理后为空，使用默认名称
+        String result = sb.toString();
+        if (result.isEmpty()) {
+            result = "field_" + index;
+        } else {
+            // 如果开头是数字，添加前缀
+            if (Character.isDigit(result.charAt(0))) {
+                result = "field_" + result;
+            }
+            // 确保长度不超过64个字符（MySQL列名最大长度）
+            if (result.length() > 60) {
+                result = result.substring(0, 60);
+            }
+        }
+
+        return result.toLowerCase();
+    }
+
+    /**
      * 删除指定表单的所有字段定义
      * 用于同步表结构时清空旧的字段定义
      */
-    private void deleteFieldDefinitionsByBillId(Long billId) {
+    private void deleteFieldDefinitionsByBillId(String billId) {
         log.info("[deleteFieldDefinitionsByBillId] 开始删除表单 {} 的所有字段定义", billId);
         try {
             // 使用新的高效批量删除方法，直接根据表单ID删除，不需要先查询

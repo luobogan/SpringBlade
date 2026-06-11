@@ -30,7 +30,7 @@ public class FieldExtend extends Model<FieldExtend> {
 
     @TableField("formid")
     @Schema(name = "表单ID")
-    private Long formId;
+    private String formId;
 
     @TableField("expendattr")
     @Schema(name = "扩展属性（JSON格式）")

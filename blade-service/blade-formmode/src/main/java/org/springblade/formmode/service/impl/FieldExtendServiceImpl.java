@@ -29,7 +29,7 @@ public class FieldExtendServiceImpl extends ServiceImpl<FieldExtendMapper, Field
     }
 
     @Override
-    public List<FieldExtend> getByFormId(Long formId) {
+    public List<FieldExtend> getByFormId(String formId) {
         LambdaQueryWrapper<FieldExtend> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldExtend::getFormId, formId);
         // 过滤逻辑删除的记录
@@ -77,7 +77,7 @@ public class FieldExtendServiceImpl extends ServiceImpl<FieldExtendMapper, Field
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean deleteByFormIdLogical(Long formId) {
+    public boolean deleteByFormIdLogical(String formId) {
         // 逻辑删除：按表单ID批量逻辑删除
         LambdaQueryWrapper<FieldExtend> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldExtend::getFormId, formId);

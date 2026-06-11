@@ -38,7 +38,7 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     // ==================== 查询方法 ====================
 
     @Override
-    public List<FieldDefinition> getByFormId(Long billId) {
+    public List<FieldDefinition> getByFormId(String billId) {
         LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldDefinition::getBillId, billId);
         // 过滤逻辑删除的字段：is_deleted != 1 且 status != -1
@@ -55,7 +55,7 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     }
 
     @Override
-    public List<FieldDefinition> getByFormIdIncludeDeleted(Long billId) {
+    public List<FieldDefinition> getByFormIdIncludeDeleted(String billId) {
         // 包含所有字段（用于管理后台）
         LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldDefinition::getBillId, billId);
@@ -64,7 +64,7 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     }
 
     @Override
-    public List<FieldDefinition> getByFormIdAndIsMain(Long billId, Integer isMain) {
+    public List<FieldDefinition> getByFormIdAndIsMain(String billId, Integer isMain) {
         LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldDefinition::getBillId, billId);
         wrapper.eq(FieldDefinition::getIsMain, isMain);
@@ -352,12 +352,12 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     }
 
     /**
-     * 根据表单ID批量逻辑删除字段定义
-     * 直接使用 update 语句更新所有字段，不需要先查询再删除，效率更高
+     * 根据表单ID批量物理删除字段定义
+     * 直接使用 delete 语句删除所有字段，不需要先查询再删除，效率更高
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public int deleteByFormIdLogical(Long billId) {
+    public int deleteByFormIdLogical(String billId) {
         if (billId == null) {
             return 0;
         }
@@ -372,20 +372,18 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
             return 0;
         }
 
-        // 2. 逻辑删除字段定义（设置 is_deleted=1, status=-1）
-        LambdaUpdateWrapper<FieldDefinition> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(FieldDefinition::getBillId, billId);
-        updateWrapper.set(FieldDefinition::getIsDeleted, 1);
-        updateWrapper.set(FieldDefinition::getStatus, -1);
-        this.update(updateWrapper);
+        // 2. 物理删除字段定义（直接从数据库删除）
+        LambdaQueryWrapper<FieldDefinition> deleteWrapper = new LambdaQueryWrapper<>();
+        deleteWrapper.eq(FieldDefinition::getBillId, billId);
+        this.remove(deleteWrapper);
 
-        // 3. 删除关联的扩展属性
+        // 3. 物理删除关联的扩展属性
         fieldExtendService.deleteByFormIdLogical(billId);
 
-        // 4. 删除关联的选项数据
+        // 4. 物理删除关联的选项数据
         fieldOptionService.deleteByFormIdLogical(billId);
 
-        log.info("已成功删除表单 {} 的 {} 个字段定义", billId, count);
+        log.info("已成功物理删除表单 {} 的 {} 个字段定义", billId, count);
         return count;
     }
 
@@ -394,7 +392,7 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     /**
      * 根据表单ID获取配置的表名
      */
-    private String getTableName(Long billId) {
+    private String getTableName(String billId) {
         try {
             WorkflowBill workflowBill = workflowBillService.getById(billId);
             if (workflowBill != null && workflowBill.getTableName() != null) {

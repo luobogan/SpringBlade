@@ -30,7 +30,7 @@ public class FieldOptionServiceImpl extends ServiceImpl<FieldOptionMapper, Field
     }
 
     @Override
-    public List<FieldOption> getByFormId(Long formId) {
+    public List<FieldOption> getByFormId(String formId) {
         LambdaQueryWrapper<FieldOption> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldOption::getFormId, formId);
         // 过滤逻辑删除的记录
@@ -42,7 +42,7 @@ public class FieldOptionServiceImpl extends ServiceImpl<FieldOptionMapper, Field
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean saveOptions(Long fieldId, Long formId, List<FieldOption> options) {
+    public boolean saveOptions(Long fieldId, String formId, List<FieldOption> options) {
         // 1. 逻辑删除该字段的所有旧选项
         LambdaQueryWrapper<FieldOption> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldOption::getFieldId, fieldId);
@@ -96,7 +96,7 @@ public class FieldOptionServiceImpl extends ServiceImpl<FieldOptionMapper, Field
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean deleteByFormIdLogical(Long formId) {
+    public boolean deleteByFormIdLogical(String formId) {
         // 逻辑删除：按表单ID批量逻辑删除
         LambdaQueryWrapper<FieldOption> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(FieldOption::getFormId, formId);
