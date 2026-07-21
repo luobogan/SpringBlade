@@ -22,7 +22,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DateUtil;
 import org.springblade.system.service.IUserService;
-import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
 import org.springblade.system.user.feign.IUserClient;

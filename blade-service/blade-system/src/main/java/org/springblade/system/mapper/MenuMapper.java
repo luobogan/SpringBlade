@@ -35,31 +35,32 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 自定义分页
 	 *
-	 * @param page
-	 * @param menu
-	 * @return
+	 * @param page  分页参数
+	 * @param menu  菜单查询条件
+	 * @return 菜单分页数据
 	 */
 	List<MenuVO> selectMenuPage(IPage page, MenuVO menu);
 
 	/**
 	 * 懒加载菜单列表
 	 *
-	 * @param parentId
-	 * @param param
-	 * @return
+	 * @param parentId 父级菜单ID
+	 * @param param    查询参数
+	 * @return 菜单列表
 	 */
 	List<MenuVO> lazyMenuList(Long parentId, Map<String, Object> param);
 
 	/**
 	 * 树形结构
 	 *
-	 * @return
+	 * @return 菜单树形结构
 	 */
 	List<MenuVO> tree();
 
 	/**
 	 * 授权树形结构
 	 *
+	 * @return 菜单授权树形结构
 	 * @param tenantId
 	 * @return
 	 */
@@ -68,6 +69,8 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 授权树形结构
 	 *
+	 * @param roleId 角色ID集合
+	 * @return 菜单授权树形结构
 	 * @param tenantId
 	 * @param roleId
 	 * @return
@@ -77,6 +80,7 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 数据权限授权树形结构
 	 *
+	 * @return 数据权限授权树形结构
 	 * @param tenantId
 	 * @return
 	 */
@@ -85,6 +89,8 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 数据权限授权树形结构
 	 *
+	 * @param roleId 角色ID集合
+	 * @return 数据权限授权树形结构
 	 * @param tenantId
 	 * @param roleId
 	 * @return
@@ -94,6 +100,7 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 接口权限授权树形结构
 	 *
+	 * @return 接口权限授权树形结构
 	 * @param tenantId
 	 * @return
 	 */
@@ -102,6 +109,8 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 接口权限授权树形结构
 	 *
+	 * @param roleId 角色ID集合
+	 * @return 接口权限授权树形结构
 	 * @param tenantId
 	 * @param roleId
 	 * @return
@@ -111,6 +120,7 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 顶部菜单树形结构
 	 *
+	 * @return 顶部菜单树形结构
 	 * @param tenantId
 	 * @return
 	 */
@@ -119,6 +129,8 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 顶部菜单树形结构
 	 *
+	 * @param roleId 角色ID集合
+	 * @return 顶部菜单树形结构
 	 * @param tenantId
 	 * @param roleId
 	 * @return
@@ -128,36 +140,39 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 所有菜单
 	 *
-	 * @return
+	 * @return 全部菜单集合
 	 */
 	List<Menu> allMenu();
 
 	/**
 	 * 权限配置菜单
 	 *
-	 * @param roleId
-	 * @return
+	 * @param roleId 角色ID集合
+	 * @return 角色配置的菜单集合
 	 */
 	List<Menu> roleMenu(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 菜单树形结构
 	 *
-	 * @param roleId
-	 * @return
+	 * @param roleId 角色ID集合
+	 * @return 角色路由菜单集合
 	 */
 	List<Menu> routes(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 按钮树形结构
 	 *
-	 * @param roleId
-	 * @return
+	 * @param roleId 角色ID集合
+	 * @return 角色按钮菜单集合
 	 */
 	List<Menu> buttons(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 获取配置的角色权限
+	 *
+	 * @param roleIds 角色ID集合
+	 * @return 角色权限路由集合
 	 * @param roleIds
 	 * @return
 	 */
@@ -166,16 +181,16 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 根据角色ID获取角色菜单
 	 *
-	 * @param roleId
-	 * @return
+	 * @param roleId 角色ID集合
+	 * @return 角色菜单集合
 	 */
 	List<Menu> roleMenuByRoleId(@Param("roleId") List<Long> roleId);
 
 	/**
 	 * 根据顶部菜单ID获取菜单
 	 *
-	 * @param topMenuId
-	 * @return
+	 * @param topMenuId 顶部菜单ID
+	 * @return 顶部菜单关联的菜单集合
 	 */
 	List<Menu> roleMenuByTopMenuId(Long topMenuId);
 }

@@ -20,6 +20,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.AllArgsConstructor;
 import org.springblade.core.mp.base.BaseService;
+import org.springblade.core.cache.utils.CacheUtil;
 import org.springblade.core.mp.base.BaseServiceImpl;
 import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
@@ -27,16 +28,22 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tenant.TenantId;
 import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.constant.BladeConstant;
-import org.springblade.core.tool.utils.DigestUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.system.entity.*;
 import org.springblade.system.mapper.DeptMapper;
 import org.springblade.system.mapper.RoleMapper;
 import org.springblade.system.mapper.RoleMenuMapper;
+import org.springblade.system.entity.Dept;
+import org.springblade.system.entity.Post;
+import org.springblade.system.entity.Role;
+import org.springblade.system.entity.Tenant;
 import org.springblade.system.mapper.TenantMapper;
 import org.springblade.system.mapper.UserMapper;
+import org.springblade.system.service.IDeptService;
 import org.springblade.system.service.IPostService;
+import org.springblade.system.service.IRoleService;
 import org.springblade.system.service.ITenantService;
+import org.springblade.system.service.IUserService;
 import org.springblade.system.user.entity.User;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -76,11 +83,12 @@ public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> imp
 	// }
 
 	private final TenantId tenantId;
-	private final RoleMapper roleMapper;
-	private final DeptMapper deptMapper;
+	private final IRoleService roleService;
+	private final IDeptService deptService;
 	private final IPostService postService;
 	private final UserMapper userMapper;
 	private final RoleMenuMapper roleMenuMapper;
+	private final IUserService userService;
 
 	@Override
 	public IPage<Tenant> selectTenantPage(IPage<Tenant> page, Tenant tenant) {
@@ -135,8 +143,69 @@ public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> imp
 			});
 		}
 		return super.saveOrUpdate(tenant);
+			// 新建租户对应的默认角色
+			Role role = new Role();
+			role.setTenantId(tenantId);
+			role.setParentId(0L);
+			role.setRoleName("管理员");
+			role.setRoleAlias("admin");
+			role.setSort(2);
+			role.setIsDeleted(0);
+			roleService.save(role);
+			// 新建租户对应的默认部门
+			Dept dept = new Dept();
+			dept.setTenantId(tenantId);
+			dept.setParentId(0L);
+			dept.setDeptName(tenant.getTenantName());
+			dept.setFullName(tenant.getTenantName());
+			dept.setSort(2);
+			dept.setIsDeleted(0);
+			deptService.save(dept);
+			// 新建租户对应的默认岗位
+			Post post = new Post();
+			post.setTenantId(tenantId);
+			post.setCategory(1);
+			post.setPostCode("ceo");
+			post.setPostName("首席执行官");
+			post.setSort(1);
+			postService.save(post);
+			// 新建租户对应的默认管理用户
+			User user = new User();
+			user.setTenantId(tenantId);
+			user.setName("admin");
+			user.setRealName("admin");
+			user.setAccount("admin");
+			user.setPassword("admin");
+			user.setRoleId(String.valueOf(role.getId()));
+			user.setDeptId(String.valueOf(dept.getId()));
+			user.setPostId(String.valueOf(post.getId()));
+			user.setBirthday(new Date());
+			user.setSex(1);
+			user.setIsDeleted(BladeConstant.DB_NOT_DELETED);
+			boolean temp = super.saveOrUpdate(tenant);
+			boolean result = userService.submit(user);
+			return temp && result;
+		}
+		boolean tenantResult = super.saveOrUpdate(tenant);
+		// 租户信息变更后清理系统缓存，保证 SysCache 中的租户数据一致性
+		CacheUtil.clear(CacheUtil.SYS_CACHE);
+		return tenantResult;
 	}
 
+	@Override
+	public boolean removeTenant(List<Long> ids) {
+		boolean result = deleteLogic(ids);
+		// 租户删除后清理系统缓存，避免 SysCache 中残留已删除租户导致游客注册等场景误放行
+		CacheUtil.clear(CacheUtil.SYS_CACHE);
+		return result;
+	}
+
+	/**
+	 * 生成不与已有集合冲突的租户编号
+	 *
+	 * @param codes 已存在的租户编号集合，用于排重
+	 * @return 未被占用的租户编号
+	 */
 	private String getTenantId(List<String> codes) {
 		String code = tenantId.generate();
 		if (codes.contains(code)) {

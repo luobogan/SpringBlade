@@ -25,7 +25,7 @@
 ### 模式A：TenantEntity（多租户业务表，默认）
 
 ```java
-package org.springblade.{module}.entity;
+package org.springblade.modules.{module}.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonFormat;
@@ -98,7 +98,7 @@ public class {Name} extends TenantEntity {
 ### 模式B：BaseEntity（跨租户业务表）
 
 ```java
-package org.springblade.{module}.entity;
+package org.springblade.modules.{module}.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -127,7 +127,7 @@ public class {Name} extends BaseEntity {
 ### 模式C：Raw Serializable（原生模式）
 
 ```java
-package org.springblade.{module}.entity;
+package org.springblade.modules.{module}.entity;
 
 import com.baomidou.mybatisplus.annotation.*;
 import com.fasterxml.jackson.annotation.JsonFormat;
@@ -206,7 +206,7 @@ public class {Name} implements Serializable {
 Cloud 中 Entity 放在 API 模块，包名不同：
 ```java
 // Boot
-package org.springblade.{module}.entity;
+package org.springblade.modules.{module}.entity;
 
 // Cloud
 package org.springblade.{module}.entity;
@@ -221,11 +221,11 @@ package org.springblade.{module}.entity;
 ### 标准 DTO（继承 Entity）
 
 ```java
-package org.springblade.{module}.dto;
+package org.springblade.modules.{module}.dto;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.springblade.{module}.entity.{Name};
+import org.springblade.modules.{module}.entity.{Name};
 
 /**
  * {中文名}数据传输对象
@@ -243,7 +243,7 @@ public class {Name}DTO extends {Name} {
 ### 精简 DTO（仅特定字段）
 
 ```java
-package org.springblade.{module}.dto;
+package org.springblade.modules.{module}.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -270,12 +270,12 @@ public class {Name}DTO implements Serializable {
 ### 标准 VO（简单扩展）
 
 ```java
-package org.springblade.{module}.vo;
+package org.springblade.modules.{module}.vo;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import org.springblade.{module}.entity.{Name};
+import org.springblade.modules.{module}.entity.{Name};
 
 /**
  * {中文名}视图对象
@@ -301,7 +301,7 @@ public class {Name}VO extends {Name} {
 用于 Menu、Dict、Dept 等树形结构：
 
 ```java
-package org.springblade.{module}.vo;
+package org.springblade.modules.{module}.vo;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
@@ -310,7 +310,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.springblade.core.tool.node.INode;
-import org.springblade.{module}.entity.{Name};
+import org.springblade.modules.{module}.entity.{Name};
 
 import java.util.ArrayList;
 import java.util.List;
@@ -357,7 +357,7 @@ public class {Name}VO extends {Name} implements INode<{Name}VO> {
 ## 四、Excel 导出类
 
 ```java
-package org.springblade.{module}.excel;
+package org.springblade.modules.{module}.excel;
 
 import cn.idev.excel.annotation.ExcelProperty;
 import cn.idev.excel.annotation.write.style.ColumnWidth;
@@ -392,15 +392,15 @@ public class {Name}Excel implements Serializable {
 ## 五、Mapper 接口
 
 ```java
-package org.springblade.{module}.mapper;
+package org.springblade.modules.{module}.mapper;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.apache.ibatis.annotations.Param;
-import org.springblade.{module}.entity.{Name};
-import org.springblade.{module}.excel.{Name}Excel;
-import org.springblade.{module}.vo.{Name}VO;
+import org.springblade.modules.{module}.entity.{Name};
+import org.springblade.modules.{module}.excel.{Name}Excel;
+import org.springblade.modules.{module}.vo.{Name}VO;
 
 import java.util.List;
 
@@ -440,10 +440,10 @@ public interface {Name}Mapper extends BaseMapper<{Name}> {
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="org.springblade.{module}.mapper.{Name}Mapper">
+<mapper namespace="org.springblade.modules.{module}.mapper.{Name}Mapper">
 
     <!-- 通用查询映射结果 -->
-    <resultMap id="{modelCode}ResultMap" type="org.springblade.{module}.entity.{Name}">
+    <resultMap id="{modelCode}ResultMap" type="org.springblade.modules.{module}.entity.{Name}">
         <result column="id" property="id"/>
         <!-- 每个业务字段一行映射 -->
         <result column="{column_name}" property="{fieldName}"/>
@@ -479,7 +479,7 @@ public interface {Name}Mapper extends BaseMapper<{Name}> {
     </select>
 
     <!-- 导出查询 -->
-    <select id="export{Name}" resultType="org.springblade.{module}.excel.{Name}Excel">
+    <select id="export{Name}" resultType="org.springblade.modules.{module}.excel.{Name}Excel">
         SELECT * FROM blade_{table_name}
         ${ew.customSqlSegment}
     </select>
@@ -500,12 +500,12 @@ public interface {Name}Mapper extends BaseMapper<{Name}> {
 ### TenantEntity / BaseEntity 模式
 
 ```java
-package org.springblade.{module}.service;
+package org.springblade.modules.{module}.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.core.mp.base.BaseService;
-import org.springblade.{module}.entity.{Name};
-import org.springblade.{module}.vo.{Name}VO;
+import org.springblade.modules.{module}.entity.{Name};
+import org.springblade.modules.{module}.vo.{Name}VO;
 
 /**
  * {中文名} 服务接口
@@ -524,10 +524,10 @@ public interface I{Name}Service extends BaseService<{Name}> {
 ### Raw Serializable 模式
 
 ```java
-package org.springblade.{module}.service;
+package org.springblade.modules.{module}.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
-import org.springblade.{module}.entity.{Name};
+import com.baomidou.mybatisplus.spring.service.IService;
+import org.springblade.modules.{module}.entity.{Name};
 
 /**
  * {中文名} 服务接口
@@ -545,15 +545,15 @@ public interface I{Name}Service extends IService<{Name}> {
 ### TenantEntity / BaseEntity 模式
 
 ```java
-package org.springblade.{module}.service.impl;
+package org.springblade.modules.{module}.service.impl;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.core.mp.base.BaseServiceImpl;
 import org.springblade.core.secure.utils.AuthUtil;
-import org.springblade.{module}.entity.{Name};
-import org.springblade.{module}.mapper.{Name}Mapper;
-import org.springblade.{module}.service.I{Name}Service;
-import org.springblade.{module}.vo.{Name}VO;
+import org.springblade.modules.{module}.entity.{Name};
+import org.springblade.modules.{module}.mapper.{Name}Mapper;
+import org.springblade.modules.{module}.service.I{Name}Service;
+import org.springblade.modules.{module}.vo.{Name}VO;
 import org.springframework.stereotype.Service;
 
 /**
@@ -577,12 +577,12 @@ public class {Name}ServiceImpl extends BaseServiceImpl<{Name}Mapper, {Name}> imp
 ### Raw Serializable 模式
 
 ```java
-package org.springblade.{module}.service.impl;
+package org.springblade.modules.{module}.service.impl;
 
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import org.springblade.{module}.entity.{Name};
-import org.springblade.{module}.mapper.{Name}Mapper;
-import org.springblade.{module}.service.I{Name}Service;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
+import org.springblade.modules.{module}.entity.{Name};
+import org.springblade.modules.{module}.mapper.{Name}Mapper;
+import org.springblade.modules.{module}.service.I{Name}Service;
 import org.springframework.stereotype.Service;
 
 /**
@@ -602,10 +602,9 @@ public class {Name}ServiceImpl extends ServiceImpl<{Name}Mapper, {Name}> impleme
 ### Boot 版本
 
 ```java
-package org.springblade.{module}.controller;
+package org.springblade.modules.{module}.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -616,13 +615,14 @@ import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
 import org.springblade.core.secure.annotation.PreAuth;
+import org.springblade.core.swagger.annotation.ApiOrder;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.Func;
-import org.springblade.{module}.entity.{Name};
-import org.springblade.{module}.service.I{Name}Service;
-import org.springblade.{module}.vo.{Name}VO;
-import org.springblade.{module}.wrapper.{Name}Wrapper;
+import org.springblade.modules.{module}.entity.{Name};
+import org.springblade.modules.{module}.service.I{Name}Service;
+import org.springblade.modules.{module}.vo.{Name}VO;
+import org.springblade.modules.{module}.wrapper.{Name}Wrapper;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -644,7 +644,7 @@ public class {Name}Controller extends BladeController {
      * 详情
      */
     @GetMapping("/detail")
-    @ApiOperationSupport(order = 1)
+    @ApiOrder(1)
     @Operation(summary = "详情", description = "传入{modelCode}")
     public R<{Name}VO> detail({Name} {modelCode}) {
         {Name} detail = {modelCode}Service.getOne(Condition.getQueryWrapper({modelCode}));
@@ -655,7 +655,7 @@ public class {Name}Controller extends BladeController {
      * 分页列表
      */
     @GetMapping("/list")
-    @ApiOperationSupport(order = 2)
+    @ApiOrder(2)
     @Operation(summary = "分页", description = "传入{modelCode}")
     @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
     public R<IPage<{Name}VO>> list(@RequestParam Map<String, Object> {modelCode}, Query query) {
@@ -670,7 +670,7 @@ public class {Name}Controller extends BladeController {
      * 自定义分页
      */
     @GetMapping("/page")
-    @ApiOperationSupport(order = 3)
+    @ApiOrder(3)
     @Operation(summary = "自定义分页", description = "传入{modelCode}")
     public R<IPage<{Name}VO>> page({Name}VO {modelCode}, Query query) {
         IPage<{Name}VO> pages = {modelCode}Service.select{Name}Page(Condition.getPage(query), {modelCode});
@@ -681,7 +681,7 @@ public class {Name}Controller extends BladeController {
      * 新增
      */
     @PostMapping("/save")
-    @ApiOperationSupport(order = 4)
+    @ApiOrder(4)
     @Operation(summary = "新增", description = "传入{modelCode}")
     public R save(@Valid @RequestBody {Name} {modelCode}) {
         return R.status({modelCode}Service.save({modelCode}));
@@ -691,7 +691,7 @@ public class {Name}Controller extends BladeController {
      * 修改
      */
     @PostMapping("/update")
-    @ApiOperationSupport(order = 5)
+    @ApiOrder(5)
     @Operation(summary = "修改", description = "传入{modelCode}")
     public R update(@Valid @RequestBody {Name} {modelCode}) {
         return R.status({modelCode}Service.updateById({modelCode}));
@@ -701,7 +701,7 @@ public class {Name}Controller extends BladeController {
      * 新增或修改
      */
     @PostMapping("/submit")
-    @ApiOperationSupport(order = 6)
+    @ApiOrder(6)
     @Operation(summary = "新增或修改", description = "传入{modelCode}")
     public R submit(@Valid @RequestBody {Name} {modelCode}) {
         return R.status({modelCode}Service.saveOrUpdate({modelCode}));
@@ -711,7 +711,7 @@ public class {Name}Controller extends BladeController {
      * 删除
      */
     @PostMapping("/remove")
-    @ApiOperationSupport(order = 7)
+    @ApiOrder(7)
     @Operation(summary = "逻辑删除", description = "传入ids")
     public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
         return R.status({modelCode}Service.deleteLogic(Func.toLongList(ids)));
@@ -761,7 +761,7 @@ public R<IPage<{Name}>> list(@RequestParam Map<String, Object> {modelCode}, Quer
 
 ```java
 @PostMapping("/remove")
-@ApiOperationSupport(order = 7)
+@ApiOrder(7)
 @Operation(summary = "删除", description = "传入ids")
 public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
     return R.status({modelCode}Service.removeBatchByIds(Func.toLongList(ids)));
@@ -783,7 +783,7 @@ SpringBlade 开源版仅支持角色级权限：
 
 ```java
 @GetMapping("/export-{modelCode}")
-@ApiOperationSupport(order = 8)
+@ApiOrder(8)
 @Operation(summary = "导出数据", description = "传入{modelCode}")
 @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 public void export{Name}(@RequestParam Map<String, Object> {modelCode}, HttpServletResponse response) {
@@ -798,13 +798,13 @@ public void export{Name}(@RequestParam Map<String, Object> {modelCode}, HttpServ
 ## 十、Wrapper 数据转换器
 
 ```java
-package org.springblade.{module}.wrapper;
+package org.springblade.modules.{module}.wrapper;
 
 import org.springblade.core.mp.support.BaseEntityWrapper;
 import org.springblade.core.tool.utils.BeanUtil;
-import org.springblade.system.cache.DictCache;
-import org.springblade.{module}.entity.{Name};
-import org.springblade.{module}.vo.{Name}VO;
+import org.springblade.modules.system.cache.DictCache;
+import org.springblade.modules.{module}.entity.{Name};
+import org.springblade.modules.{module}.vo.{Name}VO;
 
 /**
  * {中文名}包装类，返回视图层所需的字段
@@ -967,7 +967,6 @@ import org.springframework.format.annotation.DateTimeFormat;
 ### Controller 常用 import
 ```java
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -978,6 +977,7 @@ import org.springblade.core.launch.constant.AppConstant;      // Boot 路由前�
 import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
 import org.springblade.core.secure.annotation.PreAuth;
+import org.springblade.core.swagger.annotation.ApiOrder;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.Func;
@@ -1000,5 +1000,5 @@ import org.springblade.core.tool.constant.BladeConstant;
 import org.springblade.core.tool.node.ForestNodeMerger;
 import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
-import org.springblade.system.cache.DictCache;        // 字典缓存（Boot 路径）
+import org.springblade.modules.system.cache.DictCache;        // 字典缓存（Boot 路径）
 ```

@@ -35,7 +35,6 @@ public class AuthProvider {
 		DEFAULT_SKIP_URL.add("/token/**");
 		DEFAULT_SKIP_URL.add("/captcha/**");
 		DEFAULT_SKIP_URL.add("/actuator/health/**");
-		DEFAULT_SKIP_URL.add("/v3/api-docs/**");
 		DEFAULT_SKIP_URL.add("/auth/**");
 		DEFAULT_SKIP_URL.add("/oauth/**");
 		DEFAULT_SKIP_URL.add("/log/**");
@@ -51,6 +50,10 @@ public class AuthProvider {
 		DEFAULT_SKIP_URL.add("/blade-mall/auth/**");
 		DEFAULT_SKIP_URL.add("/blade-mall/file/download/**");
 		DEFAULT_SKIP_URL.add("/file/download/**");
+		DEFAULT_SKIP_URL.add("/v3/api-docs/**");
+		DEFAULT_SKIP_URL.add("/*/v3/api-docs/**");
+		DEFAULT_SKIP_URL.add("/swagger-ui/**");
+		DEFAULT_SKIP_URL.add("/swagger-ui.html");
 	}
 
 	/**

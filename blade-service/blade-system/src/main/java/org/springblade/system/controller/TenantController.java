@@ -33,6 +33,7 @@ import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.secure.annotation.PreAuth;
+import org.springblade.core.swagger.annotation.ApiOrder;
 import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.constant.BladeConstant;
@@ -76,6 +77,7 @@ import static org.springblade.core.cache.utils.CacheUtil.SYS_CACHE;
 @AllArgsConstructor
 @RequestMapping("/tenant")
 @Hidden
+@ApiOrder
 @Tag(name = "租户管理", description = "接口")
 public class TenantController extends BladeController {
 
@@ -152,7 +154,7 @@ public class TenantController extends BladeController {
 	@Operation(summary = "逻辑删除", description = "传入ids")
 	@PreAuth(RoleConstant.HAS_ROLE_ADMINISTRATOR)
 	public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
-		return R.status(tenantService.deleteLogic(Func.toLongList(ids)));
+		return R.status(tenantService.removeTenant(Func.toLongList(ids)));
 	}
 
 	/**
