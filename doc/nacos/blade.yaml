@@ -39,6 +39,12 @@ spring:
             - Path=/blade-pay/**
           filters:
             - StripPrefix=1
+        - id: blade-formmode
+          uri: lb://blade-formmode
+          predicates:
+            - Path=/blade-formmode/**
+          filters:
+            - StripPrefix=1
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
@@ -98,8 +104,34 @@ swagger:
     email: bladejava@qq.com
     url: https://gitee.com/smallc
 
-#blade配置
+#MyBatis Plus配置
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*Mapper.xml
+  type-aliases-package: org.springblade.formmode.entity
+  global-config:
+    banner: false
+    db-config:
+      id-type: ASSIGN_ID
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    jdbc-type-for-null: 'null'
+
+#Blade配置
 blade:
+  datasource:
+    dev:
+      url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
+    order:
+      url: jdbc:mysql://localhost:3306/blade_order?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
+    pay:
+      url: jdbc:mysql://localhost:3306/blade_pay?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
   upload-path: d:\workproject\springbladeandreact\springBlade\uploads
 
   # =============================================
@@ -151,6 +183,7 @@ blade:
     enabled: true
     skip-url:
       - /weixin
+      - /api/blade-formmode/form/data/save
   secure:
     skip-url:
       - /test/**
@@ -163,6 +196,8 @@ blade:
       - /front/**
       - /uploads/**
       - /auth/**
+      - /api/blade-formmode/form/data/save
+      - /api/blade-formmode/browser/**
     client:
       - client-id: sword
         path-patterns:
@@ -178,6 +213,15 @@ blade:
     auto: true
     tables:
       - blade_notice
+      - modeinfo
+      - workflow_bill
+      - workflow_billfield
+      - moderightinfo
+      - mode_browser
+      - mode_customsearch
+      - mode_customtree
+      - mode_triggerworkflowset
+      - mode_workflowtomodeset
     # 排除多租户的数据表 — 这些表虽然实体继承 TenantEntity，但实际是全局共享的
     # blade_menu: 菜单表，所有租户共享同一套菜单结构
     # blade_role_menu: 角色-菜单关联表
