@@ -17,9 +17,7 @@ package org.springblade.gateway.provider;
 
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.http.server.reactive.ServerHttpRequest;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
 import java.util.LinkedHashSet;
@@ -34,17 +32,17 @@ public class RequestProvider {
 	/**
 	 * 获取原始请求路径
 	 * <p>
-	 * 网关会通过 StripPrefix 裁剪服务名前缀，此处取裁剪前的原始路径，供路径规则判定使用。
+	 * 取裁剪服务名前缀之前的路径，避免路径判定依赖裁剪结果。返回未解码的 rawPath 且不含查询串，
+	 * 解码与归一化交由判定方按自身语义处理，此处不做加工。
 	 *
 	 * @param exchange 当前请求上下文
-	 * @return 原始请求路径
+	 * @return 原始请求路径（未解码，不含查询串）
 	 */
-	public static String getOriginalRequestUrl(ServerWebExchange exchange) {
+	public static String getOriginalRequestPath(ServerWebExchange exchange) {
 		ServerHttpRequest request = exchange.getRequest();
 		LinkedHashSet<URI> uris = exchange.getRequiredAttribute(ServerWebExchangeUtils.GATEWAY_ORIGINAL_REQUEST_URL_ATTR);
 		URI requestUri = uris.stream().findFirst().orElse(request.getURI());
-		MultiValueMap<String, String> queryParams = request.getQueryParams();
-		return UriComponentsBuilder.fromPath(requestUri.getRawPath()).queryParams(queryParams).build().toUriString();
+		return requestUri.getRawPath();
 	}
 
 }

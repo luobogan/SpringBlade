@@ -28,7 +28,7 @@ blade-design
 
 ### Boot 单体架构
 - 所有代码在同一模块内
-- 包名：`org.springblade.{module}`
+- 包名：`org.springblade.modules.{module}`
 - Controller 路由含服务名前缀：`AppConstant.APPLICATION_XXX_NAME + "/path"`
 - 无 Feign Client
 
@@ -113,7 +113,7 @@ blade-design/
 
 | 维度 | Boot | Cloud |
 |------|------|-------|
-| 基础包名 | `org.springblade.{module}` | `org.springblade.{module}` |
+| 基础包名 | `org.springblade.modules.{module}` | `org.springblade.{module}` |
 | Controller 路由 | `AppConstant.APPLICATION_XXX_NAME + "/path"` | `"/path"` |
 | Entity 位置 | 同模块 | API 模块 |
 | 服务间调用 | 直接注入 | Feign Client |
@@ -127,7 +127,7 @@ blade-design/
 1. Long 类型 ID 必须 `@JsonSerialize(using = ToStringSerializer.class)` 防精度丢失
 2. Date 字段同时添加 `@DateTimeFormat` 和 `@JsonFormat`
 3. 逻辑删除字段 `isDeleted` 添加 `@TableLogic`（基类自动处理）
-4. Swagger 使用 OpenAPI 3 注解（`@Tag`/`@Operation`/`@Schema`/`@Parameter`），接口排序用 `@ApiOrder(n)`
+4. Swagger 使用 OpenAPI 3 注解（`@Tag`/`@Operation`/`@Schema`/`@Parameter`），控制器类级标注无参 `@ApiOrder` 排序
 5. 响应统一使用 `R<T>` 包装
 6. Wrapper 中通过 `DictCache.getValue()` 翻译字典字段
 7. 前端权限标识格式：`{modelCode}_{action}`

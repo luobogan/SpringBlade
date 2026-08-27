@@ -42,17 +42,17 @@ public interface LauncherConstant {
 	/**
 	 * sentinel dev 地址
 	 */
-	String SENTINEL_DEV_ADDR = "127.0.0.1:81";
+	String SENTINEL_DEV_ADDR = "127.0.0.1:8858";
 
 	/**
 	 * sentinel prod 地址
 	 */
-	String SENTINEL_PROD_ADDR = "172.30.0.58:81";
+	String SENTINEL_PROD_ADDR = "172.30.0.58:8858";
 
 	/**
 	 * sentinel test 地址
 	 */
-	String SENTINEL_TEST_ADDR = "172.30.0.58:81";
+	String SENTINEL_TEST_ADDR = "172.30.0.58:8858";
 
 	/**
 	 * 动态获取nacos地址

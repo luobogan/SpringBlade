@@ -37,7 +37,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 )
 public interface IUserClient {
 
-	String API_PREFIX = "/feign/client/user";
+	String API_PREFIX = "/user";
 
 	/**
 	 * 获取用户信息
@@ -75,7 +75,7 @@ public interface IUserClient {
 	 * @return 保存后的用户对象（含数据库生成的ID）
 	 */
 	@PostMapping(API_PREFIX + "/save-user")
-	R<User> saveUser(@RequestBody User user);
+	R<UserInfo> saveUser(@RequestBody UserInfo user);
 
 	/**
 	 * 保存第三方授权用户信息
@@ -94,7 +94,7 @@ public interface IUserClient {
 	 * @return 用户对象
 	 */
 	@GetMapping(API_PREFIX + "/user-by-account")
-	R<User> getUserByAccount(@RequestParam("tenantId") String tenantId, @RequestParam("account") String account);
+	R<UserInfo> getUserByAccount(@RequestParam("tenantId") String tenantId, @RequestParam("account") String account);
 
 	/**
 	 * 根据租户ID和手机号查询用户
@@ -104,6 +104,6 @@ public interface IUserClient {
 	 * @return 用户对象
 	 */
 	@GetMapping(API_PREFIX + "/user-by-phone")
-	R<User> getUserByPhone(@RequestParam("tenantId") String tenantId, @RequestParam("phone") String phone);
+	R<UserInfo> getUserByPhone(@RequestParam("tenantId") String tenantId, @RequestParam("phone") String phone);
 
 }

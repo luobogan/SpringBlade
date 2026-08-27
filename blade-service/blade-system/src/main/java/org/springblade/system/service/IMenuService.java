@@ -16,7 +16,7 @@
 package org.springblade.system.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.spring.service.IService;
+import com.baomidou.mybatisplus.extension.service.IService;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.tool.support.Kv;
 import org.springblade.system.entity.Menu;
@@ -88,6 +88,8 @@ public interface IMenuService extends IService<Menu> {
 	 * @param user
 	 * @param roleId
 	 * @return
+	 * @param user 当前用户
+	 * @return 菜单授权树
 	 */
 	List<MenuVO> grantTree(BladeUser user, String roleId);
 
@@ -105,6 +107,8 @@ public interface IMenuService extends IService<Menu> {
 	 * @param user
 	 * @param roleId
 	 * @return
+	 * @param user 当前用户
+	 * @return 数据权限授权树
 	 */
 	List<MenuVO> grantDataScopeTree(BladeUser user, String roleId);
 
@@ -122,6 +126,8 @@ public interface IMenuService extends IService<Menu> {
 	 * @param user
 	 * @param roleId
 	 * @return
+	 * @param user 当前用户
+	 * @return 接口权限授权树
 	 */
 	List<MenuVO> grantApiScopeTree(BladeUser user, String roleId);
 

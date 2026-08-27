@@ -21,6 +21,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.AllArgsConstructor;
 import org.springblade.core.mp.base.BaseService;
 import org.springblade.core.cache.utils.CacheUtil;
+import org.springblade.core.cache.utils.CacheUtil;
 import org.springblade.core.mp.base.BaseServiceImpl;
 import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
@@ -39,6 +40,7 @@ import org.springblade.system.entity.Role;
 import org.springblade.system.entity.Tenant;
 import org.springblade.system.mapper.TenantMapper;
 import org.springblade.system.mapper.UserMapper;
+import org.springblade.system.service.IDeptService;
 import org.springblade.system.service.IDeptService;
 import org.springblade.system.service.IPostService;
 import org.springblade.system.service.IRoleService;
@@ -96,6 +98,11 @@ public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> imp
 	}
 
 	@Override
+	public Tenant getByTenantId(String tenantId) {
+		return getOne(Wrappers.<Tenant>query().lambda().eq(Tenant::getTenantId, tenantId));
+	}
+
+	@Override
 	@Transactional(rollbackFor = Exception.class)
 	public boolean saveTenant(Tenant tenant) {
 		if (Func.isEmpty(tenant.getId())) {
@@ -103,6 +110,24 @@ public class TenantServiceImpl extends BaseServiceImpl<TenantMapper, Tenant> imp
 			List<String> codes = tenants.stream().map(Tenant::getTenantId).collect(Collectors.toList());
 			String tenantId = getTenantId(codes);
 			tenant.setTenantId(tenantId);
+			// 新建租户对应的默认角色
+			Role role = new Role();
+			role.setTenantId(tenantId);
+			role.setParentId(0L);
+			role.setRoleName("管理员");
+			role.setRoleAlias("admin");
+			role.setSort(2);
+			role.setIsDeleted(0);
+			roleService.save(role);
+			// 新建租户对应的默认部门
+			Dept dept = new Dept();
+			dept.setTenantId(tenantId);
+			dept.setParentId(0L);
+			dept.setDeptName(tenant.getTenantName());
+			dept.setFullName(tenant.getTenantName());
+			dept.setSort(2);
+			dept.setIsDeleted(0);
+			deptService.save(dept);
 			TenantUtil.use(tenantId, () -> {
 				Role role = new Role();
 				role.setTenantId(tenantId);

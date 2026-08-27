@@ -16,7 +16,6 @@
 package org.springblade.system.user.feign;
 
 import org.springblade.core.tool.api.R;
-import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
 import org.springframework.stereotype.Component;

@@ -37,13 +37,15 @@ import org.springblade.core.tool.constant.BladeConstant;
 import org.springblade.core.tool.utils.*;
 import org.springblade.system.entity.Tenant;
 import org.springblade.system.feign.ISysClient;
-import org.springblade.system.service.*;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
 import org.springblade.system.user.vo.UserVO;
 import org.springblade.system.excel.UserExcel;
 import org.springblade.system.mapper.UserMapper;
+import org.springblade.system.service.IRoleService;
+import org.springblade.system.service.IUserOauthService;
+import org.springblade.system.service.IUserService;
 import org.springblade.system.wrapper.UserWrapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,6 +72,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	private IPostService postService;
 	private IRoleService roleService;
 	private ISysClient sysClient;
+	private IRoleService roleService;
 	private IUserOauthService userOauthService;
 	private BladeRedis bladeRedis;
 	private ITenantService tenantService;
@@ -80,12 +83,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		if (Func.isEmpty(user.getTenantId())) {
 			throw new ServiceException("租户ID不能为空");
 		}
+		TenantGuard.verifyBatch(roleService, Func.toLongList(user.getRoleId()), ROLE);
 		return doSubmit(user);
 	}
 
 	@Override
 	public boolean update(User user) {
 		TenantGuard.bindTenant(this, user, USER);
+		TenantGuard.verifyBatch(roleService, Func.toLongList(user.getRoleId()), ROLE);
 		return doSubmit(user);
 	}
 
@@ -220,6 +225,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		CacheUtil.clear(CacheConstant.USER_CACHE);
 		List<Long> idList = Func.toLongList(userIds);
 		TenantGuard.verifyBatch(this, idList, USER);
+		TenantGuard.verifyBatch(roleService, Func.toLongList(roleIds), ROLE);
 		User user = new User();
 		user.setRoleId(roleIds);
 		return this.update(user, Wrappers.<User>update().lambda().in(User::getId, idList));
@@ -275,11 +281,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 			User user = Objects.requireNonNull(BeanUtil.copyProperties(userExcel, User.class));
 			user.setTenantId(currentTenantId);
 			// 设置部门ID
-			user.setDeptId(deptService.getDeptIds(currentTenantId, userExcel.getDeptName()));
+			user.setDeptId(sysClient.getDeptIds(currentTenantId, userExcel.getDeptName()));
 			// 设置岗位ID
-			user.setPostId(postService.getPostIds(currentTenantId, userExcel.getPostName()));
+			user.setPostId(sysClient.getPostIds(currentTenantId, userExcel.getPostName()));
 			// 设置角色ID
-			user.setRoleId(roleService.getRoleIds(currentTenantId, userExcel.getRoleName()));
+			user.setRoleId(sysClient.getRoleIds(currentTenantId, userExcel.getRoleName()));
 			// 设置默认密码
 			user.setPassword(CommonConstant.DEFAULT_PASSWORD);
 			this.submit(user);
@@ -290,9 +296,9 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	public List<UserExcel> exportUser(Wrapper<User> queryWrapper) {
 		List<UserExcel> userList = baseMapper.exportUser(queryWrapper);
 		userList.forEach(user -> {
-			user.setRoleName(StringUtil.join(roleService.getRoleNames(user.getRoleId())));
-			user.setDeptName(StringUtil.join(deptService.getDeptNames(user.getDeptId())));
-			user.setPostName(StringUtil.join(postService.getPostNames(user.getPostId())));
+			user.setRoleName(StringUtil.join(sysClient.getRoleNames(user.getRoleId())));
+			user.setDeptName(StringUtil.join(sysClient.getDeptNames(user.getDeptId())));
+			user.setPostName(StringUtil.join(sysClient.getPostNames(user.getPostId())));
 		});
 		return userList;
 	}

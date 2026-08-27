@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jspecify.annotations.NonNull;
 import org.springblade.gateway.provider.RequestProvider;
 import org.springblade.gateway.provider.ResponseProvider;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -30,16 +31,24 @@ import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.util.UriUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
 
 /**
  * 内部接口隔离，拒绝外部对 Feign 内部接口的访问。
  * <p>
- * 全部 Feign 接口统一以 {@code /feign/client/} 为路径前缀，仅用于服务间调用。服务间调用经注册中心直连、不经过网关，
- * 故凡是抵达网关且路径命中该前缀的请求必来自外部，一律拒绝，与是否持有合法令牌无关。
+ * Feign 接口统一以 {@code /feign/client} 为前缀，仅供服务间调用。服务间调用经注册中心直连、不经过网关，
+ * 故抵达网关且命中该前缀的请求必来自外部，一律拒绝，与是否持有合法令牌无关。
+ * <p>
+ * 前缀由连续两段构成，判定依赖段间的相邻关系，故归一化须与容器映射前的处理及其顺序保持等价，
+ * 否则相邻关系会被路径变形撑开而失配。归一化按容器顺序进行：切分 → 剥离矩阵参数 → 解码 → 再次切分 → 消解相对段。
  *
  * @author Chill
  */
@@ -49,34 +58,112 @@ import java.nio.charset.StandardCharsets;
 public class InnerFilter implements GlobalFilter, Ordered {
 
 	private static final String MSG_INNER_FORBIDDEN = "禁止访问内部接口";
-	private static final String FEIGN_CLIENT_PREFIX = "/feign/client";
+
+	/**
+	 * Feign 内部接口保留段序列，业务接口不得占用
+	 */
+	private static final String[] FEIGN_SEGMENTS = {"feign", "client"};
+
+	/**
+	 * 路径分隔符，反斜杠一并纳入以对齐容器归一化
+	 */
+	private static final String PATH_SEPARATORS = "/\\";
+
+	/**
+	 * 段内矩阵参数分隔符
+	 */
+	private static final char MATRIX_SEPARATOR = ';';
+
+	/**
+	 * 相对路径段
+	 */
+	private static final String CURRENT_SEGMENT = ".";
+
+	private static final String PARENT_SEGMENT = "..";
 
 	private final ObjectMapper objectMapper;
 
+	@NonNull
 	@Override
-	public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-		// 取裁剪服务名前缀之前的原始请求路径进行判定，避免依赖 StripPrefix 的裁剪结果
-		String originalRequestUrl = RequestProvider.getOriginalRequestUrl(exchange);
-		if (isInnerRequest(originalRequestUrl)) {
+	public Mono<Void> filter(@NonNull ServerWebExchange exchange, @NonNull GatewayFilterChain chain) {
+		// 取裁剪服务名前缀之前的原始路径，避免依赖裁剪结果
+		String originalPath = RequestProvider.getOriginalRequestPath(exchange);
+		if (isInnerRequest(originalPath)) {
 			return forbid(exchange.getResponse());
 		}
 		return chain.filter(exchange);
 	}
 
 	/**
-	 * 判断请求路径是否命中 Feign 内部接口前缀
+	 * 判断是否为内部接口请求
 	 *
-	 * @param requestUrl 原始请求路径，可能携带查询串
+	 * @param rawPath 原始请求路径（未解码，不含查询串）
 	 * @return 是否为内部接口
 	 */
-	private boolean isInnerRequest(String requestUrl) {
-		if (!StringUtils.hasText(requestUrl)) {
+	private boolean isInnerRequest(String rawPath) {
+		if (!StringUtils.hasText(rawPath)) {
 			return false;
 		}
-		// 查询串不参与前缀判定，避免入参内容误触发拦截
-		String path = requestUrl.split("\\?", 2)[0];
-		// 全部 Feign 接口固定以 /feign/client 开头，前缀匹配比单段匹配更精确，不误伤业务路径
-		return path.contains(FEIGN_CLIENT_PREFIX);
+		List<String> segments;
+		try {
+			segments = normalize(rawPath);
+		} catch (IllegalArgumentException exception) {
+			// 编码非法则无法推断容器的解码结果，从严拒绝
+			log.warn("非法编码路径已拒绝");
+			return true;
+		}
+		return containsFeignSegments(segments);
+	}
+
+	/**
+	 * 归一化为路径段列表，处理顺序与容器映射前保持一致
+	 *
+	 * @param rawPath 原始请求路径
+	 * @return 归一化后的路径段列表
+	 */
+	private List<String> normalize(String rawPath) {
+		Deque<String> segments = new ArrayDeque<>();
+		for (String token : StringUtils.tokenizeToStringArray(rawPath, PATH_SEPARATORS)) {
+			// 按原始形态剥离矩阵参数后再解码，顺序与容器一致
+			int matrixIndex = token.indexOf(MATRIX_SEPARATOR);
+			String decoded = UriUtils.decode(matrixIndex < 0 ? token : token.substring(0, matrixIndex), StandardCharsets.UTF_8);
+			// 解码可能引入分隔符，需再次切分
+			for (String segment : StringUtils.tokenizeToStringArray(decoded, PATH_SEPARATORS)) {
+				if (CURRENT_SEGMENT.equals(segment)) {
+					continue;
+				}
+				if (PARENT_SEGMENT.equals(segment)) {
+					segments.pollLast();
+					continue;
+				}
+				segments.addLast(segment);
+			}
+		}
+		return new ArrayList<>(segments);
+	}
+
+	/**
+	 * 判断路径段列表中是否存在连续的 Feign 保留段
+	 *
+	 * @param segments 归一化后的路径段列表
+	 * @return 是否存在保留段
+	 */
+	private boolean containsFeignSegments(List<String> segments) {
+		for (int index = 0; index + FEIGN_SEGMENTS.length <= segments.size(); index++) {
+			if (matchesAt(segments, index)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean matchesAt(List<String> segments, int index) {
+		for (int offset = 0; offset < FEIGN_SEGMENTS.length; offset++) {
+			if (!FEIGN_SEGMENTS[offset].equalsIgnoreCase(segments.get(index + offset))) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private Mono<Void> forbid(ServerHttpResponse resp) {
@@ -94,7 +181,7 @@ public class InnerFilter implements GlobalFilter, Ordered {
 
 	@Override
 	public int getOrder() {
-		// 晚于 RequestFilter(-1000) 以取到原始请求路径，早于 AuthFilter(-100) 以免对被拒路径做无谓鉴权
+		// 晚于 RequestFilter(-1000) 以取到原始路径，早于 AuthFilter(-100) 以免对被拒路径做无谓鉴权
 		return -150;
 	}
 

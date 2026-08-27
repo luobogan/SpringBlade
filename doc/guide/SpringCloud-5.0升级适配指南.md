@@ -370,7 +370,7 @@ docker-compose rm -sf nacos && docker-compose up -d nacos
 
 ### 5.6 Feign 接口统一 `/feign/client` 前缀 + 网关内部接口隔离
 
-**背景**:Provider 以 `@RestController implements IXxxClient` 实现 Feign 接口后,这些方法即成为真实 HTTP 端点——持有合法令牌的外部请求可像调用普通 Controller 一样直接访问服务间接口。为把 Feign 接口收敛为「仅供服务间调用」,做两件事:① 所有 Feign 接口统一 `/feign/client/<模块>` 路径前缀;② 网关对外拦截该前缀。二者配合即闭环:服务间调用经注册中心直连、不过网关,不受影响;外部流量只能经网关,命中前缀即拒。
+**背景**:Provider 以 `@RestController implements IXxxClient` 实现 Feign 接口后,这些方法即成为真实 HTTP 端点——持有合法令牌的外部请求可像调用普通 Controller 一样直接访问服务间接口。为把 Feign 接口收敛为「仅供服务间调用」,做两件事:① 所有 Feign 接口统一 `/feign/client/<模块>` 路径前缀;② 网关对外拦截 `feign` 保留段。二者配合即闭环:服务间调用经注册中心直连、不过网关,不受影响;外部流量只能经网关,命中保留段即拒。
 
 #### ① Feign 前缀统一
 
@@ -395,18 +395,16 @@ docker-compose rm -sf nacos && docker-compose up -d nacos
 
 #### ② 网关内部接口隔离(网关侧原生增强)
 
-- **新增** `provider/RequestProvider.java`:`getOriginalRequestUrl(exchange)` 取 StripPrefix 裁剪服务名前缀**之前**的原始请求路径(避免依赖裁剪结果)。
-- **新增** `filter/InnerFilter.java`(`GlobalFilter`,order **-150**):原始路径命中 `/feign/client` 前缀即返回 **403**,与是否持有合法令牌无关。order 晚于 `RequestFilter(-1000)`(以取到原始路径)、早于 `AuthFilter(-100)`(被拒路径不做无谓鉴权)。
+- **新增** `provider/RequestProvider.java`:`getOriginalRequestPath(exchange)` 取裁剪服务名前缀**之前**的原始 `rawPath`(避免依赖裁剪结果),不解码、不含查询串,原样交由判定方处理。
+- **新增** `filter/InnerFilter.java`(`GlobalFilter`,order **-150**):原始路径中存在连续的 `feign`、`client` 路径段即返回 **403**,与是否持有合法令牌无关。order 晚于 `RequestFilter(-1000)`(以取到原始路径)、早于 `AuthFilter(-100)`(被拒路径不做无谓鉴权)。
 
-```java
-// InnerFilter 核心判定:命中 /feign/client 前缀即拒
-String path = originalRequestUrl.split("\\?", 2)[0];
-if (path.contains("/feign/client")) {
-    return forbid(exchange.getResponse());  // 403
-}
-```
+判定的核心原则是**与下游容器映射前的路径归一化等价**:容器在接口映射前会对路径做归一化与一次百分号解码,判定若停留在原始串的子串匹配,与容器的实际映射依据就存在差异。
 
-> **本方案以网关路径隔离为准**:全部 Feign 接口已统一落在 `/feign/client` 前缀下,网关对外拦截即可挡住所有经网关的外部访问,无需在接口上额外加注解或做请求头处理。其防护边界在网关入口——绕过网关、直连微服务实例的调用不在拦截范围,故仍以「微服务只部署在内网、对外仅暴露网关」为前提;若要覆盖「直连微服务」场景的纵深防御,可另行在服务侧增加内部标记校验。
+`/feign/client` 由连续两段构成,判定依赖段间的相邻关系,而相邻关系对归一化的**具体操作与执行顺序**都敏感——任一环节与容器不一致,都可能被路径变形把两段撑开而失配。故归一化严格按容器顺序实现:**切分 → 剥离矩阵参数 → 解码 → 再次切分 → 消解相对段**,随后在归一化后的段列表上做连续段比对;编码非法时无法推断容器解码结果,从严拒绝。
+
+> 单段保留段(仅判 `feign`)不依赖相邻关系,对归一化顺序完全免疫、实现也更短,但会把 `/feign/**` 整体变为内部专用命名空间。本工程选择保留两段前缀语义,相应地必须完整实现上述归一化;**若后续调整该判定,须同步确认 `..` 消解与「剥离矩阵参数先于解码」两点不被简化掉**。
+
+> **本方案以网关路径隔离为准**:全部 Feign 接口已统一落在 `feign` 保留段下,网关对外拦截即可挡住所有经网关的外部访问,无需在接口上额外加注解或做请求头处理。其防护边界在网关入口——绕过网关、直连微服务实例的调用不在拦截范围,故仍以「微服务只部署在内网、对外仅暴露网关」为前提。**因此凡是接受外部可控标识入参的 Feign 接口,服务侧仍必须自行做归属与租户校验,不可把网关拦截当作唯一防线**;若要覆盖「直连微服务」场景的纵深防御,可另行在服务侧增加内部标记校验。
 
 ---
 
@@ -473,7 +471,7 @@ cd SpringBlade && mvn clean install -DskipTests -Dmaven.test.skip=true -Ddocker.
 | 部署 | `script/docker/docker-compose.yml` nacos.volumes | 新增 `/docker/nacos/data` 持久化 + `application.properties` 挂载改 `:ro`(§5.5⑤) |
 | 部署 | `script/docker/deploy.sh` `mount()` | 新增创建 `/docker/nacos/data` 目录(§5.5⑤) |
 | 业务 | 全部 Feign 接口 `IXxxClient`(7 个,`IApiScopeClient` 已合规免改)+ seata `StorageController` | `API_PREFIX` 统一为 `/feign/client/<模块>`,Provider 映射随常量同步(§5.6①) |
-| 新增 | blade-gateway `provider/RequestProvider.java` + `filter/InnerFilter.java` | 网关对外拦截 `/feign/client` 前缀请求、返回 403,收敛 Feign 接口为仅内部可调(§5.6②) |
+| 新增 | blade-gateway `provider/RequestProvider.java` + `filter/InnerFilter.java` | 网关对外拦截含 `feign` 保留段的请求、返回 403;判定只认首段 `feign`,采用「解码 + 逐段精确比对」对齐容器归一化,杜绝 `//`、`/./`、`;params`、`%编码` 变形绕过(§5.6②) |
 
 ---
 

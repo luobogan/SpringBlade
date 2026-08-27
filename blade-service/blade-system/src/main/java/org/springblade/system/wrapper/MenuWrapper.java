@@ -21,6 +21,7 @@ import org.springblade.core.tool.node.ForestNodeMerger;
 import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.SpringUtil;
+import org.springblade.system.cache.DictCache;
 import org.springblade.system.entity.Menu;
 import org.springblade.system.service.IDictService;
 import org.springblade.system.service.IMenuService;
@@ -58,9 +59,9 @@ public class MenuWrapper extends BaseEntityWrapper<Menu, MenuVO> {
 			Menu parent = menuService.getById(menu.getParentId());
 			menuVO.setParentName(parent.getName());
 		}
-		menuVO.setCategoryName(dictService.getValue("menu_category", Func.toInt(menuVO.getCategory())));
-		menuVO.setActionName(dictService.getValue("button_func", Func.toInt(menuVO.getAction())));
-		menuVO.setIsOpenName(dictService.getValue("yes_no", Func.toInt(menuVO.getIsOpen())));
+		menuVO.setCategoryName(DictCache.getValue("menu_category", Func.toInt(menuVO.getCategory())));
+		menuVO.setActionName(DictCache.getValue("button_func", Func.toInt(menuVO.getAction())));
+		menuVO.setIsOpenName(DictCache.getValue("yes_no", Func.toInt(menuVO.getIsOpen())));
 		menuVO.setComponent(menu.getComponent());
 		menuVO.setComponentType(menu.getComponentType());
 		menuVO.setRemoteUrl(menu.getRemoteUrl());

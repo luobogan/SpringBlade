@@ -89,7 +89,7 @@ blade-service/blade-{module}/                  ← 实现层
 
 | 维度 | Boot | Cloud |
 |------|------|-------|
-| **基础包名** | `org.springblade.{module}` | `org.springblade.{module}` |
+| **基础包名** | `org.springblade.modules.{module}` | `org.springblade.{module}` |
 | **Controller 路由** | `@RequestMapping(AppConstant.APPLICATION_XXX_NAME + "/{path}")` | `@RequestMapping("/{path}")` |
 | **服务间调用** | 直接注入 Service | Feign Client 远程调用 |
 | **Entity/VO 位置** | 与 Service 同模块 | 独立 API 模块中 |
@@ -224,7 +224,7 @@ src/views/{module}/{modelCode}.vue
 2. **日期字段**必须同时添加 `@DateTimeFormat` 和 `@JsonFormat`，pattern 统一使用 `DateUtil.PATTERN_DATETIME`
 3. **逻辑删除字段** `isDeleted` 必须添加 `@TableLogic` 注解（继承 BaseEntity / TenantEntity 时由基类自动处理）
 4. **Swagger 文档**使用 OpenAPI 3 注解：`@Tag`、`@Operation`、`@Schema`、`@Parameter`
-5. **接口排序**：Controller 方法用 `@ApiOrder(n)` 控制展示顺序，值越小越靠前
+5. **接口排序**：控制器类级标注无参 `@ApiOrder`（置于 `@Tag` 上方），分组内接口按源码声明顺序展示；个别接口需调整顺序时才在方法上标 `@ApiOrder(n)`
 6. **响应包装**统一使用 `R<T>` 类
 7. **Wrapper 的 entityVO() 方法**中通过 `DictCache.getValue()` 翻译字典字段
 8. **Controller 的 remove 方法**：TenantEntity / BaseEntity 用 `deleteLogic()`，Raw 模式用 `removeBatchByIds()`

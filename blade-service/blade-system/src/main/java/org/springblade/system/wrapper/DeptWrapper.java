@@ -56,7 +56,7 @@ public class DeptWrapper extends BaseEntityWrapper<Dept, DeptVO> {
 		if (Func.equals(dept.getParentId(), CommonConstant.TOP_PARENT_ID)) {
 			deptVO.setParentName(CommonConstant.TOP_PARENT_NAME);
 		} else {
-			Dept parent = deptService.getById(dept.getParentId());
+			Dept parent = SysCache.getDept(dept.getParentId());
 			deptVO.setParentName(parent.getDeptName());
 		}
 		if (Func.isNotEmpty(dept.getTenantId())) {
