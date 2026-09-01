@@ -1,7 +1,7 @@
 package org.springblade.mall.service;
 
 import org.springblade.mall.entity.MemberBenefit;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 import java.util.List;
 

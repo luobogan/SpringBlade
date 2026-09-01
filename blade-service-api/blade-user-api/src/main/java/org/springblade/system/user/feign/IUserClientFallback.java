@@ -43,9 +43,9 @@ public class IUserClientFallback implements IUserClient {
 		return R.fail("未获取到账号信息");
 	}
 
- 	@Override
-	public R<User> saveUser(User user) {
-		return R.<User>fail("创建用户失败");
+	@Override
+	public R<UserInfo> saveUser(UserInfo user) {
+		return R.<UserInfo>fail("创建用户失败");
 	}
 
 	@Override
@@ -54,12 +54,12 @@ public class IUserClientFallback implements IUserClient {
 	}
 
 	@Override
-	public R<User> getUserByAccount(String tenantId, String account) {
+	public R<UserInfo> getUserByAccount(String tenantId, String account) {
 		return R.fail("查询用户信息失败");
 	}
 
 	@Override
-	public R<User> getUserByPhone(String tenantId, String phone) {
+	public R<UserInfo> getUserByPhone(String tenantId, String phone) {
 		return R.fail("查询用户信息失败");
 	}
 }

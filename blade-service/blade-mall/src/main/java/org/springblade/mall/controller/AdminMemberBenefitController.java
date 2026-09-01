@@ -1,7 +1,6 @@
 package org.springblade.mall.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.AllArgsConstructor;
 import org.springblade.core.tool.api.R;
@@ -41,7 +40,6 @@ public class AdminMemberBenefitController extends BladeController {
      * 获取会员权益列表
      */
     @GetMapping
-    @ApiOperationSupport(order = 1)
     @Operation(summary = "获取会员权益列表", description = "传入levelId")
     public R<List<MemberBenefitVO>> getList(
             @RequestParam(required = false) Long levelId) {
@@ -64,7 +62,6 @@ public class AdminMemberBenefitController extends BladeController {
      * 获取会员权益详情
      */
     @GetMapping("/{id}")
-    @ApiOperationSupport(order = 2)
     @Operation(summary = "获取会员权益详情", description = "传入id")
     public R<MemberBenefitVO> getById(@PathVariable Long id) {
         MemberBenefit benefit = memberBenefitMapper.selectById(id);
@@ -80,7 +77,6 @@ public class AdminMemberBenefitController extends BladeController {
      * 创建会员权益
      */
     @PostMapping
-    @ApiOperationSupport(order = 3)
     @Operation(summary = "创建会员权益", description = "传入MemberBenefitVO")
     public R<MemberBenefitVO> create(@RequestBody MemberBenefitVO benefitVO) {
         MemberBenefit benefit = new MemberBenefit();
@@ -96,7 +92,6 @@ public class AdminMemberBenefitController extends BladeController {
      * 更新会员权益
      */
     @PutMapping("/{id}")
-    @ApiOperationSupport(order = 4)
     @Operation(summary = "更新会员权益", description = "传入id和MemberBenefitVO")
     public R<MemberBenefitVO> update(
             @PathVariable Long id,
@@ -118,7 +113,6 @@ public class AdminMemberBenefitController extends BladeController {
      * 删除会员权益
      */
     @DeleteMapping("/{id}")
-    @ApiOperationSupport(order = 5)
     @Operation(summary = "删除会员权益", description = "传入id")
     public R delete(@PathVariable Long id) {
         memberBenefitMapper.deleteById(id);
@@ -129,7 +123,6 @@ public class AdminMemberBenefitController extends BladeController {
      * 批量创建会员权益
      */
     @PostMapping("/level/{levelId}/batch")
-    @ApiOperationSupport(order = 6)
     @Operation(summary = "批量创建会员权益", description = "传入levelId和MemberBenefitVO列表")
     public R<List<MemberBenefitVO>> batchCreate(
             @PathVariable Long levelId,

@@ -1,6 +1,5 @@
 package org.springblade.mall.controller;
 
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -34,7 +33,6 @@ public class FrontReviewController extends BladeController {
      * @return 评价列表
      */
     @GetMapping("/product/{productId}")
-    @ApiOperationSupport(order = 1)
     @Operation(summary = "获取商品评价列表", description = "传入productId")
     public R<List<ReviewVO>> getReviewsByProductId(@PathVariable Long productId) {
         try {
@@ -51,7 +49,6 @@ public class FrontReviewController extends BladeController {
      * @return 评价统计
      */
     @GetMapping("/stats/{productId}")
-    @ApiOperationSupport(order = 2)
     @Operation(summary = "获取商品评价统计", description = "传入productId")
     public R<ReviewService.ReviewStatsVO> getReviewStats(@PathVariable Long productId) {
         try {
@@ -69,7 +66,6 @@ public class FrontReviewController extends BladeController {
      * @return 创建结果
      */
     @PostMapping("/product/{productId}")
-    @ApiOperationSupport(order = 3)
     @Operation(summary = "创建评价", description = "传入productId和ReviewDTO")
     public R<ReviewVO> createReview(
             @PathVariable Long productId,
@@ -94,7 +90,6 @@ public class FrontReviewController extends BladeController {
      * @return 评价列表
      */
     @GetMapping("/user")
-    @ApiOperationSupport(order = 4)
     @Operation(summary = "获取当前用户评价列表", description = "获取当前用户评价列表")
     public R<List<ReviewVO>> getCurrentUserReviews(BladeUser user) {
         try {

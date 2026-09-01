@@ -1,7 +1,7 @@
 package org.springblade.formmode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.formmode.entity.FieldExtend;
 import org.springblade.formmode.mapper.FieldExtendMapper;

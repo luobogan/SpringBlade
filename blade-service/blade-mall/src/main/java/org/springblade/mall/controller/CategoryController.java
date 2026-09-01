@@ -1,13 +1,11 @@
 package org.springblade.mall.controller;
 
-import org.springblade.core.tenant.annotation.AdminTenant;
 import org.springblade.mall.dto.CategoryDTO;
 import org.springblade.mall.service.CategoryService;
 import org.springblade.mall.vo.CategoryVO;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.api.R;
-import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.boot.ctrl.BladeController;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -58,8 +56,8 @@ public class CategoryController extends BladeController {
     public R<CategoryVO> createCategory(@Parameter(description = "分类信息") @Valid @RequestBody CategoryDTO categoryDTO) {
         try {
             // 优先使用前端传来的 tenantId（000000租户可以选择其他租户）
-            String tenantId = org.springblade.core.tool.utils.StringUtil.isNotBlank(categoryDTO.getTenantId()) 
-                ? categoryDTO.getTenantId() 
+            String tenantId = org.springblade.core.tool.utils.StringUtil.isNotBlank(categoryDTO.getTenantId())
+                ? categoryDTO.getTenantId()
                 : getTenantId();
             CategoryVO categoryVO = TenantUtil.use(tenantId, () -> categoryService.createCategory(categoryDTO));
             R<CategoryVO> result = R.data(categoryVO);
@@ -134,11 +132,10 @@ public class CategoryController extends BladeController {
      * @return 分类列表
      */
     @GetMapping
-    @AdminTenant
     @Operation(summary = "获取所有分类", description = "获取所有分类")
     public R<List<CategoryVO>> getAllCategories() {
         try {
-            List<CategoryVO> categories = categoryService.getAllCategoriesWithStatus();
+            List<CategoryVO> categories = TenantUtil.ignore(() -> categoryService.getAllCategoriesWithStatus());
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());
@@ -150,11 +147,10 @@ public class CategoryController extends BladeController {
      * @return 分类树
      */
     @GetMapping("/tree")
-    @AdminTenant
     @Operation(summary = "获取分类树", description = "获取分类树")
     public R<List<CategoryVO>> getCategoryTree() {
         try {
-            List<CategoryVO> categories = categoryService.getAllCategoriesWithStatus();
+            List<CategoryVO> categories = TenantUtil.ignore(() -> categoryService.getAllCategoriesWithStatus());
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());
@@ -168,18 +164,18 @@ public class CategoryController extends BladeController {
      * @return 按租户分组的分类树
      */
     @GetMapping("/tree/by-tenant")
-    @AdminTenant
     @Operation(summary = "获取分类树（按租户分组）", description = "获取分类树（按租户分组）")
     public R<List<CategoryVO>> getCategoryTreeByTenant(@RequestParam(required = false) String tenantId) {
         try {
-            List<CategoryVO> categories;
-            if (org.springblade.core.tool.utils.StringUtil.isNotBlank(tenantId)) {
-                // 如果传入了租户ID，直接查询该租户的分类（不通过TenantUtil）
-                categories = categoryService.getAllCategoriesWithStatus(tenantId);
-            } else {
-                // 否则返回所有租户的分类并按租户分组
-                categories = categoryService.getAllCategoriesGroupedByTenant();
-            }
+            List<CategoryVO> categories = TenantUtil.ignore(() -> {
+                if (org.springblade.core.tool.utils.StringUtil.isNotBlank(tenantId)) {
+                    // 如果传入了租户ID，直接查询该租户的分类（不通过TenantUtil）
+                    return categoryService.getAllCategoriesWithStatus(tenantId);
+                } else {
+                    // 否则返回所有租户的分类并按租户分组
+                    return categoryService.getAllCategoriesGroupedByTenant();
+                }
+            });
             return R.data(categories);
         } catch (Exception e) {
             return R.fail(e.getMessage());

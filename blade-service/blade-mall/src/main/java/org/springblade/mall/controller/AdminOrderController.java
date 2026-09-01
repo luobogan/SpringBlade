@@ -1,6 +1,5 @@
 package org.springblade.mall.controller;
 
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.AllArgsConstructor;
 import org.springblade.core.mp.support.Query;
@@ -33,7 +32,6 @@ public class AdminOrderController extends BladeController {
      * @return 订单列表
      */
     @GetMapping
-    @ApiOperationSupport(order = 1)
     @Operation(summary = "获取订单列表", description = "传入筛选条件")
     public R<Map<String, Object>> getAllOrders(
             Query query,
@@ -81,7 +79,6 @@ public class AdminOrderController extends BladeController {
      * @return 订单详情
      */
     @GetMapping("/{id}")
-    @ApiOperationSupport(order = 2)
     @Operation(summary = "获取订单详情", description = "传入id")
     public R<OrderVO> getOrderById(@PathVariable Long id) {
         try {
@@ -98,7 +95,6 @@ public class AdminOrderController extends BladeController {
      * @return 订单详情
      */
     @GetMapping("/order-no/{orderNo}")
-    @ApiOperationSupport(order = 3)
     @Operation(summary = "根据订单号查询", description = "传入orderNo")
     public R<OrderVO> getOrderByOrderNo(@PathVariable String orderNo) {
         try {
@@ -116,7 +112,6 @@ public class AdminOrderController extends BladeController {
      * @return 更新结果
      */
     @PutMapping("/{id}/status")
-    @ApiOperationSupport(order = 4)
     @Operation(summary = "更新订单状态", description = "传入id和status")
     public R<OrderVO> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> status) {
         try {
@@ -134,7 +129,6 @@ public class AdminOrderController extends BladeController {
      * @return 发货结果
      */
     @PutMapping("/{id}/ship")
-    @ApiOperationSupport(order = 5)
     @Operation(summary = "订单发货", description = "传入id、shippingMethod和trackingNo")
     public R<OrderVO> shipOrder(
             @PathVariable Long id,
@@ -155,7 +149,6 @@ public class AdminOrderController extends BladeController {
      * @return 取消结果
      */
     @PutMapping("/{id}/cancel")
-    @ApiOperationSupport(order = 6)
     @Operation(summary = "取消订单", description = "传入id")
     public R<OrderVO> cancelOrder(@PathVariable Long id) {
         try {
@@ -172,7 +165,6 @@ public class AdminOrderController extends BladeController {
      * @return 完成结果
      */
     @PutMapping("/{id}/complete")
-    @ApiOperationSupport(order = 7)
     @Operation(summary = "完成订单", description = "传入id")
     public R<OrderVO> completeOrder(@PathVariable Long id) {
         try {

@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DateUtil;
 import org.springblade.system.service.IUserService;
+import org.springblade.system.user.entity.User;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
 import org.springblade.system.user.feign.IUserClient;
@@ -64,7 +65,8 @@ public class UserClient implements IUserClient {
 
 	@Override
 	@PostMapping(API_PREFIX + "/save-user")
-	public R<User> saveUser(User user) {
+	public R<UserInfo> saveUser(UserInfo userInfo) {
+		User user = userInfo.getUser();
 		User existingUser = service.getOne(Wrappers.<User>query().lambda()
 			.eq(User::getTenantId, user.getTenantId())
 			.eq(User::getAccount, user.getAccount()));
@@ -81,13 +83,17 @@ public class UserClient implements IUserClient {
 			user.setOpenId(null);
 			user.setUpdateTime(DateUtil.now());
 			service.updateById(user);
-			return R.data(service.getById(existingUser.getId()));
+			UserInfo resultInfo = new UserInfo();
+			resultInfo.setUser(service.getById(existingUser.getId()));
+			return R.data(resultInfo);
 		}
 		boolean saved = service.save(user);
 		if (saved) {
-			return R.data(service.getById(user.getId()));
+			UserInfo resultInfo = new UserInfo();
+			resultInfo.setUser(service.getById(user.getId()));
+			return R.data(resultInfo);
 		}
-		return R.<User>fail("创建用户失败");
+		return R.<UserInfo>fail("创建用户失败");
 	}
 
 	@Override
@@ -98,16 +104,18 @@ public class UserClient implements IUserClient {
 
 	@Override
 	@GetMapping(API_PREFIX + "/user-by-account")
-	public R<User> getUserByAccount(String tenantId, String account) {
+	public R<UserInfo> getUserByAccount(String tenantId, String account) {
 		User user = service.getOne(Wrappers.<User>query().lambda()
 			.eq(User::getTenantId, tenantId)
 			.eq(User::getAccount, account));
-		return R.data(user);
+		UserInfo resultInfo = new UserInfo();
+		resultInfo.setUser(user);
+		return R.data(resultInfo);
 	}
 
 	@Override
 	@GetMapping(API_PREFIX + "/user-by-phone")
-	public R<User> getUserByPhone(String tenantId, String phone) {
+	public R<UserInfo> getUserByPhone(String tenantId, String phone) {
 		log.info("根据手机号查询用户 - tenantId: {}, phone: {}", tenantId, phone);
 		// 打印 SQL 查询条件
 		log.info("执行 SQL: SELECT * FROM blade_user WHERE tenant_id = '{}' AND phone = '{}'", tenantId, phone);
@@ -120,17 +128,19 @@ public class UserClient implements IUserClient {
 		// 只有当查询到有效用户（ID 不为 null）时才返回成功
 		if (users == null || users.isEmpty()) {
 			log.info("未找到用户，返回失败");
-			return R.fail("用户不存在");
+			return R.<UserInfo>fail("用户不存在");
 		}
 
 		User user = users.get(0);
 		if (user == null || user.getId() == null) {
 			log.info("用户对象为空或ID为null，返回失败");
-			return R.fail("用户不存在");
+			return R.<UserInfo>fail("用户不存在");
 		}
 
 		log.info("最终返回 - 用户存在: true, userId: {}", user.getId());
-		return R.data(user);
+		UserInfo resultInfo = new UserInfo();
+		resultInfo.setUser(user);
+		return R.data(resultInfo);
 	}
 
 }

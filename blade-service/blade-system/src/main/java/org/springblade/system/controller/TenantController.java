@@ -49,6 +49,15 @@ import org.springblade.system.service.ITenantService;
 import org.springblade.system.service.IUserService;
 import org.springblade.system.user.entity.User;
 import org.springframework.web.bind.annotation.*;
+import org.springblade.system.entity.TenantPackage;
+import org.springblade.system.mapper.MenuMapper;
+import org.springblade.system.mapper.RoleMapper;
+import org.springblade.system.mapper.UserMapper;
+import org.springblade.system.service.IMenuService;
+import org.springblade.system.service.IPackageMenuService;
+import org.springblade.system.service.IRoleMenuService;
+import org.springblade.system.service.ITenantMenuService;
+import org.springblade.system.service.ITenantPackageService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -72,16 +81,16 @@ import static org.springblade.core.cache.utils.CacheUtil.SYS_CACHE;
 @Tag(name = "租户管理", description = "接口")
 public class TenantController extends BladeController {
 
-	private ITenantService tenantService;
-	private IMenuService menuService;
-	private MenuMapper menuMapper;
-	private RoleMapper roleMapper;
-	private UserMapper userMapper;
-	private IRoleMenuService roleMenuService;
-	private ITenantPackageService tenantPackageService;
-	private IPackageMenuService packageMenuService;
-	private IUserService userService;
-	private ITenantMenuService tenantMenuService;
+	private final ITenantService tenantService;
+	private final IMenuService menuService;
+	private final MenuMapper menuMapper;
+	private final RoleMapper roleMapper;
+	private final UserMapper userMapper;
+	private final IRoleMenuService roleMenuService;
+	private final ITenantPackageService tenantPackageService;
+	private final IPackageMenuService packageMenuService;
+	private final IUserService userService;
+	private final ITenantMenuService tenantMenuService;
 
 	/**
 	 * 详情

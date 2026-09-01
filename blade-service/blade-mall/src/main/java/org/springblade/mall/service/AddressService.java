@@ -1,6 +1,6 @@
 package org.springblade.mall.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 import org.springblade.mall.dto.AddressDTO;
 import org.springblade.mall.entity.Address;
 import org.springblade.mall.vo.AddressVO;

@@ -1,6 +1,5 @@
 package org.springblade.mall.controller;
 
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -41,7 +40,6 @@ public class MemberController extends BladeController {
      * 获取当前用户会员信息
      */
     @GetMapping("/info")
-    @ApiOperationSupport(order = 1)
     @Operation(summary = "获取当前用户会员信息", description = "获取当前用户会员信息")
     @PreAuth("hasAnyRole('USER', 'ADMIN')")
     public R<MemberAccountVO> getMemberInfo(BladeUser user) {
@@ -57,7 +55,6 @@ public class MemberController extends BladeController {
      * 会员签到
      */
     @PostMapping("/checkin")
-    @ApiOperationSupport(order = 2)
     @Operation(summary = "会员签到", description = "会员签到")
     @PreAuth("hasAnyRole('USER', 'ADMIN')")
     public R checkin(BladeUser user) {
@@ -77,7 +74,6 @@ public class MemberController extends BladeController {
      * 获取会员等级列表
      */
     @GetMapping("/levels")
-    @ApiOperationSupport(order = 3)
     @Operation(summary = "获取会员等级列表", description = "获取会员等级列表")
     public R<List<MemberLevelVO>> getLevels() {
         List<MemberLevelVO> levels = memberLevelService.getAllActiveLevels();
@@ -88,7 +84,6 @@ public class MemberController extends BladeController {
      * 手动触发会员等级计算（测试用）
      */
     @PostMapping("/calculate-level")
-    @ApiOperationSupport(order = 4)
     @Operation(summary = "手动触发会员等级计算", description = "手动触发会员等级计算")
     @PreAuth("hasAnyRole('USER', 'ADMIN')")
     public R calculateLevel(BladeUser user) {
@@ -104,7 +99,6 @@ public class MemberController extends BladeController {
      * 测试增加积分（仅开发环境）
      */
     @PostMapping("/test/add-points")
-    @ApiOperationSupport(order = 5)
     @Operation(summary = "测试增加积分", description = "传入userId和points")
     @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
     public R testAddPoints(
@@ -118,7 +112,6 @@ public class MemberController extends BladeController {
      * 测试增加成长值（仅开发环境）
      */
     @PostMapping("/test/add-growth")
-    @ApiOperationSupport(order = 6)
     @Operation(summary = "测试增加成长值", description = "传入userId和growth")
     @PreAuth(RoleConstant.HAS_ROLE_ADMIN)
     public R testAddGrowth(

@@ -1,6 +1,6 @@
 package org.springblade.formmode.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 import org.springblade.formmode.dto.FormModeDTO;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
 import org.springblade.formmode.entity.ModeInfo;

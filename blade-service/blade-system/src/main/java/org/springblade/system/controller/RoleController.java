@@ -141,7 +141,6 @@ public class RoleController extends BladeController {
 	 * 获取角色下的用户列表
 	 */
 	@GetMapping("/users")
-	@ApiOperationSupport(order = 8)
 	@Operation(summary = "获取角色用户", description = "传入roleId")
 	public R<List<UserVO>> getUsersByRoleId(@Parameter(description = "角色ID", required = true) @RequestParam Long roleId) {
 		List<User> users = roleService.getUsersByRoleId(roleId);
@@ -152,7 +151,6 @@ public class RoleController extends BladeController {
 	 * 授权用户到角色
 	 */
 	@PostMapping("/grant-user")
-	@ApiOperationSupport(order = 9)
 	@Operation(summary = "授权用户", description = "传入roleId和userIds")
 	public R grantUser(@RequestBody Map<String, Object> params) {
 		Long roleId = parseLong(params.get("roleId"));
@@ -165,7 +163,6 @@ public class RoleController extends BladeController {
 	 * 取消用户的角色授权
 	 */
 	@PostMapping("/revoke-user")
-	@ApiOperationSupport(order = 10)
 	@Operation(summary = "取消授权", description = "传入roleId和userIds")
 	public R revokeUser(@RequestBody Map<String, Object> params) {
 		Long roleId = parseLong(params.get("roleId"));

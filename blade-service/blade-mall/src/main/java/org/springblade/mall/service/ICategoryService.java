@@ -17,7 +17,7 @@ package org.springblade.mall.service;
 
 import org.springblade.mall.entity.Category;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 import java.util.List;
 

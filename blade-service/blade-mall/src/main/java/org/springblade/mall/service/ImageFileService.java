@@ -1,10 +1,8 @@
 package org.springblade.mall.service;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springblade.core.boot.file.ImageFileEntity;
 import org.springblade.mall.entity.ImageFile;
 import org.springblade.mall.mapper.ImageFileMapper;
-import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -45,17 +43,14 @@ public class ImageFileService {
 	/**
 	 * 保存文件记录到数据库
 	 *
-	 * @param entity 文件实体
+	 * @param imageFile 文件实体
 	 * @return 文件ID
 	 */
-	public Long saveFile(ImageFileEntity entity) {
+	public Long saveFile(ImageFile imageFile) {
 		if (imageFileMapper == null) {
 			log.warn("ImageFileMapper未初始化，无法保存文件记录到数据库");
 			return null;
 		}
-
-		ImageFile imageFile = new ImageFile();
-		BeanUtils.copyProperties(entity, imageFile);
 
 		if (imageFile.getImagefileid() == null) {
 			imageFile.setImagefileid(System.currentTimeMillis());
@@ -78,16 +73,16 @@ public class ImageFileService {
 	}
 
 	/**
-	 * 构建ImageFileEntity对象（静态方法）
+	 * 构建ImageFile对象（静态方法）
 	 */
-	public static ImageFileEntity buildEntity(String filename, String contentType, String filePath,
+	public static ImageFile buildEntity(String filename, String contentType, String filePath,
 											  Long fileSize, boolean isZip, boolean isEncrypt, String aesCode) {
 		return buildEntity(filename, contentType, filePath, fileSize, isZip, isEncrypt, aesCode, null);
 	}
 
-	public static ImageFileEntity buildEntity(String filename, String contentType, String filePath,
+	public static ImageFile buildEntity(String filename, String contentType, String filePath,
 											  Long fileSize, boolean isZip, boolean isEncrypt, String aesCode, String tenantId) {
-		ImageFileEntity entity = new ImageFileEntity();
+		ImageFile entity = new ImageFile();
 		entity.setImagefilename(filename);
 		entity.setImagefiletype(contentType);
 		entity.setFilerealpath(filePath);

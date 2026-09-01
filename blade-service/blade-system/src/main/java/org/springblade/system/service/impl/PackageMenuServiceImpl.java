@@ -18,7 +18,7 @@ package org.springblade.system.service.impl;
 import org.springblade.system.entity.PackageMenu;
 import org.springblade.system.mapper.PackageMenuMapper;
 import org.springblade.system.service.IPackageMenuService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 
 /**

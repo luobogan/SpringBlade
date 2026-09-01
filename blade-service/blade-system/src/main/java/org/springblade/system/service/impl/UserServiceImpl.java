@@ -43,7 +43,10 @@ import org.springblade.system.user.entity.UserOauth;
 import org.springblade.system.user.vo.UserVO;
 import org.springblade.system.excel.UserExcel;
 import org.springblade.system.mapper.UserMapper;
+import org.springblade.system.service.IDeptService;
+import org.springblade.system.service.IPostService;
 import org.springblade.system.service.IRoleService;
+import org.springblade.system.service.ITenantService;
 import org.springblade.system.service.IUserOauthService;
 import org.springblade.system.service.IUserService;
 import org.springblade.system.wrapper.UserWrapper;
@@ -55,6 +58,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.springblade.core.tenant.TenantGuard.EntityType.ROLE;
 import static org.springblade.core.tenant.TenantGuard.EntityType.USER;
 
 /**
@@ -72,7 +76,6 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	private IPostService postService;
 	private IRoleService roleService;
 	private ISysClient sysClient;
-	private IRoleService roleService;
 	private IUserOauthService userOauthService;
 	private BladeRedis bladeRedis;
 	private ITenantService tenantService;

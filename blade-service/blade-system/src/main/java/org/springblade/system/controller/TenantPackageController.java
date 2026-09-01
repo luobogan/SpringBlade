@@ -26,12 +26,12 @@ import org.springblade.core.tool.constant.BladeConstant;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.node.ForestNodeMerger;
-import org.springblade.core.tool.node.TreeNode;
 import org.springblade.system.entity.TenantPackage;
 import org.springblade.system.mapper.MenuMapper;
 import org.springblade.system.service.ITenantPackageService;
 import org.springblade.system.vo.CheckedTreeVO;
 import org.springblade.system.vo.GrantTreeVO;
+import org.springblade.system.vo.MenuVO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Hidden;
@@ -159,42 +159,36 @@ public class TenantPackageController extends BladeController {
 	@GetMapping("/package-menu-tree")
 	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	@Operation(summary = "产品包菜单树预览", description = "获取指定产品包关联的菜单树形结构")
-	public R<List<TreeNode>> packageMenuTree(Long packageId) {
+	public R<List<MenuVO>> packageMenuTree(Long packageId) {
 		List<Long> menuIds = tenantPackageService.getMenuIdsByPackageId(packageId);
 		if (Func.isEmpty(menuIds)) {
 			return R.data(new ArrayList<>());
 		}
-		List<TreeNode> allTreeNodes;
-		try {
-			Object rawResult = menuMapper.grantTree(BladeConstant.ADMIN_TENANT_ID);
-			allTreeNodes = (List<TreeNode>) rawResult;
-		} catch (ClassCastException e) {
-			allTreeNodes = new ArrayList<>();
-		}
-		List<TreeNode> filtered = filterTreeByPackage(allTreeNodes, menuIds);
+		List<MenuVO> allMenus = menuMapper.grantTree();
+		List<MenuVO> filtered = filterMenuTreeByPackage(allMenus, menuIds);
 		return R.data(ForestNodeMerger.merge(filtered));
 	}
 
 	@SuppressWarnings("unchecked")
-	private List<TreeNode> filterTreeByPackage(List<TreeNode> nodes, List<Long> packageMenuIds) {
-		List<TreeNode> result = new ArrayList<>();
-		for (TreeNode node : nodes) {
+	private List<MenuVO> filterMenuTreeByPackage(List<MenuVO> nodes, List<Long> packageMenuIds) {
+		List<MenuVO> result = new ArrayList<>();
+		for (MenuVO node : nodes) {
 			if (node.getId() != null && packageMenuIds.contains(node.getId())) {
-				TreeNode copy = new TreeNode();
+				MenuVO copy = new MenuVO();
 				copy.setId(node.getId());
 				copy.setParentId(node.getParentId());
-				copy.setTitle(node.getTitle());
+				copy.setName(node.getName());
 				if (node.getChildren() != null && !node.getChildren().isEmpty()) {
-					copy.setChildren(filterTreeByPackage((List<TreeNode>) node.getChildren(), packageMenuIds));
+					copy.setChildren(filterMenuTreeByPackage(node.getChildren(), packageMenuIds));
 				}
 				result.add(copy);
 			} else if (node.getChildren() != null && !node.getChildren().isEmpty()) {
-				List<TreeNode> childMatches = filterTreeByPackage((List<TreeNode>) node.getChildren(), packageMenuIds);
+				List<MenuVO> childMatches = filterMenuTreeByPackage(node.getChildren(), packageMenuIds);
 				if (!childMatches.isEmpty()) {
-					TreeNode copy = new TreeNode();
+					MenuVO copy = new MenuVO();
 					copy.setId(node.getId());
 					copy.setParentId(node.getParentId());
-					copy.setTitle(node.getTitle());
+					copy.setName(node.getName());
 					copy.setChildren(childMatches);
 					result.add(copy);
 				}

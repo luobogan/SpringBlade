@@ -1,6 +1,6 @@
 package org.springblade.formmode.service.impl;
 
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springblade.formmode.entity.WorkflowBill;
 import org.springblade.formmode.mapper.WorkflowBillMapper;
 import org.springblade.formmode.service.IWorkflowBillService;

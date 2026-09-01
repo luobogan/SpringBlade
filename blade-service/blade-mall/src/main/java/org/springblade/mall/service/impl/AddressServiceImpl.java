@@ -1,7 +1,7 @@
 package org.springblade.mall.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springblade.mall.dto.AddressDTO;
 import org.springblade.mall.entity.Address;
 import org.springblade.mall.mapper.AddressMapper;

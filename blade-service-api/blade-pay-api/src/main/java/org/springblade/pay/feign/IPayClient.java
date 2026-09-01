@@ -1,7 +1,7 @@
 package org.springblade.pay.feign;
 
-import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.tool.api.R;
+import org.springblade.pay.constant.PayConstant;
 import org.springblade.pay.dto.PaymentDTO;
 import org.springblade.pay.dto.RefundDTO;
 import org.springblade.pay.vo.PaymentVO;
@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
 @FeignClient(
-    value = AppConstant.APPLICATION_PAY_NAME,
+    value = PayConstant.APPLICATION_PAY_NAME,
     fallback = IPayClientFallback.class
 )
 public interface IPayClient {

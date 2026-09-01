@@ -10,7 +10,7 @@ import org.springblade.mall.mapper.MemberGrowthLogMapper;
 import org.springblade.mall.mapper.MemberLevelMapper;
 import org.springblade.mall.mapper.MemberPointsLogMapper;
 import org.springblade.mall.service.MemberService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springblade.mall.vo.MemberAccountVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;

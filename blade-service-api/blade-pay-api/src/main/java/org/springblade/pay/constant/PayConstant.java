@@ -1,25 +1,27 @@
 package org.springblade.pay.constant;
 
-public class PayConstant {
+/**
+ * 支付模块常量
+ */
+public interface PayConstant {
 
-    public static final String CHANNEL_WECHAT = "WECHAT";
-    public static final String CHANNEL_ALIPAY = "ALIPAY";
-    public static final String CHANNEL_BALANCE = "BALANCE";
+	/**
+	 * 支付服务名称（Nacos 注册名）
+	 */
+	String APPLICATION_PAY_NAME = "blade-pay";
 
-    public static final String STATUS_PENDING = "PENDING";
-    public static final String STATUS_PROCESSING = "PROCESSING";
-    public static final String STATUS_SUCCESS = "SUCCESS";
-    public static final String STATUS_FAILED = "FAILED";
-    public static final String STATUS_CLOSED = "CLOSED";
-    public static final String STATUS_CANCELLED = "CANCELLED";
-    public static final String STATUS_REFUNDING = "REFUNDING";
-    public static final String STATUS_REFUNDED = "REFUNDED";
+	// ==================== 支付状态 ====================
 
-    public static final String TOPIC_PAY_EVENTS = "pay-events";
-    public static final String TOPIC_ORDER_EVENTS = "order-events";
+	/** 待支付 */
+	String STATUS_PENDING = "PENDING";
 
-    public static final String EVENT_PAYMENT_SUCCESS = "PaymentSuccessEvent";
-    public static final String EVENT_PAYMENT_FAILED = "PaymentFailedEvent";
-    public static final String EVENT_REFUND_SUCCESS = "RefundSuccessEvent";
-    public static final String EVENT_REFUND_FAILED = "RefundFailedEvent";
+	/** 已支付 */
+	String STATUS_SUCCESS = "SUCCESS";
+
+	/** 已退款 */
+	String STATUS_REFUNDED = "REFUNDED";
+
+	/** 已取消 */
+	String STATUS_CANCELLED = "CANCELLED";
+
 }

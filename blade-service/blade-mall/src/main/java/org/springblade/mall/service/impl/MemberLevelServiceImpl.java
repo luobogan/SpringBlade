@@ -6,7 +6,7 @@ import org.springblade.mall.entity.MemberLevel;
 import org.springblade.mall.mapper.MemberLevelMapper;
 import org.springblade.mall.service.MemberBenefitService;
 import org.springblade.mall.service.MemberLevelService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import org.springblade.mall.vo.MemberLevelVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;

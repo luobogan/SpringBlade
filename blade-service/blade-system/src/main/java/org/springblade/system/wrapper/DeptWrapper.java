@@ -21,6 +21,7 @@ import org.springblade.core.mp.support.BaseEntityWrapper;
 import org.springblade.core.tool.node.ForestNodeMerger;
 import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
+import org.springblade.core.tool.utils.SpringUtil;
 import org.springblade.system.cache.SysCache;
 import org.springblade.system.entity.Dept;
 import org.springblade.system.entity.Tenant;

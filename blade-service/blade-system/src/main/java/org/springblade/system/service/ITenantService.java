@@ -96,12 +96,4 @@ public interface ITenantService extends BaseService<Tenant> {
 	 */
 	String getTenantNameByTenantId(String tenantId);
 
-	/**
-	 * 根据租户ID获取租户信息
-	 *
-	 * @param tenantId 租户ID
-	 * @return 租户信息
-	 */
-	Tenant getByTenantId(String tenantId);
-
 }

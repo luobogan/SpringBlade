@@ -16,7 +16,7 @@
 package org.springblade.system.service;
 
 import org.springblade.system.entity.PackageMenu;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 
 /**
  * 产品包菜单关联服务接口

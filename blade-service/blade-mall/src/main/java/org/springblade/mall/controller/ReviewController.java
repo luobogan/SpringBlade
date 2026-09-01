@@ -15,7 +15,6 @@
  */
 package org.springblade.mall.controller;
 
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import jakarta.validation.Valid;
@@ -48,7 +47,6 @@ public class ReviewController extends BladeController {
      * 创建评价
      */
     @PostMapping("/submit")
-    @ApiOperationSupport(order = 1)
     @Operation(summary = "创建评价", description = "传入reviewDTO")
     public R<ReviewVO> createReview(@Valid @RequestBody ReviewDTO reviewDTO) {
         try {
@@ -64,7 +62,6 @@ public class ReviewController extends BladeController {
      * 删除评价
      */
     @PostMapping("/remove")
-    @ApiOperationSupport(order = 2)
     @Operation(summary = "删除评价", description = "传入id")
     public R<?> deleteReview(@Parameter(description = "评价ID", required = true) @RequestParam Long id) {
         try {
@@ -80,7 +77,6 @@ public class ReviewController extends BladeController {
      * 获取评价详情
      */
     @GetMapping("/detail")
-    @ApiOperationSupport(order = 3)
     @Operation(summary = "查看详情", description = "传入id")
     public R<ReviewVO> getReviewById(@Parameter(description = "评价ID", required = true) @RequestParam Long id) {
         try {
@@ -96,7 +92,6 @@ public class ReviewController extends BladeController {
      * 获取商品评价列表
      */
     @GetMapping("/product/list")
-    @ApiOperationSupport(order = 4)
     @Operation(summary = "获取商品评价列表", description = "传入productId")
     public R<List<ReviewVO>> getReviewsByProductId(@Parameter(description = "商品ID", required = true) @RequestParam Long productId) {
         try {
@@ -112,7 +107,6 @@ public class ReviewController extends BladeController {
      * 获取当前用户评价列表
      */
     @GetMapping("/user/list")
-    @ApiOperationSupport(order = 5)
     @Operation(summary = "获取当前用户评价列表", description = "无需参数")
     public R<List<ReviewVO>> getCurrentUserReviews(BladeUser user) {
         if (user == null) {
@@ -132,7 +126,6 @@ public class ReviewController extends BladeController {
      * 获取所有评价（管理员）
      */
     @GetMapping("/list")
-    @ApiOperationSupport(order = 6)
     @Operation(summary = "获取所有评价", description = "无需参数")
     public R<List<ReviewVO>> getAllReviews() {
         try {
@@ -148,7 +141,6 @@ public class ReviewController extends BladeController {
      * 根据评分获取评价
      */
     @GetMapping("/rating/list")
-    @ApiOperationSupport(order = 7)
     @Operation(summary = "根据评分获取评价", description = "传入productId和rating")
     public R<List<ReviewVO>> getReviewsByRating(@Parameter(description = "商品ID", required = true) @RequestParam Long productId,
                                                @Parameter(description = "评分", required = true) @RequestParam Integer rating) {
@@ -165,7 +157,6 @@ public class ReviewController extends BladeController {
      * 获取商品评价统计
      */
     @GetMapping("/stats")
-    @ApiOperationSupport(order = 8)
     @Operation(summary = "获取商品评价统计", description = "传入productId")
     public R<ReviewService.ReviewStatsVO> getReviewStats(@Parameter(description = "商品ID", required = true) @RequestParam Long productId) {
         try {

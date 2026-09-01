@@ -2,8 +2,6 @@ package org.springblade.mall.controller;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springblade.core.boot.file.BladeFile;
-import org.springblade.core.boot.file.BladeFileProxyFactory;
-import org.springblade.core.boot.file.ImageFileEntity;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.boot.ctrl.BladeController;
@@ -68,17 +66,16 @@ public class FileUploadController extends BladeController {
 			String tenantId = SecureUtil.getTenantId();
 
 			BladeFile bladeFile = getFile(file, type);
-			bladeFile.setTenantId(tenantId);
-			BladeFileProxyFactory.UploadResult result = bladeFile.transferEnhanced();
+			bladeFile.transfer();
 
-			boolean isZip = result != null && result.getFilePath() != null && result.getFilePath().endsWith(".zip");
-			boolean isEncrypt = result != null && result.getAesCode() != null;
-			String aesCode = (result != null) ? result.getAesCode() : null;
+			boolean isZip = bladeFile.getUploadPath() != null && bladeFile.getUploadPath().endsWith(".zip");
+			boolean isEncrypt = false;
+			String aesCode = null;
 
 			Long fileId = null;
 
-			if ((result == null || result.getFileId() == null) && imageFileService != null) {
-				ImageFileEntity entity = ImageFileService.buildEntity(
+			if (imageFileService != null) {
+				ImageFile entity = ImageFileService.buildEntity(
 					bladeFile.getOriginalFileName(),
 					fileContentType,
 					bladeFile.getUploadPath(),
@@ -90,8 +87,6 @@ public class FileUploadController extends BladeController {
 				);
 				fileId = imageFileService.saveFile(entity);
 				log.info("文件已通过 MallImageFileService 保存到ImageFile表，fileId={}, tenantId={}", fileId, tenantId);
-			} else if (result != null && result.getFileId() != null) {
-				fileId = result.getFileId();
 			}
 
 			Map<String, Object> response = new HashMap<>();
@@ -128,17 +123,16 @@ public class FileUploadController extends BladeController {
 			String tenantId = SecureUtil.getTenantId();
 
 			BladeFile bladeFile = getFile(file, "common");
-			bladeFile.setTenantId(tenantId);
-			BladeFileProxyFactory.UploadResult result = bladeFile.transferEnhanced();
+			bladeFile.transfer();
 
-			boolean isZip = result != null && result.getFilePath() != null && result.getFilePath().endsWith(".zip");
-			boolean isEncrypt = result != null && result.getAesCode() != null;
-			String aesCode = (result != null) ? result.getAesCode() : null;
+			boolean isZip = bladeFile.getUploadPath() != null && bladeFile.getUploadPath().endsWith(".zip");
+			boolean isEncrypt = false;
+			String aesCode = null;
 
 			Long fileId = null;
 
-			if ((result == null || result.getFileId() == null) && imageFileService != null) {
-				ImageFileEntity entity = ImageFileService.buildEntity(
+			if (imageFileService != null) {
+				ImageFile entity = ImageFileService.buildEntity(
 					bladeFile.getOriginalFileName(),
 					fileContentType,
 					bladeFile.getUploadPath(),
@@ -150,8 +144,6 @@ public class FileUploadController extends BladeController {
 				);
 				fileId = imageFileService.saveFile(entity);
 				log.info("文件已通过 MallImageFileService 保存到ImageFile表，fileId={}, tenantId={}", fileId, tenantId);
-			} else if (result != null && result.getFileId() != null) {
-				fileId = result.getFileId();
 			}
 
 			Map<String, Object> response = new HashMap<>();
@@ -202,17 +194,16 @@ public class FileUploadController extends BladeController {
 			}
 
 			BladeFile bladeFile = getFile(file, type);
-			bladeFile.setTenantId(tenantId);
-			BladeFileProxyFactory.UploadResult result = bladeFile.transferEnhanced();
+			bladeFile.transfer();
 
-			boolean isZip = result != null && result.getFilePath() != null && result.getFilePath().endsWith(".zip");
-			boolean isEncrypt = result != null && result.getAesCode() != null;
-			String aesCode = (result != null) ? result.getAesCode() : null;
+			boolean isZip = bladeFile.getUploadPath() != null && bladeFile.getUploadPath().endsWith(".zip");
+			boolean isEncrypt = false;
+			String aesCode = null;
 
 			Long fileId = null;
 
-			if ((result == null || result.getFileId() == null) && imageFileService != null) {
-				ImageFileEntity entity = ImageFileService.buildEntity(
+			if (imageFileService != null) {
+				ImageFile entity = ImageFileService.buildEntity(
 					bladeFile.getOriginalFileName(),
 					fileContentType,
 					bladeFile.getUploadPath(),
@@ -224,8 +215,6 @@ public class FileUploadController extends BladeController {
 				);
 				fileId = imageFileService.saveFile(entity);
 				log.info("文件已通过 MallImageFileService 保存到ImageFile表，fileId={}, tenantId={}", fileId, tenantId);
-			} else if (result != null && result.getFileId() != null) {
-				fileId = result.getFileId();
 			}
 
 			Map<String, Object> response = new HashMap<>();

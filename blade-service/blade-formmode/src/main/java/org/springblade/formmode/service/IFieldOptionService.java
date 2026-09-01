@@ -1,6 +1,6 @@
 package org.springblade.formmode.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 import org.springblade.formmode.entity.FieldOption;
 
 import java.util.List;

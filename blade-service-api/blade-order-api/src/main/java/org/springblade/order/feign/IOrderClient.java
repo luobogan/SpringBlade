@@ -1,7 +1,7 @@
 package org.springblade.order.feign;
 
-import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.tool.api.R;
+import org.springblade.order.constant.OrderConstant;
 import org.springblade.order.vo.OrderVO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 @FeignClient(
-    value = AppConstant.APPLICATION_ORDER_NAME,
+    value = OrderConstant.APPLICATION_ORDER_NAME,
     fallback = IOrderClientFallback.class
 )
 public interface IOrderClient {

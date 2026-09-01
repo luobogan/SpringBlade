@@ -30,7 +30,7 @@ import org.springblade.system.vo.GrantTreeVO;
 import org.springblade.system.vo.MenuVO;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,9 +59,9 @@ public class TenantPackageServiceImpl extends ServiceImpl<TenantPackageMapper, T
 	@Override
 	public GrantTreeVO grantTree() {
 		GrantTreeVO vo = new GrantTreeVO();
-		vo.setMenu(ForestNodeMerger.merge(menuMapper.grantTree("000000")));
-		vo.setDataScope(ForestNodeMerger.merge(menuMapper.grantDataScopeTree("000000")));
-		vo.setApiScope(ForestNodeMerger.merge(menuMapper.grantApiScopeTree("000000")));
+		vo.setMenu(ForestNodeMerger.merge(menuMapper.grantTree()));
+		vo.setDataScope(ForestNodeMerger.merge(menuMapper.grantDataScopeTree()));
+		vo.setApiScope(ForestNodeMerger.merge(menuMapper.grantApiScopeTree()));
 		return vo;
 	}
 

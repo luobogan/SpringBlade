@@ -1,6 +1,6 @@
 package org.springblade.mall.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springblade.mall.dto.CartDTO;
 import org.springblade.mall.entity.Cart;

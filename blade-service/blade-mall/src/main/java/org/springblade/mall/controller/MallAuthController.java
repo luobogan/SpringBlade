@@ -105,12 +105,12 @@ public class MallAuthController {
             }
 
             // 根据手机号查询用户
-            R<User> userResult = userClient.getUserByPhone(tenantId, request.getPhone());
-            if (!userResult.isSuccess() || userResult.getData() == null) {
+            R<UserInfo> userResult = userClient.getUserByPhone(tenantId, request.getPhone());
+            if (!userResult.isSuccess() || userResult.getData() == null || userResult.getData().getUser() == null) {
                 return R.fail("手机号或密码错误");
             }
 
-            User user = userResult.getData();
+            User user = userResult.getData().getUser();
 
             // SM2 解密密码并验证
             String decryptedPassword = decryptSM2Password(request.getPassword());
@@ -334,9 +334,9 @@ public class MallAuthController {
         //    解决：首次登录时 OAuth 表插入了空记录但没有 userId，导致二次登录也找不到用户
         log.info("[OAuth未绑定] 尝试直接按 account 查询用户表, openId: {}, tenantId: {}", openId, tenantId);
         try {
-            R<User> userByAccountResult = userClient.getUserByAccount(tenantId, openId);
-            if (userByAccountResult.isSuccess() && userByAccountResult.getData() != null) {
-                User accountUser = userByAccountResult.getData();
+            R<UserInfo> userByAccountResult = userClient.getUserByAccount(tenantId, openId);
+            if (userByAccountResult.isSuccess() && userByAccountResult.getData() != null && userByAccountResult.getData().getUser() != null) {
+                User accountUser = userByAccountResult.getData().getUser();
                 if (accountUser != null && accountUser.getId() != null && accountUser.getId() > 0) {
                     log.info("[账户查询] 找到已存在用户, userId: {}, openId: {}, tenantId: {}", accountUser.getId(), openId, tenantId);
                     // 补充绑定 OAuth 记录
@@ -401,9 +401,11 @@ public class MallAuthController {
         log.info("[创建用户] 准备保存用户, account: {}, wxOpenid: {}, tenantId: {}, name: {}", openId, openId, tenantId, nickname);
 
         // 2. 调用 Feign 保存用户
-        R<User> saveResult;
+        R<UserInfo> saveResult;
         try {
-            saveResult = userClient.saveUser(user);
+            UserInfo wrappedUserInfo = new UserInfo();
+            wrappedUserInfo.setUser(user);
+            saveResult = userClient.saveUser(wrappedUserInfo);
         } catch (Exception feignEx) {
             log.error("[创建用户] Feign 调用 saveUser 异常: {}", feignEx.getMessage());
             throw new RuntimeException("远程创建用户失败: " + feignEx.getMessage());
@@ -416,20 +418,20 @@ public class MallAuthController {
         if (!saveResult.isSuccess()) {
             throw new RuntimeException("创建用户失败: " + (saveResult.getMsg() != null ? saveResult.getMsg() : "未知错误"));
         }
-        if (saveResult.getData() == null) {
+        if (saveResult.getData() == null || saveResult.getData().getUser() == null) {
             throw new RuntimeException("创建用户失败：返回用户数据为空");
         }
 
         // 4. 验证返回的用户对象完整性
-        user = saveResult.getData();
+        user = saveResult.getData().getUser();
         if (user.getId() == null || user.getId() <= 0) {
             log.error("[创建用户] 返回的 userId 无效: {}, 尝试按 account 重新查询", user.getId());
             // 【关键兜底】如果返回的 id 无效，尝试重新查询
             try {
-                R<User> retryResult = userClient.getUserByAccount(tenantId, openId);
-                if (retryResult.isSuccess() && retryResult.getData() != null
-                    && retryResult.getData().getId() != null && retryResult.getData().getId() > 0) {
-                    user = retryResult.getData();
+                R<UserInfo> retryResult = userClient.getUserByAccount(tenantId, openId);
+                if (retryResult.isSuccess() && retryResult.getData() != null && retryResult.getData().getUser() != null
+                    && retryResult.getData().getUser().getId() != null && retryResult.getData().getUser().getId() > 0) {
+                    user = retryResult.getData().getUser();
                     log.info("[创建用户] 重新查询成功, userId: {}", user.getId());
                 } else {
                     throw new RuntimeException("创建用户后验证失败：无法获取有效的用户ID");
@@ -656,7 +658,9 @@ public class MallAuthController {
                 user.getPhone());
 
             // 保存用户信息更新
-            R<User> saveResult = userClient.saveUser(user);
+            UserInfo saveUserInfo = new UserInfo();
+            saveUserInfo.setUser(user);
+            R<UserInfo> saveResult = userClient.saveUser(saveUserInfo);
             if (!saveResult.isSuccess()) {
                 log.error("[updateUserInfo] 保存用户信息失败: {}", saveResult.getMsg());
                 return R.fail("更新用户信息失败");
@@ -745,19 +749,20 @@ public class MallAuthController {
 
             // 检查手机号是否已存在（使用动态租户ID）
             log.info("开始检查手机号是否存在 - tenantId: {}, phone: {}", tenantId, request.getPhone());
-            R<User> existingUserResult = userClient.getUserByPhone(tenantId, request.getPhone());
-            log.info("手机号查询结果 - success: {}, hasData: {}, data: {}, dataClass: {}",
-                existingUserResult.isSuccess(),
-                existingUserResult.getData() != null,
-                existingUserResult.getData(),
-                existingUserResult.getData() != null ? existingUserResult.getData().getClass().getName() : "null");
-            log.info("R对象详情 - code: {}, msg: {}", existingUserResult.getCode(), existingUserResult.getMsg());
+            R<UserInfo> existingUserResult = userClient.getUserByPhone(tenantId, request.getPhone());
+            UserInfo existingUserInfo = existingUserResult != null ? existingUserResult.getData() : null;
+            User existingUser = existingUserInfo != null ? existingUserInfo.getUser() : null;
+            log.info("手机号查询结果 - success: {}, hasData: {}, user: {}",
+                existingUserResult != null && existingUserResult.isSuccess(),
+                existingUserInfo != null,
+                existingUser);
+            log.info("R对象详情 - code: {}, msg: {}", existingUserResult != null ? existingUserResult.getCode() : "null", existingUserResult != null ? existingUserResult.getMsg() : "null");
 
             // 只有当查询成功且返回了有效用户（userId 不为 null）时才认为用户已存在
-            if (existingUserResult.isSuccess() && existingUserResult.getData() != null && existingUserResult.getData().getId() != null) {
+            if (existingUserResult != null && existingUserResult.isSuccess() && existingUser != null && existingUser.getId() != null) {
                 log.warn("手机号已存在，阻止注册 - userId: {}, account: {}",
-                    existingUserResult.getData().getId(),
-                    existingUserResult.getData().getAccount());
+                    existingUser.getId(),
+                    existingUser.getAccount());
                 return R.fail("该手机号已被注册");
             }
             log.info("手机号检查通过，可以注册");
@@ -776,17 +781,19 @@ public class MallAuthController {
             user.setStatus(1); // 启用状态
 
             // 调用 Feign 保存用户
-            R<User> saveResult = userClient.saveUser(user);
-            if (!saveResult.isSuccess() || saveResult.getData() == null) {
+            UserInfo regSaveUserInfo = new UserInfo();
+            regSaveUserInfo.setUser(user);
+            R<UserInfo> saveResult = userClient.saveUser(regSaveUserInfo);
+            if (!saveResult.isSuccess() || saveResult.getData() == null || saveResult.getData().getUser() == null) {
                 return R.fail("创建用户失败: " + (saveResult.getMsg() != null ? saveResult.getMsg() : "未知错误"));
             }
 
-            user = saveResult.getData();
+            user = saveResult.getData().getUser();
             if (user.getId() == null || user.getId() <= 0) {
                 // 兜底：尝试重新查询（使用动态租户ID）
-                R<User> retryResult = userClient.getUserByAccount(tenantId, request.getPhone());
-                if (retryResult.isSuccess() && retryResult.getData() != null && retryResult.getData().getId() != null && retryResult.getData().getId() > 0) {
-                    user = retryResult.getData();
+                R<UserInfo> retryResult = userClient.getUserByAccount(tenantId, request.getPhone());
+                if (retryResult.isSuccess() && retryResult.getData() != null && retryResult.getData().getUser() != null && retryResult.getData().getUser().getId() != null && retryResult.getData().getUser().getId() > 0) {
+                    user = retryResult.getData().getUser();
                 } else {
                     return R.fail("创建用户后验证失败：无法获取有效的用户ID");
                 }

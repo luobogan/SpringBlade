@@ -1,6 +1,5 @@
 package org.springblade.order.controller;
 
-import com.github.xiaoymin.knife4j.annotations.ApiOperationSupport;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import jakarta.validation.Valid;
@@ -24,7 +23,6 @@ public class OrderController extends BladeController {
     private final IOrderService orderService;
 
     @PostMapping("/submit")
-    @ApiOperationSupport(order = 1)
     @Operation(summary = "创建订单", description = "传入orderDTO")
     public R<OrderVO> createOrder(@Valid @RequestBody OrderDTO orderDTO, BladeUser user) {
         if (user != null) {
@@ -35,7 +33,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/detail")
-    @ApiOperationSupport(order = 2)
     @Operation(summary = "查看详情", description = "传入id")
     public R<OrderVO> getOrderById(@Parameter(description = "订单ID", required = true) @RequestParam String id, BladeUser user) {
         OrderVO orderVO = orderService.getOrderById(Long.parseLong(id), user);
@@ -43,7 +40,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/detail-by-no")
-    @ApiOperationSupport(order = 3)
     @Operation(summary = "根据订单号查看详情", description = "传入orderNo")
     public R<OrderVO> getOrderByOrderNo(@Parameter(description = "订单号", required = true) @RequestParam String orderNo) {
         OrderVO orderVO = orderService.getOrderByOrderNo(orderNo);
@@ -51,7 +47,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/list")
-    @ApiOperationSupport(order = 4)
     @Operation(summary = "获取当前用户订单列表", description = "无需参数")
     public R<List<OrderVO>> getCurrentUserOrders(BladeUser user) {
         if (user == null) {
@@ -62,7 +57,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/list")
-    @ApiOperationSupport(order = 5)
     @Operation(summary = "获取所有订单", description = "无需参数")
     public R<List<OrderVO>> getAllOrders() {
         List<OrderVO> orders = orderService.getAllOrders();
@@ -70,7 +64,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/list-by-status")
-    @ApiOperationSupport(order = 6)
     @Operation(summary = "根据状态获取订单", description = "传入status")
     public R<List<OrderVO>> getOrdersByStatus(@Parameter(description = "订单状态", required = true) @RequestParam String status) {
         List<OrderVO> orders = orderService.getOrdersByStatus(status);
@@ -78,7 +71,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/update-status")
-    @ApiOperationSupport(order = 7)
     @Operation(summary = "更新订单状态", description = "传入id和status")
     public R<OrderVO> updateOrderStatus(@Parameter(description = "订单ID", required = true) @RequestParam String id,
                                         @Parameter(description = "订单状态", required = true) @RequestParam String status) {
@@ -87,7 +79,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/pay")
-    @ApiOperationSupport(order = 8)
     @Operation(summary = "支付订单", description = "传入id、paymentMethod和paymentNo")
     public R<OrderVO> payOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id,
                                @Parameter(description = "支付方式", required = true) @RequestParam String paymentMethod,
@@ -97,7 +88,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/ship")
-    @ApiOperationSupport(order = 9)
     @Operation(summary = "发货", description = "传入id、shippingMethod和trackingNo")
     public R<OrderVO> shipOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id,
                                 @Parameter(description = "配送方式", required = true) @RequestParam String shippingMethod,
@@ -107,7 +97,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/complete")
-    @ApiOperationSupport(order = 10)
     @Operation(summary = "完成订单", description = "传入id")
     public R<OrderVO> completeOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
         OrderVO orderVO = orderService.completeOrder(Long.parseLong(id));
@@ -115,7 +104,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/cancel")
-    @ApiOperationSupport(order = 11)
     @Operation(summary = "取消订单", description = "传入id")
     public R<OrderVO> cancelOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
         OrderVO orderVO = orderService.cancelOrder(Long.parseLong(id));
@@ -123,7 +111,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/remove")
-    @ApiOperationSupport(order = 12)
     @Operation(summary = "删除订单", description = "传入id")
     public R<?> deleteOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
         orderService.deleteOrder(Long.parseLong(id));
@@ -131,7 +118,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/review")
-    @ApiOperationSupport(order = 13)
     @Operation(summary = "评价订单", description = "传入id")
     public R<OrderVO> reviewOrder(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
         OrderVO orderVO = orderService.reviewOrder(Long.parseLong(id));
@@ -139,7 +125,6 @@ public class OrderController extends BladeController {
     }
 
     @PostMapping("/apply-return")
-    @ApiOperationSupport(order = 14)
     @Operation(summary = "申请退换/售后", description = "传入id")
     public R<OrderVO> applyReturn(@Parameter(description = "订单ID", required = true) @RequestParam String id) {
         OrderVO orderVO = orderService.applyReturn(Long.parseLong(id));
@@ -147,7 +132,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/pending-payment")
-    @ApiOperationSupport(order = 15)
     @Operation(summary = "获取当前用户的待付款订单", description = "无需参数")
     public R<List<OrderVO>> getPendingPaymentOrders(BladeUser user) {
         if (user == null) {
@@ -158,7 +142,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/pending-receipt")
-    @ApiOperationSupport(order = 16)
     @Operation(summary = "获取当前用户的待收货订单", description = "无需参数")
     public R<List<OrderVO>> getPendingReceiptOrders(BladeUser user) {
         if (user == null) {
@@ -169,7 +152,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/pending-review")
-    @ApiOperationSupport(order = 17)
     @Operation(summary = "获取当前用户的待评价订单", description = "无需参数")
     public R<List<OrderVO>> getPendingReviewOrders(BladeUser user) {
         if (user == null) {
@@ -180,7 +162,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/return-after-sales")
-    @ApiOperationSupport(order = 18)
     @Operation(summary = "获取当前用户的退换/售后订单", description = "无需参数")
     public R<List<OrderVO>> getReturnAfterSalesOrders(BladeUser user) {
         if (user == null) {
@@ -191,7 +172,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/all")
-    @ApiOperationSupport(order = 19)
     @Operation(summary = "获取当前用户的全部订单", description = "无需参数")
     public R<List<OrderVO>> getAllUserOrders(BladeUser user) {
         if (user == null) {
@@ -202,7 +182,6 @@ public class OrderController extends BladeController {
     }
 
     @GetMapping("/user/counts")
-    @ApiOperationSupport(order = 20)
     @Operation(summary = "获取当前用户的订单数量统计", description = "无需参数")
     public R<OrderCountStats> getOrderCounts(BladeUser user) {
         if (user == null) {

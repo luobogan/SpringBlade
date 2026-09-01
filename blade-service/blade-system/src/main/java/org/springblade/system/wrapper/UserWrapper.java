@@ -16,6 +16,7 @@
 package org.springblade.system.wrapper;
 
 import org.springblade.core.mp.support.BaseEntityWrapper;
+import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.SpringUtil;

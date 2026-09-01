@@ -1,7 +1,7 @@
 package org.springblade.mall.service;
 
 import org.springblade.mall.entity.MemberAccount;
-import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.spring.service.IService;
 import org.springblade.mall.vo.MemberAccountVO;
 import java.math.BigDecimal;
 
