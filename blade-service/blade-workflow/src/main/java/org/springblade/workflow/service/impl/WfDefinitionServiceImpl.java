@@ -108,7 +108,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     @Override
     public List<WfProcessDefinition> listByForm(Long formId) {
         return defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
-            .eq(WfProcessDefinition::getFormId, formId)
+            .eq(formId != null, WfProcessDefinition::getFormId, formId)
             .orderByDesc(WfProcessDefinition::getVersion));
     }
 
