@@ -26,6 +26,12 @@ public class FormLayoutSaveDTO {
     @Schema(name = "布局配置JSON")
     private String layoutConfig;
 
+    @Schema(name = "布局类型：0编辑(默认) 1显示 3监控 4打印")
+    private Integer layoutType;
+
+    @Schema(name = "绑定流程节点Key（空=通用）")
+    private String nodeKey;
+
     @Schema(name = "状态：1启用 0禁用")
     private Integer status;
 }

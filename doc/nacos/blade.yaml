@@ -45,6 +45,12 @@ spring:
             - Path=/blade-formmode/**
           filters:
             - StripPrefix=1
+        - id: blade-workflow
+          uri: lb://blade-workflow
+          predicates:
+            - Path=/blade-workflow/**
+          filters:
+            - StripPrefix=1
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
@@ -188,6 +194,7 @@ blade:
     skip-url:
       - /weixin
       - /api/blade-formmode/form/data/save
+      - /api/blade-workflow/**
   secure:
     skip-url:
       - /test/**
@@ -202,6 +209,7 @@ blade:
       - /auth/**
       - /api/blade-formmode/form/data/save
       - /api/blade-formmode/browser/**
+      - /api/blade-workflow/**
     client:
       - client-id: sword
         path-patterns:

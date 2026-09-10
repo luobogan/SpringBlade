@@ -164,7 +164,7 @@ public class TenantPackageController extends BladeController {
 		if (Func.isEmpty(menuIds)) {
 			return R.data(new ArrayList<>());
 		}
-		List<MenuVO> allMenus = menuMapper.grantTree();
+		List<MenuVO> allMenus = menuMapper.grantTree(null);
 		List<MenuVO> filtered = filterMenuTreeByPackage(allMenus, menuIds);
 		return R.data(ForestNodeMerger.merge(filtered));
 	}

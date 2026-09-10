@@ -32,4 +32,25 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <!-- Lombok 在本项目不会自动作为注解处理器运行（根 pom 仅以 provided 声明依赖），
+                 必须显式声明 annotationProcessorPaths。
+                 本模块承载 Entity / VO / DTO，若缺失该配置，产出的 jar 中将不含 getter/setter，
+                 下游 blade-formmode 编译会报 "找不到符号 getXxx()"。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

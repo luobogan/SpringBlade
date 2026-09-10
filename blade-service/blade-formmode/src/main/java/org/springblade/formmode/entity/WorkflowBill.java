@@ -29,6 +29,13 @@ public class WorkflowBill implements Serializable {
     @Schema(description = "数据库表名")
     private String tableName;
 
+    /**
+     * 表单类型：0-自定义表单（表设计器创建） 1-系统表单（平台预置）
+     * 对齐 ecology 路径设置「对应表单」的 isBill 联动：选择表单类型后只展示同类型表单。
+     */
+    @Schema(description = "表单类型：0-自定义表单 1-系统表单")
+    private Integer formType;
+
     @Schema(description = "表单描述")
     private String description;
 

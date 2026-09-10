@@ -59,9 +59,10 @@ public class TenantPackageServiceImpl extends ServiceImpl<TenantPackageMapper, T
 	@Override
 	public GrantTreeVO grantTree() {
 		GrantTreeVO vo = new GrantTreeVO();
-		vo.setMenu(ForestNodeMerger.merge(menuMapper.grantTree()));
-		vo.setDataScope(ForestNodeMerger.merge(menuMapper.grantDataScopeTree()));
-		vo.setApiScope(ForestNodeMerger.merge(menuMapper.grantApiScopeTree()));
+		// 产品包菜单分配为平台级配置，不做租户过滤
+		vo.setMenu(ForestNodeMerger.merge(menuMapper.grantTree(null)));
+		vo.setDataScope(ForestNodeMerger.merge(menuMapper.grantDataScopeTree(null)));
+		vo.setApiScope(ForestNodeMerger.merge(menuMapper.grantApiScopeTree(null)));
 		return vo;
 	}
 

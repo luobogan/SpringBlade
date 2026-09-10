@@ -261,37 +261,41 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 
 	@Override
 	public List<MenuVO> grantTree(BladeUser user) {
-		return ForestNodeMerger.merge(user.getTenantId().equals(BladeConstant.ADMIN_TENANT_ID) ? baseMapper.grantTree() : baseMapper.grantTreeByRole(Func.toLongList(user.getRoleId())));
+		// 菜单按租户各存一份副本，必须按当前用户租户过滤，否则会出现多个租户的同名重复菜单
+		String tenantId = user.getTenantId();
+		return ForestNodeMerger.merge(isAdmin(user) ? baseMapper.grantTree(tenantId) : baseMapper.grantTreeByRole(Func.toLongList(user.getRoleId()), tenantId));
 	}
 
 	@Override
 	public List<MenuVO> grantTree(BladeUser user, String roleId) {
 		// 始终返回当前租户的所有菜单，忽略 roleId
-		List<MenuVO> tree = baseMapper.grantTree();
+		List<MenuVO> tree = baseMapper.grantTree(user.getTenantId());
 		return ForestNodeMerger.merge(tree);
 	}
 
 	@Override
 	public List<MenuVO> grantDataScopeTree(BladeUser user) {
-		return ForestNodeMerger.merge(user.getTenantId().equals(BladeConstant.ADMIN_TENANT_ID) ? baseMapper.grantDataScopeTree() : baseMapper.grantDataScopeTreeByRole(Func.toLongList(user.getRoleId())));
+		String tenantId = user.getTenantId();
+		return ForestNodeMerger.merge(isAdmin(user) ? baseMapper.grantDataScopeTree(tenantId) : baseMapper.grantDataScopeTreeByRole(Func.toLongList(user.getRoleId()), tenantId));
 	}
 
 	@Override
 	public List<MenuVO> grantDataScopeTree(BladeUser user, String roleId) {
 		// 始终返回当前租户的所有数据权限，忽略 roleId
-		List<MenuVO> tree = baseMapper.grantDataScopeTree();
+		List<MenuVO> tree = baseMapper.grantDataScopeTree(user.getTenantId());
 		return ForestNodeMerger.merge(tree);
 	}
 
 	@Override
 	public List<MenuVO> grantApiScopeTree(BladeUser user) {
-		return ForestNodeMerger.merge(user.getTenantId().equals(BladeConstant.ADMIN_TENANT_ID) ? baseMapper.grantApiScopeTree() : baseMapper.grantApiScopeTreeByRole(Func.toLongList(user.getRoleId())));
+		String tenantId = user.getTenantId();
+		return ForestNodeMerger.merge(isAdmin(user) ? baseMapper.grantApiScopeTree(tenantId) : baseMapper.grantApiScopeTreeByRole(Func.toLongList(user.getRoleId()), tenantId));
 	}
 
 	@Override
 	public List<MenuVO> grantApiScopeTree(BladeUser user, String roleId) {
 		// 始终返回当前租户的所有API权限，忽略 roleId
-		List<MenuVO> tree = baseMapper.grantApiScopeTree();
+		List<MenuVO> tree = baseMapper.grantApiScopeTree(user.getTenantId());
 		return ForestNodeMerger.merge(tree);
 	}
 
@@ -332,7 +336,18 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 
 	@Override
 	public List<MenuVO> grantTopTree(BladeUser user) {
-		return ForestNodeMerger.merge(user.getTenantId().equals(BladeConstant.ADMIN_TENANT_ID) ? baseMapper.grantTopTree() : baseMapper.grantTopTreeByRole(Func.toLongList(user.getRoleId())));
+		String tenantId = user.getTenantId();
+		return ForestNodeMerger.merge(isAdmin(user) ? baseMapper.grantTopTree(tenantId) : baseMapper.grantTopTreeByRole(Func.toLongList(user.getRoleId()), tenantId));
+	}
+
+	/**
+	 * 是否超管租户（超管不做租户过滤，可见全部菜单）
+	 *
+	 * @param user 当前用户
+	 * @return 是否超管租户
+	 */
+	private boolean isAdmin(BladeUser user) {
+		return user != null && BladeConstant.ADMIN_TENANT_ID.equals(user.getTenantId());
 	}
 
 	@Override

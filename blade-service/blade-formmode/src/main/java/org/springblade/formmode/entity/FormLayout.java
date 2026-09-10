@@ -43,6 +43,14 @@ public class FormLayout implements Serializable {
     @Schema(name = "布局配置JSON")
     private String layoutConfig;
 
+    @TableField("layout_type")
+    @Schema(name = "布局类型：0编辑(默认) 1显示 3监控 4打印（对齐 ecology layouttype）")
+    private Integer layoutType;
+
+    @TableField("node_key")
+    @Schema(name = "绑定流程节点Key（空=通用，适用所有节点）")
+    private String nodeKey;
+
     @TableField("status")
     @Schema(name = "状态：1启用 0禁用")
     private Integer status;

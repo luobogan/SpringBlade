@@ -5,7 +5,9 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
+import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.formmode.entity.FieldDefinition;
 import org.springblade.formmode.service.IFieldDefinitionService;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +22,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/field-definition")
+@PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
 @Tag(name = "字段定义管理", description = "字段定义管理")
 @RequiredArgsConstructor
 @Slf4j

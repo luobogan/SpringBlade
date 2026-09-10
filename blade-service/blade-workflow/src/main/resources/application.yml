@@ -1,0 +1,36 @@
+## 审批流程服务配置（PoC）
+#server:
+#  port: 8111
+#
+## Flowable 引擎由 org.springblade.workflow.config.FlowableConfig 显式装配，
+## 绑定主数据源并自动部署 classpath:processes/ 下的 BPMN 定义；
+## 此处无需 spring.flowable.* 自动配置属性。
+##
+## 数据源（PoC 验证用，正式环境应由 Nacos blade-workflow-dev.yaml 提供）：
+## 本版 SpringBlade 各服务数据源写在各自的 Nacos blade-{name}-dev.yaml 中，
+## 标准 Druid 自动配置读取 spring.datasource.* 创建 DataSource。
+#spring:
+#  datasource:
+#    driver-class-name: com.mysql.cj.jdbc.Driver
+#    url: jdbc:mysql://localhost:3306/blade_workflow?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+#    username: root
+#    password: 123456
+#
+#blade:
+#  api:
+#    name: workflow
+#    version: 1.0.0
+
+
+
+#服务器端口
+server:
+  port: ${blade.workflow.port:8111}
+
+#数据源配置（从Nacos读取，修改blade.yaml即可）
+spring:
+  datasource:
+    url: ${blade.datasource.workflow.url}
+    username: ${blade.datasource.workflow.username}
+    password: ${blade.datasource.workflow.password}
+    driver-class-name: com.mysql.cj.jdbc.Driver

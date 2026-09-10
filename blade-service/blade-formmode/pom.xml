@@ -42,6 +42,11 @@
             <groupId>org.springblade</groupId>
             <artifactId>blade-user-api</artifactId>
         </dependency>
+        <!-- 审批流程：通过 Feign 发起流程实例（契约 IWorkflowClient 位于该 api 模块） -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-workflow-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
@@ -67,5 +72,25 @@
             <artifactId>jackson-dataformat-xml</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Lombok 在本项目不会自动作为注解处理器运行（根 pom 仅以 provided 声明依赖），
+                 必须显式声明 annotationProcessorPaths，否则 clean 构建会报
+                 "找不到符号 log / getXxx()"（IDE 自带注解处理会掩盖此问题）。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

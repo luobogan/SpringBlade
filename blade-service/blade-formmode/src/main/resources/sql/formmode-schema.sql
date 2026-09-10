@@ -540,12 +540,15 @@ CREATE TABLE IF NOT EXISTS `form_layout` (
     `layout_name`   VARCHAR(200) DEFAULT NULL COMMENT '布局名称',
     `layout_json`   LONGTEXT     DEFAULT NULL COMMENT '布局JSON（兼容泛微E9格式）',
     `layout_config`  TEXT         DEFAULT NULL COMMENT '布局配置JSON',
+    `layout_type`    INT          NOT NULL DEFAULT 0 COMMENT '布局类型：0编辑(默认) 1显示 3监控 4打印（对齐 ecology layouttype）',
+    `node_key`       VARCHAR(64)  DEFAULT NULL COMMENT '绑定流程节点Key（空=通用，适用所有节点）',
     `status`         INT          DEFAULT 1 COMMENT '状态：1启用 0禁用',
     `tenant_id`      VARCHAR(32)  DEFAULT '000000' COMMENT '租户ID',
     `create_time`    DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time`    DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
     PRIMARY KEY (`id`),
     KEY `idx_form_id` (`form_id`),
+    KEY `idx_form_node_type` (`form_id`, `node_key`, `layout_type`),
     KEY `idx_tenant` (`tenant_id`),
     CONSTRAINT `fk_layout_form` FOREIGN KEY (`form_id`) REFERENCES `workflow_bill`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表单布局（Excel设计器）';

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="http://springblade.workflow"
+             id="definitions_simpleApproval">
+
+    <process id="simpleApproval" name="Simple Approval" isExecutable="true">
+        <startEvent id="startEvent" name="发起"/>
+        <userTask id="approveTask" name="审批" flowable:assignee="${approver}"/>
+        <endEvent id="endEvent" name="结束"/>
+
+        <sequenceFlow id="flow_start_approve" sourceRef="startEvent" targetRef="approveTask"/>
+        <sequenceFlow id="flow_approve_end" sourceRef="approveTask" targetRef="endEvent"/>
+    </process>
+
+</definitions>

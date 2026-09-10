@@ -1,0 +1,39 @@
+package org.springblade.workflow.feign;
+
+import org.springblade.core.tool.api.R;
+import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.workflow.dto.StartProcessDTO;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+
+/**
+ * 审批流程 Feign 客户端接口
+ *
+ * <p><b>服务名</b>：统一为 {@code blade-workflow}（常量 {@link WorkflowConstant#APPLICATION_WORKFLOW_NAME}）；
+ * 严禁硬编码旧的 {@code blade-flow}（会导致服务发现失败）。</p>
+ *
+ * <p><b>路径约定</b>：Cloud 版约定（CLAUDE.md §6.3）后端 Controller 直接使用<b>资源路径</b>，
+ * 由网关按服务名路由（{@code Path=/blade-workflow/**} + {@code StripPrefix=1}），
+ * 前端经网关以 {@code /api/blade-workflow/...} 访问（Umi dev proxy 会剥离 {@code /api}）。
+ * Feign 经服务发现直连服务、<b>不经网关</b>，故此处同样使用资源路径，不带 {@code /api} 前缀。</p>
+ *
+ * <p><b>契约收敛</b>：仅保留跨服务必需的 {@code startProcess}，对齐 {@code POST /instance/start}；
+ * 待办/已办/审批等接口由前端经网关直连，不再经 Feign。</p>
+ */
+@FeignClient(
+    value = WorkflowConstant.APPLICATION_WORKFLOW_NAME,
+    fallback = IWorkflowClientFallback.class
+)
+public interface IWorkflowClient {
+
+    /**
+     * 发起流程实例
+     *
+     * @param dto 发起参数（formId + dataId + 流程定义 + 表单字段值）
+     * @return 流程实例ID（wf_instance.id）
+     */
+    @PostMapping("/instance/start")
+    R<Long> startProcess(@RequestBody StartProcessDTO dto);
+
+}

@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springblade.core.boot.ctrl.BladeController;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
+import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.formmode.dto.FormModeDTO;
 import org.springblade.formmode.entity.ModeInfo;
 import org.springblade.formmode.entity.ModeTreeField;
@@ -34,7 +35,7 @@ public class FormModeController extends BladeController {
      * 创建表单模块
      */
     @PostMapping
-    @PreAuth("hasPermission('formmode:mode:add')")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<FormModeVO> create(@Valid @RequestBody FormModeDTO formModeDTO) {
         FormModeVO result = formModeService.createFormMode(formModeDTO);
         return R.data(result, "模块创建成功");
@@ -44,7 +45,7 @@ public class FormModeController extends BladeController {
      * 更新表单模块
      */
     @PutMapping("/{id}")
-    @PreAuth("hasPermission('formmode:mode:edit')")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<FormModeVO> update(@PathVariable Long id, @Valid @RequestBody FormModeDTO formModeDTO) {
         FormModeVO result = formModeService.updateFormMode(id, formModeDTO);
         return R.data(result, "模块更新成功");
@@ -54,7 +55,7 @@ public class FormModeController extends BladeController {
      * 删除表单模块
      */
     @DeleteMapping("/{id}")
-    @PreAuth("hasPermission('formmode:mode:delete')")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Boolean> delete(@PathVariable Long id) {
         boolean result = formModeService.deleteFormMode(id);
         return result ? R.success("模块删除成功") : R.fail("模块不存在");
@@ -64,7 +65,7 @@ public class FormModeController extends BladeController {
      * 获取模块详情
      */
     @GetMapping("/{id}")
-    @PreAuth("hasPermission('formmode:mode:view')")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<FormModeVO> detail(@PathVariable Long id) {
         FormModeVO result = formModeService.getFormModeDetail(id);
         return result != null ? R.data(result) : R.fail("模块不存在");
@@ -74,7 +75,7 @@ public class FormModeController extends BladeController {
      * 获取所有模块列表
      */
     @GetMapping("/list")
-    @PreAuth("hasPermission('formmode:mode:view')")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<List<ModeInfo>> list() {
         List<ModeInfo> list = formModeService.list();
         return R.data(list);

@@ -17,6 +17,7 @@ package org.springblade.admin;
 
 import de.codecentric.boot.admin.server.config.EnableAdminServer;
 import org.springblade.core.cloud.client.BladeCloudApplication;
+import org.springframework.context.annotation.ComponentScan;
 import org.springblade.core.launch.BladeApplication;
 import org.springblade.core.launch.constant.AppConstant;
 
@@ -27,6 +28,7 @@ import org.springblade.core.launch.constant.AppConstant;
  */
 @EnableAdminServer
 @BladeCloudApplication
+@ComponentScan(basePackages = "org.springblade")
 public class AdminApplication {
 
 	public static void main(String[] args) {

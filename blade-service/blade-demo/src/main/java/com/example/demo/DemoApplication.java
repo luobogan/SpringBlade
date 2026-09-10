@@ -16,6 +16,7 @@
 package com.example.demo;
 
 import org.springblade.core.cloud.client.BladeCloudApplication;
+import org.springframework.context.annotation.ComponentScan;
 import org.springblade.core.launch.BladeApplication;
 
 /**
@@ -24,6 +25,7 @@ import org.springblade.core.launch.BladeApplication;
  * @author Chill
  */
 @BladeCloudApplication
+@ComponentScan(basePackages = "org.springblade")
 public class DemoApplication {
 
 	public static void main(String[] args) {

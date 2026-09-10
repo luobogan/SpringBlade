@@ -17,6 +17,7 @@ package org.springblade.system.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.apache.ibatis.annotations.Param;
 import org.springblade.system.dto.MenuDTO;
 import org.springblade.system.entity.Menu;
 import org.springblade.system.vo.MenuVO;
@@ -59,62 +60,70 @@ public interface MenuMapper extends BaseMapper<Menu> {
 	/**
 	 * 授权树形结构
 	 *
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 菜单授权树形结构
 	 */
-	List<MenuVO> grantTree();
+	List<MenuVO> grantTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 授权树形结构
 	 *
-	 * @param roleId 角色ID集合
+	 * @param roleId   角色ID集合
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 菜单授权树形结构
 	 */
-	List<MenuVO> grantTreeByRole(List<Long> roleId);
+	List<MenuVO> grantTreeByRole(@Param("roleId") List<Long> roleId, @Param("tenantId") String tenantId);
 
 	/**
 	 * 数据权限授权树形结构
 	 *
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 数据权限授权树形结构
 	 */
-	List<MenuVO> grantDataScopeTree();
+	List<MenuVO> grantDataScopeTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 数据权限授权树形结构
 	 *
-	 * @param roleId 角色ID集合
+	 * @param roleId   角色ID集合
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 数据权限授权树形结构
 	 */
-	List<MenuVO> grantDataScopeTreeByRole(List<Long> roleId);
+	List<MenuVO> grantDataScopeTreeByRole(@Param("roleId") List<Long> roleId, @Param("tenantId") String tenantId);
 
 	/**
 	 * 接口权限授权树形结构
 	 *
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 接口权限授权树形结构
 	 */
-	List<MenuVO> grantApiScopeTree();
+	List<MenuVO> grantApiScopeTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 接口权限授权树形结构
 	 *
-	 * @param roleId 角色ID集合
+	 * @param roleId   角色ID集合
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 接口权限授权树形结构
 	 */
-	List<MenuVO> grantApiScopeTreeByRole(List<Long> roleId);
+	List<MenuVO> grantApiScopeTreeByRole(@Param("roleId") List<Long> roleId, @Param("tenantId") String tenantId);
 
 	/**
 	 * 顶部菜单树形结构
 	 *
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 顶部菜单树形结构
 	 */
-	List<MenuVO> grantTopTree();
+	List<MenuVO> grantTopTree(@Param("tenantId") String tenantId);
 
 	/**
 	 * 顶部菜单树形结构
 	 *
-	 * @param roleId 角色ID集合
+	 * @param roleId   角色ID集合
+	 * @param tenantId 租户ID（为空则不过滤租户）
 	 * @return 顶部菜单树形结构
 	 */
-	List<MenuVO> grantTopTreeByRole(List<Long> roleId);
+	List<MenuVO> grantTopTreeByRole(@Param("roleId") List<Long> roleId, @Param("tenantId") String tenantId);
 
 	/**
 	 * 所有菜单

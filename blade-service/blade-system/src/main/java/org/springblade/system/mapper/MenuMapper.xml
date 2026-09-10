@@ -187,18 +187,27 @@
     </select>
 
     <select id="grantTree" resultMap="treeNodeResultMap">
-        select id, parent_id, name as title, id as 'value', id as 'key' from blade_menu where is_deleted = 0 and tenant_id = #{tenantId}
+        select id, parent_id, name as title, id as 'value', id as 'key' from blade_menu where is_deleted = 0
+        <if test="tenantId != null and tenantId != ''">
+            and tenant_id = #{tenantId}
+        </if>
     </select>
 
     <select id="grantTreeByRole" resultMap="treeNodeResultMap">
         <if test="roleId != null and roleId.size > 0">
-            select id, parent_id, name as title, id as 'value', id as 'key' from blade_menu where is_deleted = 0 and tenant_id = #{tenantId}
+            select id, parent_id, name as title, id as 'value', id as 'key' from blade_menu where is_deleted = 0
+            <if test="tenantId != null and tenantId != ''">
+                and tenant_id = #{tenantId}
+            </if>
             and id in ( select menu_id from blade_role_menu where role_id in
             <foreach collection="roleId" index="index" item="item" open="(" separator="," close=")">
                 #{item}
             </foreach> )
             or id in (
-            select parent_id from blade_menu where is_deleted = 0 and tenant_id = #{tenantId}
+            select parent_id from blade_menu where is_deleted = 0
+            <if test="tenantId != null and tenantId != ''">
+                and tenant_id = #{tenantId}
+            </if>
             and id in ( select menu_id from blade_role_menu where role_id in
             <foreach collection="roleId" index="index" item="item" open="(" separator="," close=")">
                 #{item}
@@ -226,7 +235,9 @@
                 WHERE
                     category = 1
                   AND is_deleted = 0
-                  AND tenant_id = #{tenantId}
+                  <if test="tenantId != null and tenantId != ''">
+                      AND tenant_id = #{tenantId}
+                  </if>
                   AND id IN ( SELECT menu_id FROM blade_scope_data WHERE is_deleted = 0 AND menu_id IS NOT NULL )
             ) menu
 
@@ -243,6 +254,11 @@
         WHERE
             is_deleted = 0
           AND menu_id IS NOT NULL
+          AND menu_id IN ( SELECT id FROM blade_menu WHERE is_deleted = 0
+          <if test="tenantId != null and tenantId != ''">
+              AND tenant_id = #{tenantId}
+          </if>
+          )
     </select>
 
     <select id="grantApiScopeTree" resultMap="treeNodeResultMap">
@@ -261,7 +277,9 @@
                 WHERE
                     category = 1
                   AND is_deleted = 0
-                  AND tenant_id = #{tenantId}
+                  <if test="tenantId != null and tenantId != ''">
+                      AND tenant_id = #{tenantId}
+                  </if>
                   AND id IN ( SELECT menu_id FROM blade_scope_api WHERE is_deleted = 0 AND menu_id IS NOT NULL )
             ) menu
 
@@ -278,6 +296,11 @@
         WHERE
             is_deleted = 0
           AND menu_id IS NOT NULL
+          AND menu_id IN ( SELECT id FROM blade_menu WHERE is_deleted = 0
+          <if test="tenantId != null and tenantId != ''">
+              AND tenant_id = #{tenantId}
+          </if>
+          )
     </select>
 
     <select id="grantDataScopeTreeByRole" resultMap="treeNodeResultMap">
@@ -475,18 +498,28 @@
     </select>
 
     <select id="grantTopTree" resultMap="treeNodeResultMap">
-        select id, parent_id, name as title, id as "value", id as "key" from blade_menu where category = 1 and is_deleted = 0 and tenant_id = #{tenantId} order by sort
+        select id, parent_id, name as title, id as "value", id as "key" from blade_menu where category = 1 and is_deleted = 0
+        <if test="tenantId != null and tenantId != ''">
+            and tenant_id = #{tenantId}
+        </if>
+        order by sort
     </select>
 
     <select id="grantTopTreeByRole" resultMap="treeNodeResultMap">
         <if test="roleId != null and roleId.size > 0">
-            select id, parent_id, name as title, id as "value", id as "key" from blade_menu where category = 1 and is_deleted = 0 and tenant_id = #{tenantId}
+            select id, parent_id, name as title, id as "value", id as "key" from blade_menu where category = 1 and is_deleted = 0
+            <if test="tenantId != null and tenantId != ''">
+                and tenant_id = #{tenantId}
+            </if>
             and id in ( select menu_id from blade_role_menu where role_id in
             <foreach collection="roleId" index="index" item="item" open="(" separator="," close=")">
                 #{item}
             </foreach> )
             or id in (
-            select parent_id from blade_menu where is_deleted = 0 and tenant_id = #{tenantId}
+            select parent_id from blade_menu where is_deleted = 0
+            <if test="tenantId != null and tenantId != ''">
+                and tenant_id = #{tenantId}
+            </if>
             and id in ( select menu_id from blade_role_menu where role_id in
             <foreach collection="roleId" index="index" item="item" open="(" separator="," close=")">
                 #{item}

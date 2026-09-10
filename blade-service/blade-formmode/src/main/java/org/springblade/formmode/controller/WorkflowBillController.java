@@ -9,7 +9,9 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springblade.core.boot.ctrl.BladeController;
+import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
+import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.entity.FieldDefinition;
 import org.springblade.formmode.entity.WorkflowBill;
@@ -33,6 +35,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/form-definition")
+@PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
 @Tag(name = "表单定义管理", description = "表单定义管理")
 @Slf4j
 public class WorkflowBillController extends BladeController {
@@ -204,6 +207,7 @@ public class WorkflowBillController extends BladeController {
      * 根据表单ID创建对应的数据库表（主表 + 明细表）
      */
     @PostMapping("/{id}/create-table")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     @Operation(summary = "创建数据库表", description = "根据表单定义创建数据库表")
     public R<String> createTable(
             @Parameter(description = "表单ID") @PathVariable String id) {
@@ -293,6 +297,7 @@ public class WorkflowBillController extends BladeController {
      * 保存表单时自动调用，包含数据兼容性检查
      */
     @PostMapping("/{id}/sync-table-structure")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     @Operation(summary = "同步表结构", description = "根据数据库中已有的字段定义同步数据库表结构，包含数据兼容性检查")
     public R<Map<String, Object>> syncTableStructure(
             @Parameter(description = "表单ID") @PathVariable String id) {
@@ -321,6 +326,7 @@ public class WorkflowBillController extends BladeController {
      * 保存表单时自动调用，包含数据兼容性检查
      */
     @PostMapping("/{id}/sync-table-structure-with-fields")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     @Operation(summary = "同步表结构（带字段定义）", description = "使用前端传入的字段定义同步数据库表结构，包含数据兼容性检查")
     public R<Map<String, Object>> syncTableStructureWithFields(
             @Parameter(description = "表单ID") @PathVariable String id,
@@ -467,6 +473,7 @@ public class WorkflowBillController extends BladeController {
      * 只删除指定索引的明细表，不影响其他明细表的索引
      */
     @DeleteMapping("/{id}/detail-table/{detailIndex}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     @Operation(summary = "删除明细表", description = "删除指定索引的明细表及其字段定义")
     public R<Boolean> deleteDetailTable(
             @Parameter(description = "表单ID") @PathVariable String id,

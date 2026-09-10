@@ -19,6 +19,7 @@ package org.springblade.auth;
 import org.springblade.core.cloud.client.BladeCloudApplication;
 import org.springblade.core.launch.BladeApplication;
 import org.springblade.core.launch.constant.AppConstant;
+import org.springframework.context.annotation.ComponentScan;
 
 /**
  * 用户认证服务器
@@ -26,6 +27,11 @@ import org.springblade.core.launch.constant.AppConstant;
  * @author Chill
  */
 @BladeCloudApplication
+// 自定义 BladeFeignSentinel 要求 Feign fallback 必须是 Spring Bean；
+// @BladeCloudApplication 默认只扫本模块包(org.springblade.auth)，扫不到 api 模块里的
+// fallback(@Component，如 org.springblade.system.user.feign.IUserClientFallback)，
+// 故显式把 org.springblade 纳入组件扫描（与 @EnableFeignClients 的扫描范围对称）。
+@ComponentScan(basePackages = "org.springblade")
 public class AuthApplication {
 
 	public static void main(String[] args) {

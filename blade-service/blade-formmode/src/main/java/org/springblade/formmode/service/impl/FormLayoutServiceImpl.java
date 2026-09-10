@@ -1,6 +1,7 @@
 package org.springblade.formmode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,16 +28,94 @@ public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLay
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final WorkflowBillMapper workflowBillMapper;
 
+    /** 默认布局类型：0 编辑布局 */
+    private static final int DEFAULT_LAYOUT_TYPE = 0;
+
     @Override
     public FormLayout getByFormId(Long formId) {
-        // 使用 list() 替代 one()，避免重复数据导致异常
-        // 如果存在多条记录，按创建时间排序取最新的
+        // 兼容旧调用：返回该表单最新一条布局
+        return latestByFormId(formId);
+    }
+
+    @Override
+    public FormLayout getByFormId(Long formId, Integer layoutType, String nodeKey) {
+        if (formId == null) {
+            return null;
+        }
+        int type = (layoutType == null) ? DEFAULT_LAYOUT_TYPE : layoutType;
+        String node = (nodeKey == null || nodeKey.isBlank()) ? null : nodeKey;
+
+        // ① 节点级 + 指定类型
+        if (node != null) {
+            FormLayout l = findOne(formId, type, node);
+            if (l != null) {
+                return l;
+            }
+            // ② 节点级 + 默认类型
+            if (type != DEFAULT_LAYOUT_TYPE) {
+                l = findOne(formId, DEFAULT_LAYOUT_TYPE, node);
+                if (l != null) {
+                    return l;
+                }
+            }
+        }
+        // ③ 表单级 + 指定类型
+        FormLayout l = findOne(formId, type, null);
+        if (l != null) {
+            return l;
+        }
+        // ④ 表单级 + 默认类型
+        if (type != DEFAULT_LAYOUT_TYPE) {
+            l = findOne(formId, DEFAULT_LAYOUT_TYPE, null);
+            if (l != null) {
+                return l;
+            }
+        }
+        // ⑤ 兼容旧数据：任意类型/节点的最新一条
+        return latestByFormId(formId);
+    }
+
+    @Override
+    public List<FormLayout> listByFormId(Long formId, Integer layoutType, String nodeKey) {
+        return lambdaQuery()
+                .eq(FormLayout::getFormId, formId)
+                .eq(FormLayout::getStatus, 1)
+                .eq(layoutType != null, FormLayout::getLayoutType, layoutType)
+                .eq(nodeKey != null && !nodeKey.isBlank(), FormLayout::getNodeKey, nodeKey)
+                .orderByAsc(FormLayout::getLayoutType)
+                .orderByDesc(FormLayout::getCreateTime)
+                .list();
+    }
+
+    /**
+     * 精确匹配：formId + 类型 + 节点（node 为空时匹配 node_key 为空/空串）
+     */
+    private FormLayout findOne(Long formId, int layoutType, String nodeKey) {
+        LambdaQueryWrapper<FormLayout> q = Wrappers.<FormLayout>lambdaQuery()
+                .eq(FormLayout::getFormId, formId)
+                .eq(FormLayout::getStatus, 1)
+                .eq(FormLayout::getLayoutType, layoutType);
+        if (nodeKey == null || nodeKey.isBlank()) {
+            q.and(w -> w.isNull(FormLayout::getNodeKey).or().eq(FormLayout::getNodeKey, ""));
+        } else {
+            q.eq(FormLayout::getNodeKey, nodeKey);
+        }
+        q.orderByDesc(FormLayout::getCreateTime);
+        List<FormLayout> list = list(q);
+        return (list == null || list.isEmpty()) ? null : list.get(0);
+    }
+
+    /**
+     * 该表单最新一条布局（旧行为兜底）
+     */
+    private FormLayout latestByFormId(Long formId) {
+        // 使用 list() 替代 one()，避免重复数据导致异常；多条时按创建时间取最新
         List<FormLayout> list = lambdaQuery()
                 .eq(FormLayout::getFormId, formId)
                 .eq(FormLayout::getStatus, 1)
                 .orderByDesc(FormLayout::getCreateTime)
                 .list();
-        
+
         if (list != null && !list.isEmpty()) {
             if (list.size() > 1) {
                 log.warn("发现多条相同 formId 的布局记录, formId={}, 记录数={}, 返回最新一条", formId, list.size());

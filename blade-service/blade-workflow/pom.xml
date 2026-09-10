@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springblade</groupId>
+        <artifactId>blade-service</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>blade-workflow</artifactId>
+    <packaging>jar</packaging>
+    <description>SpringBlade 审批流程微服务</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-core-boot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-core-launch</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-starter-tenant</artifactId>
+        </dependency>
+        <!-- 引入 dynamic-datasource + MyBatis（动态数据源主库 url 由 Nacos blade.yaml 提供） -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-starter-mybatis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-workflow-api</artifactId>
+        </dependency>
+        <!-- 反向读取表单侧数据（布局/字段/业务数据），用于组装审批态渲染包 GET /form/render -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-formmode-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- ============ Flowable 流程引擎（Apache-2.0，自行集成，非 BladeX 商业封装 blade-starter-flowable） ============ -->
+        <!-- 说明：本项目为 Spring Boot 4.x / Java 21，Flowable 7 官方基线为 Boot 3.x / JDK 17。
+             因此此处【不使用】flowable-spring-boot-starter（其自动配置在 Boot 4 下大概率失效），
+             改为在 org.springblade.workflow.config.FlowableConfig 中显式装配引擎，
+             仅依赖 flowable-engine + flowable-spring 两个核心库，规避自动配置兼容性问题。
+             flowable.version 见根 pom <properties>。 -->
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-engine</artifactId>
+            <version>${flowable.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-spring</artifactId>
+            <version>${flowable.version}</version>
+        </dependency>
+
+        <!-- 仅测试用：内存库 + Spring 测试基座（版本由 spring-boot BOM 管理） -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

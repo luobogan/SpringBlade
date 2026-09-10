@@ -16,6 +16,7 @@
 package org.springblade.core.log;
 
 import org.springblade.core.cloud.client.BladeCloudApplication;
+import org.springframework.context.annotation.ComponentScan;
 import org.springblade.core.launch.BladeApplication;
 import org.springblade.core.launch.constant.AppConstant;
 
@@ -25,6 +26,7 @@ import org.springblade.core.launch.constant.AppConstant;
  * @author Chill
  */
 @BladeCloudApplication
+@ComponentScan(basePackages = "org.springblade")
 public class LogApplication {
 
 	public static void main(String[] args) {
