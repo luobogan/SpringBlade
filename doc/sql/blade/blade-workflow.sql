@@ -2050,6 +2050,7 @@ CREATE TABLE `wf_process_definition` (
   `bpmn_xml` mediumtext COMMENT 'BPMN 2.0 流程定义 XML（bpmn-js 画布产出，部署时下发引擎）',
   `version` int NOT NULL DEFAULT '1' COMMENT '版本号',
   `is_free` tinyint NOT NULL DEFAULT '0' COMMENT '是否自由流程',
+  `free_wf_type` tinyint DEFAULT '1' COMMENT '自由流程类型：1简易 2高级（对齐 ecology newFreeWfType）',
   `type` varchar(64) DEFAULT NULL COMMENT '路径类型（对齐 ecology path_type 字典 code）',
   `form_type` tinyint DEFAULT NULL COMMENT '对应表单类型：0自定义表单 1系统表单',
   `description` varchar(500) DEFAULT NULL COMMENT '路径描述',
@@ -2065,7 +2066,7 @@ CREATE TABLE `wf_process_definition` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_proc_key_version` (`proc_key`,`version`),
   KEY `idx_form_status` (`form_id`,`status`)
-) ENGINE=InnoDB AUTO_INCREMENT=2097902745852928003 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
+) ENGINE=InnoDB AUTO_INCREMENT=2098064840540073987 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2074,7 +2075,7 @@ CREATE TABLE `wf_process_definition` (
 
 LOCK TABLES `wf_process_definition` WRITE;
 /*!40000 ALTER TABLE `wf_process_definition` DISABLE KEYS */;
-INSERT INTO `wf_process_definition` VALUES (2097902745852928002,'111',111,'鲜花',NULL,1,0,NULL,NULL,NULL,0,'000000',NULL,NULL,'2026-09-10 12:19:26',NULL,'2026-09-10 12:19:26',0,0);
+INSERT INTO `wf_process_definition` VALUES (2097902745852928002,'111',2064530495200337922,'test',NULL,1,0,1,'4',0,'',0,'000000',NULL,NULL,'2026-09-10 12:19:26',NULL,'2026-09-11 09:56:14',0,0),(2098051811542872065,'flow_mtvlvtxjj7ak',2098051715644289026,'test1',NULL,1,0,1,'1',0,'',0,'000000',NULL,NULL,'2026-09-10 22:11:46',NULL,'2026-09-11 10:14:29',0,0),(2098056949456220161,'flow_mtvmm35keevg',2098040268054884354,'·1·1',NULL,1,0,1,'1',0,'111',0,'000000',NULL,NULL,'2026-09-10 22:32:11',NULL,'2026-09-10 22:32:11',0,0),(2098059923909816322,'flow_mtvn1ackwkwe',2098051715644289026,'·1·1',NULL,1,0,1,'1',0,'',0,'000000',NULL,NULL,'2026-09-10 22:44:00',NULL,'2026-09-11 10:46:13',0,0),(2098064840540073986,'flow_mtvnqeu5zypb',2098051715644289026,'·1·1',NULL,1,0,1,'1',0,NULL,0,'000000',NULL,NULL,'2026-09-10 23:03:32',NULL,'2026-09-10 23:03:32',0,0);
 /*!40000 ALTER TABLE `wf_process_definition` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2208,4 +2209,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-09-10 16:52:33
+-- Dump completed on 2026-09-11 10:50:50
