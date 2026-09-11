@@ -47,17 +47,17 @@ public class WfDefinitionController {
 
     @PostMapping
     @Operation(summary = "创建流程定义", description = "含节点、出口、操作者")
-    public R<Long> create(@RequestBody DefinitionSaveDTO dto) {
-        return R.data(definitionService.save(dto), "创建成功");
+    public R<String> create(@RequestBody DefinitionSaveDTO dto) {
+        return R.data(String.valueOf(definitionService.save(dto)), "创建成功");
     }
 
     @PutMapping("/{id}")
     @Operation(summary = "更新流程定义")
-    public R<Long> update(@PathVariable("id") Long id, @RequestBody DefinitionSaveDTO dto) {
+    public R<String> update(@PathVariable("id") Long id, @RequestBody DefinitionSaveDTO dto) {
         if (dto.getDefinition() != null) {
             dto.getDefinition().setId(id);
         }
-        return R.data(definitionService.save(dto), "更新成功");
+        return R.data(String.valueOf(definitionService.save(dto)), "更新成功");
     }
 
     @PostMapping("/{id}/deploy")
@@ -68,8 +68,8 @@ public class WfDefinitionController {
 
     @PutMapping("/{id}/bpmn")
     @Operation(summary = "保存 BPMN（画布产出）", description = "持久化 bpmn-js 画布 XML 并解析节点")
-    public R<Long> saveBpmn(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
-        return R.data(definitionService.saveBpmn(id, body.get("bpmnXml")), "保存成功");
+    public R<String> saveBpmn(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
+        return R.data(String.valueOf(definitionService.saveBpmn(id, body.get("bpmnXml"))), "保存成功");
     }
 
     @GetMapping("/{id}/bpmn")
@@ -80,8 +80,8 @@ public class WfDefinitionController {
 
     @PostMapping("/{id}/version")
     @Operation(summary = "另存为新版本")
-    public R<Long> saveAsNewVersion(@PathVariable("id") Long id) {
-        return R.data(definitionService.saveAsNewVersion(id), "已生成新版本");
+    public R<String> saveAsNewVersion(@PathVariable("id") Long id) {
+        return R.data(String.valueOf(definitionService.saveAsNewVersion(id)), "已生成新版本");
     }
 
     @GetMapping("/{id}")

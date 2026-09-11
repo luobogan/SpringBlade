@@ -1,5 +1,7 @@
 package org.springblade.workflow.vo;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -17,6 +19,7 @@ public class BrowserOptionVO implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    @JsonSerialize(using = ToStringSerializer.class)
     @Schema(description = "值（通常为被引用记录的主键）")
     private Object value;
 

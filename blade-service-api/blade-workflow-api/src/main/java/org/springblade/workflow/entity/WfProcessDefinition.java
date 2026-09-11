@@ -1,6 +1,8 @@
 package org.springblade.workflow.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -51,5 +53,18 @@ public class WfProcessDefinition extends TenantEntity {
 
     @Schema(description = "显示顺序")
     private Integer sortOrder;
+
+    /**
+     * 主键以字符串形式序列化。
+     *
+     * <p>主键为 ASSIGN_ID 雪花 ID（19 位），若以 JSON 数字返回，前端 JS 解析会丢失精度，
+     * 导致编辑保存时 {@code updateById} 用失真主键命中 0 行（后端仍回 success，表现为「假成功」）。
+     * 对齐 BladeX 标准实体做法：id 一律转字符串。</p>
+     */
+    @Override
+    @JsonSerialize(using = ToStringSerializer.class)
+    public Long getId() {
+        return super.getId();
+    }
 
 }

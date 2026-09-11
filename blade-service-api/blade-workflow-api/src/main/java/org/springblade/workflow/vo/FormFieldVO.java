@@ -1,5 +1,7 @@
 package org.springblade.workflow.vo;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -91,6 +93,7 @@ public class FormFieldVO implements Serializable {
     @Schema(description = "下拉选项")
     public static class OptionVO implements Serializable {
         private static final long serialVersionUID = 1L;
+        @JsonSerialize(using = ToStringSerializer.class)
         private Object value;
         private String label;
     }
