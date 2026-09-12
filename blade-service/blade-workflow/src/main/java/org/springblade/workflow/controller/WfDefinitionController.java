@@ -7,7 +7,9 @@ import lombok.RequiredArgsConstructor;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.workflow.dto.BpmnSaveDTO;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
+import org.springblade.workflow.dto.NodeOperatorSaveDTO;
 import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
@@ -16,6 +18,7 @@ import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -67,9 +70,9 @@ public class WfDefinitionController {
     }
 
     @PutMapping("/{id}/bpmn")
-    @Operation(summary = "保存 BPMN（画布产出）", description = "持久化 bpmn-js 画布 XML 并解析节点")
-    public R<String> saveBpmn(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
-        return R.data(String.valueOf(definitionService.saveBpmn(id, body.get("bpmnXml"))), "保存成功");
+    @Operation(summary = "保存 BPMN（画布产出）", description = "持久化 bpmn-js 画布 XML 并解析节点、出口")
+    public R<String> saveBpmn(@PathVariable("id") Long id, @RequestBody BpmnSaveDTO body) {
+        return R.data(String.valueOf(definitionService.saveBpmn(id, body.getBpmnXml())), "保存成功");
     }
 
     @GetMapping("/{id}/bpmn")
@@ -121,12 +124,49 @@ public class WfDefinitionController {
         return R.data(definitionService.links(id));
     }
 
+    @PutMapping("/{id}/node/{nodeKey}")
+    @Operation(summary = "更新节点基础属性", description = "按 nodeKey 更新，保留操作者与字段权限")
+    public R<WfProcessNode> updateNode(@PathVariable("id") Long id,
+                                       @PathVariable("nodeKey") String nodeKey,
+                                       @RequestBody WfProcessNode node) {
+        return R.data(definitionService.updateNode(id, nodeKey, node), "保存成功");
+    }
+
+    @GetMapping("/{id}/node/{nodeKey}/operator")
+    @Operation(summary = "读取节点操作者")
+    public R<List<WfNodeOperator>> nodeOperators(@PathVariable("id") Long id,
+                                                 @PathVariable("nodeKey") String nodeKey) {
+        return R.data(definitionService.nodeOperators(id, nodeKey));
+    }
+
+    @PostMapping("/{id}/link")
+    @Operation(summary = "新增出口（连线）")
+    public R<WfNodeLink> createLink(@PathVariable("id") Long id, @RequestBody WfNodeLink link) {
+        link.setId(null);
+        return R.data(definitionService.saveLink(id, link), "保存成功");
+    }
+
+    @PutMapping("/{id}/link/{linkId}")
+    @Operation(summary = "更新出口（连线）")
+    public R<WfNodeLink> updateLink(@PathVariable("id") Long id,
+                                    @PathVariable("linkId") Long linkId,
+                                    @RequestBody WfNodeLink link) {
+        link.setId(linkId);
+        return R.data(definitionService.saveLink(id, link), "保存成功");
+    }
+
+    @DeleteMapping("/{id}/link/{linkId}")
+    @Operation(summary = "删除出口（连线）")
+    public R<Boolean> deleteLink(@PathVariable("id") Long id, @PathVariable("linkId") Long linkId) {
+        return R.data(definitionService.deleteLink(id, linkId), "删除成功");
+    }
+
     @PutMapping("/{id}/node/{nodeKey}/operator")
-    @Operation(summary = "配置节点操作者", description = "整体覆盖保存")
+    @Operation(summary = "配置节点操作者", description = "整体覆盖保存；请求体为 { operators: [...] }")
     public R<Boolean> configOperator(@PathVariable("id") Long id,
                                      @PathVariable("nodeKey") String nodeKey,
-                                     @RequestBody List<WfNodeOperator> operators) {
-        return R.data(definitionService.configOperator(id, nodeKey, operators), "保存成功");
+                                     @RequestBody NodeOperatorSaveDTO body) {
+        return R.data(definitionService.configOperator(id, nodeKey, body.getOperators()), "保存成功");
     }
 
     @GetMapping("/form-condition")

@@ -62,4 +62,15 @@ public class FormRenderVO implements Serializable {
     @Schema(description = "是否只读（无办理权限时为 true，前端整体降级为只读）")
     private Boolean readonly;
 
+    /**
+     * 当前节点「操作菜单」配置允许的操作：submit/reject/forward/sign/opinion/attach/print/urge。
+     * null = 未配置（不限制，按系统默认全部可用）；空数组 = 配置过但一个都不允许。
+     */
+    @Schema(description = "当前节点可用操作（来自节点信息「操作菜单」；null=不限制）")
+    private List<String> allowMenus;
+
+    /** 当前节点签字意见是否必填（来自节点信息「签字意见设置」） */
+    @Schema(description = "签字意见是否必填")
+    private Boolean opinionRequired;
+
 }

@@ -13,10 +13,13 @@ import org.springblade.workflow.dto.ValidateDTO;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
+import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.service.IWfPermService;
 import org.springblade.workflow.vo.DetailPermVO;
@@ -52,6 +55,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final WfInstanceMapper instanceMapper;
     private final WfTaskMapper taskMapper;
     private final WfFormSnapshotMapper snapshotMapper;
+    private final WfProcessNodeMapper nodeMapper;
     private final IWfPermService permService;
     private final IFormmodeClient formmodeClient;
 
@@ -81,6 +85,14 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         vo.setFieldPerms(permService.getFieldPerm(inst.getDefId(), nodeKey));
         vo.setDetailPerms(permService.getDetailPerm(inst.getDefId(), nodeKey));
         vo.setReadonly(!canOperate(task));
+
+        // 节点信息 → 运行时消费：操作菜单（可用操作）与签字意见必填
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, inst.getDefId())
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+        vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
+        vo.setOpinionRequired(WfNodeSettingsUtil.opinionRequired(node));
 
         // 布局：跨服务读取（按节点取布局：优先节点级，回退表单级；布局类型默认 0=编辑）
         try {

@@ -77,6 +77,23 @@ public class ProcessServiceImpl implements IProcessService {
         return deployment.getId();
     }
 
+    @Override
+    public void moveActivity(String engineInstId, String fromActivityKey, String toActivityKey,
+                             Map<String, Object> variables) {
+        if (engineInstId == null || fromActivityKey == null || toActivityKey == null) {
+            throw new IllegalArgumentException("指定流转失败：实例ID与起止节点均不能为空");
+        }
+        if (variables != null && !variables.isEmpty()) {
+            runtimeService.setVariables(engineInstId, variables);
+        }
+        runtimeService.createChangeActivityStateBuilder()
+            .processInstanceId(engineInstId)
+            .moveActivityIdTo(fromActivityKey, toActivityKey)
+            .changeState();
+        log.info("[blade-workflow] 引擎指定流转跳转. engineInstId={}, {} -> {}",
+            engineInstId, fromActivityKey, toActivityKey);
+    }
+
     private static List<TaskVO> toTaskVO(List<Task> tasks) {
         List<TaskVO> result = new ArrayList<>(tasks.size());
         for (Task task : tasks) {

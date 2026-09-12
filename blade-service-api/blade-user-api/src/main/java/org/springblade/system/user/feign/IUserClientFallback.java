@@ -20,6 +20,8 @@ import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 /**
  * Feign失败配置
  *
@@ -61,5 +63,42 @@ public class IUserClientFallback implements IUserClient {
 	@Override
 	public R<UserInfo> getUserByPhone(String tenantId, String phone) {
 		return R.fail("查询用户信息失败");
+	}
+
+	// ---------- 组织维度查用户ID：降级返回失败（非空实现），调用方按「空集合 + 告警」处理 ----------
+
+	@Override
+	public R<List<Long>> userIdsByDept(Long deptId, Boolean containChild) {
+		return R.fail("按部门查询用户失败");
+	}
+
+	@Override
+	public R<List<Long>> userIdsByRole(Long roleId) {
+		return R.fail("按角色查询用户失败");
+	}
+
+	@Override
+	public R<List<Long>> userIdsByPost(Long postId) {
+		return R.fail("按岗位查询用户失败");
+	}
+
+	@Override
+	public R<List<Long>> allUserIds(Integer limit) {
+		return R.fail("查询全部用户失败");
+	}
+
+	@Override
+	public R<Long> leaderId(Long userId) {
+		return R.fail("查询用户主管失败");
+	}
+
+	@Override
+	public R<List<Long>> userIdsByDeptOfUser(Long userId, Boolean containChild) {
+		return R.fail("按用户部门查询用户失败");
+	}
+
+	@Override
+	public R<Boolean> verifyPassword(Long userId, String password) {
+		return R.fail("校验用户密码失败");
 	}
 }

@@ -38,6 +38,15 @@ public interface IWfTaskService {
     boolean approve(Long taskId, ApproveDTO dto);
 
     /**
+     * 系统自动通过（无用户上下文，供「超时自动通过」定时任务调用）。
+     * <p>跳过「操作菜单」校验（否则未开放 submit 的节点无法自动通过），其余逻辑与 {@link #approve} 一致。</p>
+     *
+     * @param taskId  待办任务ID
+     * @param opinion 自动通过意见（为空时用默认「超时自动通过」）
+     */
+    boolean autoApprove(Long taskId, String opinion);
+
+    /**
      * 退回：回到指定节点（为空则退回上一节点）
      */
     boolean reject(Long taskId, RejectDTO dto);

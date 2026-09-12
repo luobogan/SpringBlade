@@ -106,7 +106,6 @@ public class UserController {
 		@Parameter(name = "realName", description = "姓名", in = ParameterIn.QUERY, schema = @Schema(type = "string"))
 	})
 	@Operation(summary = "列表", description = "传入account和realName")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R<IPage<UserVO>> list(@Parameter(hidden = true) @RequestParam Map<String, Object> user, Query query) {
 		return R.data(userService.selectPage(user, query));
 	}

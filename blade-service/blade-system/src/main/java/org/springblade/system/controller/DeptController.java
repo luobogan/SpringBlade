@@ -47,7 +47,6 @@ import java.util.Map;
 @RestController
 @AllArgsConstructor
 @RequestMapping("/dept")
-@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 @ApiOrder
 @Tag(name = "部门", description = "部门")
 public class DeptController extends BladeController {
@@ -91,6 +90,7 @@ public class DeptController extends BladeController {
 	 */
 	@PostMapping("/submit")
 	@Operation(summary = "新增或修改", description = "传入dept")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R submit(@Valid @RequestBody Dept dept) {
 		return R.status(deptService.submit(dept));
 	}
@@ -100,6 +100,7 @@ public class DeptController extends BladeController {
 	 */
 	@PostMapping("/remove")
 	@Operation(summary = "删除", description = "传入ids")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
 		return R.status(deptService.remove(Func.toLongList(ids)));
 	}

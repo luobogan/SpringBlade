@@ -65,4 +65,9 @@ public class StartProcessDTO implements Serializable {
      */
     private Map<String, Object> variables;
 
+    /**
+     * 父流程实例ID（发起子流程时回填；普通发起为空）
+     */
+    private Long parentId;
+
 }

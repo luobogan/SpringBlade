@@ -23,4 +23,13 @@ public class ApproveDTO implements Serializable {
     @Schema(description = "附加流程变量")
     private Map<String, Object> variables;
 
+    @Schema(description = "指定流转-下一节点Key（仅当前节点开启「指定流转」时生效；为空则按默认流向）")
+    private String nextNodeKey;
+
+    @Schema(description = "指定流转-下一节点操作者（模式1=用户指定；模式2忽略，取目标节点设置）")
+    private Long nextAssignee;
+
+    @Schema(description = "明文密码（仅当前节点开启「二次认证」时需要）")
+    private String password;
+
 }

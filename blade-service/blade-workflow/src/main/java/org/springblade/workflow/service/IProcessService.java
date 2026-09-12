@@ -49,4 +49,17 @@ public interface IProcessService {
      */
     String deployProcess(String procKey, String bpmnXml);
 
+    /**
+     * 将引擎实例的当前活动节点跳转到指定节点（「节点信息 → 指定流转」的运行期消费）。
+     *
+     * <p>用于处理人手动指定下一节点：不按 BPMN 默认流向，直接 move 到 {@code toActivityKey}。
+     * 若 {@code variables} 非空，先写入流程变量再跳转。</p>
+     *
+     * @param engineInstId    引擎实例ID（PROC_INST_ID_）
+     * @param fromActivityKey 当前活动节点Key（= BPMN 元素 id）
+     * @param toActivityKey   目标活动节点Key
+     * @param variables       跳转前写入的流程变量（可为 null）
+     */
+    void moveActivity(String engineInstId, String fromActivityKey, String toActivityKey, Map<String, Object> variables);
+
 }

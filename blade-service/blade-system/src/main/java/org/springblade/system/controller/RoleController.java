@@ -52,7 +52,6 @@ import java.util.Map;
  */
 @RestController
 @AllArgsConstructor
-@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 @RequestMapping("/role")
 @ApiOrder
 @Tag(name = "角色", description = "角色")
@@ -114,6 +113,7 @@ public class RoleController extends BladeController {
 	 */
 	@PostMapping("/submit")
 	@Operation(summary = "新增或修改", description = "传入role")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R submit(@Valid @RequestBody Role role) {
 		return R.status(roleService.submit(role));
 	}
@@ -123,6 +123,7 @@ public class RoleController extends BladeController {
 	 */
 	@PostMapping("/remove")
 	@Operation(summary = "删除", description = "传入ids")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
 		return R.status(roleService.remove(Func.toLongList(ids)));
 	}
@@ -132,6 +133,7 @@ public class RoleController extends BladeController {
 	 */
 	@PostMapping("/grant")
 	@Operation(summary = "权限设置", description = "传入roleId集合以及menuId集合")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R grant(@RequestBody GrantVO grantVO) {
 		boolean temp = roleService.grant(grantVO.getRoleIds(), grantVO.getMenuIds(), grantVO.getDataScopeIds(), grantVO.getApiScopeIds());
 		return R.status(temp);
@@ -152,6 +154,7 @@ public class RoleController extends BladeController {
 	 */
 	@PostMapping("/grant-user")
 	@Operation(summary = "授权用户", description = "传入roleId和userIds")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R grantUser(@RequestBody Map<String, Object> params) {
 		Long roleId = parseLong(params.get("roleId"));
 		List<Long> userIds = parseLongList(params.get("userIds"));
@@ -164,6 +167,7 @@ public class RoleController extends BladeController {
 	 */
 	@PostMapping("/revoke-user")
 	@Operation(summary = "取消授权", description = "传入roleId和userIds")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R revokeUser(@RequestBody Map<String, Object> params) {
 		Long roleId = parseLong(params.get("roleId"));
 		List<Long> userIds = parseLongList(params.get("userIds"));

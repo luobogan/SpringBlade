@@ -110,4 +110,89 @@
           AND FIND_IN_SET(#{roleId}, role_id) > 0
     </select>
 
+    <!-- ==================== 组织维度查用户ID（供流程节点操作者解析） ====================
+         说明：blade_user 的 dept_id / role_id / post_id 为 varchar(1000) 逗号串，统一用 FIND_IN_SET 匹配；
+              不写 tenant_id 条件，由多租户拦截器自动注入（与 selectUsersByRoleId 一致）。
+    -->
+
+    <!-- 按一组部门ID查用户ID（多值匹配；deptIds 为空时由 Java 层短路，不会走到这里） -->
+    <select id="selectUserIdsByDeptIds" resultType="java.lang.Long">
+        SELECT id
+        FROM blade_user
+        WHERE is_deleted = 0
+        AND dept_id IS NOT NULL
+        AND dept_id &lt;&gt; ''
+        AND (
+        <foreach collection="deptIds" item="d" separator=" OR ">
+            FIND_IN_SET(#{d}, dept_id) &gt; 0
+        </foreach>
+        )
+    </select>
+
+    <!-- 按角色ID查用户ID -->
+    <select id="selectUserIdsByRoleId" resultType="java.lang.Long">
+        SELECT id
+        FROM blade_user
+        WHERE is_deleted = 0
+        AND FIND_IN_SET(#{roleId}, role_id) &gt; 0
+    </select>
+
+    <!-- 按岗位ID查用户ID -->
+    <select id="selectUserIdsByPostId" resultType="java.lang.Long">
+        SELECT id
+        FROM blade_user
+        WHERE is_deleted = 0
+        AND FIND_IN_SET(#{postId}, post_id) &gt; 0
+    </select>
+
+    <!-- 取某部门的全部子孙部门ID（ancestors 为逗号串且不含自身） -->
+    <select id="selectChildDeptIds" resultType="java.lang.Long">
+        SELECT id
+        FROM blade_dept
+        WHERE is_deleted = 0
+        AND FIND_IN_SET(#{deptId}, ancestors) &gt; 0
+    </select>
+
+    <!-- 全部有效用户ID（用于「所有人」类操作者；limit 兜底防止一次拉爆） -->
+    <select id="selectAllUserIds" resultType="java.lang.Long">
+        SELECT id
+        FROM blade_user
+        WHERE is_deleted = 0
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <!-- 取指定用户的主管用户ID（上级 / 直线经理；manager_id 为空返回 null） -->
+    <select id="selectManagerId" resultType="java.lang.Long">
+        SELECT manager_id
+        FROM blade_user
+        WHERE id = #{userId}
+          AND is_deleted = 0
+          AND manager_id IS NOT NULL
+    </select>
+
+    <!--
+        取指定用户「所在部门」的成员用户ID（「本部门」类操作者）。
+        先用子查询取该用户自己的 dept_id（记为 d），再匹配 dept_id 中含 d 的用户；
+        containChild=true 时额外纳入「d 作为祖先」的子孙部门成员。
+        不写 tenant_id，由多租户拦截器自动注入（与 selectUserIdsByDeptIds 一致）。
+    -->
+    <select id="selectUserIdsByDeptOfUser" resultType="java.lang.Long">
+        SELECT id
+        FROM blade_user
+        WHERE is_deleted = 0
+          AND dept_id IS NOT NULL
+          AND dept_id &lt;&gt; ''
+          AND FIND_IN_SET(
+                (SELECT dept_id FROM blade_user WHERE id = #{userId} AND is_deleted = 0 LIMIT 1),
+                dept_id
+              ) &gt; 0
+        <if test="containChild != null and containChild == true">
+            OR FIND_IN_SET(
+                (SELECT dept_id FROM blade_user WHERE id = #{userId} AND is_deleted = 0 LIMIT 1),
+                ancestors
+              ) &gt; 0
+        </if>
+    </select>
+
 </mapper>

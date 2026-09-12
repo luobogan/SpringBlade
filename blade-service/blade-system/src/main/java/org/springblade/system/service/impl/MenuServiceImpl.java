@@ -152,7 +152,36 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 		routes.sort(Comparator.comparing(Menu::getSort));
 		MenuWrapper menuWrapper = new MenuWrapper();
 		List<Menu> collect = routes.stream().filter(x -> Func.equals(x.getCategory(), 1)).collect(Collectors.toList());
-		return menuWrapper.listNodeVO(collect);
+		return menuWrapper.listNodeVO(distinctMenuById(collect));
+	}
+
+	/**
+	 * 按菜单 id 去重，保留原有顺序。
+	 * <p>
+	 * {@code MenuWrapper.listNodeVO} 内部走 {@code ForestNodeMerger.merge} →
+	 * {@code ForestNodeManager}，其构造用的是 Guava {@code Maps.uniqueIndex}，
+	 * 一旦同一菜单出现两次就抛 `Multiple entries with same key`（整个接口 500）。
+	 * 典型场景：某按钮自身 category=2，其下又挂了 category=2 的子按钮，
+	 * 而 {@code MenuMapper.buttons} 的两条分支会把这条菜单各命中一次。
+	 * 除 SQL 侧用 UNION 去重外，这里再做一层防御，避免其他入口（角色交叉授权、
+	 * 多角色合并等）再次踩坑。
+	 */
+	private List<Menu> distinctMenuById(List<Menu> menus) {
+		if (Func.isEmpty(menus)) {
+			return menus;
+		}
+		List<Menu> distinct = new ArrayList<>(menus.size());
+		Set<Long> seen = new HashSet<>(menus.size());
+		for (Menu menu : menus) {
+			if (menu == null) {
+				continue;
+			}
+			Long id = menu.getId();
+			if (id == null || seen.add(id)) {
+				distinct.add(menu);
+			}
+		}
+		return distinct;
 	}
 
 	/**
@@ -246,6 +275,14 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 			int beforePackage = buttons.size();
 			buttons = filterByTenantPackage(buttons, currentTenantId);
 			log.info("[Menu#buttons] ③产品包过滤: {} → {}", beforePackage, buttons.size());
+		}
+
+		// 按 id 去重后再建树：同一菜单出现两次会让 ForestNodeManager 抛
+		// "Multiple entries with same key" 导致接口 500（全站按钮权限为空）
+		int beforeDistinct = buttons.size();
+		buttons = distinctMenuById(buttons);
+		if (buttons.size() != beforeDistinct) {
+			log.warn("[Menu#buttons] ⚠️ 检测到重复菜单并已去重: {} → {}（roleId={}）", beforeDistinct, buttons.size(), roleId);
 		}
 
 		log.info("[Menu#buttons] 最终: tenantId={}, roleId={}, 按钮数={}", currentTenantId, roleId, buttons.size());

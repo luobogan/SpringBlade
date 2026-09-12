@@ -106,9 +106,16 @@ public class User extends TenantEntity {
 	 */
 	private String deptId;
 	/**
-	 * 部门 id
+	 * 岗位 id
 	 */
 	private String postId;
+
+	/**
+	 * 主管用户ID（上级 / 直线经理，贴近 E9 ManagerID）。为空表示该用户无直属主管。
+	 */
+	@Schema(description = "主管用户ID")
+	@TableField("manager_id")
+	private Long managerId;
 
 	// ==================== 商城会员字段开始 ====================
 

@@ -68,4 +68,25 @@ public interface IWfInstanceService {
      */
     void advance(Long instId);
 
+    /**
+     * 推进实例（带「到达本节点的当前办理人」，用于解析「本部门(19)」类操作者）。
+     *
+     * @param instId          实例ID
+     * @param currentOperator 到达本节点的当前办理人（首节点一般为发起人；后续节点为上一节点完成人）
+     */
+    void advance(Long instId, Long currentOperator);
+
+    /**
+     * 推进实例（带「指定流转」的节点/操作者覆盖）。
+     *
+     * <p>当处理人手工指定了下一节点时，该节点的操作者以 {@code overrideAssignee} 为准（模式1），
+     * 其余节点仍按「节点操作者」正常解析。</p>
+     *
+     * @param instId           实例ID
+     * @param currentOperator  到达本节点的当前办理人
+     * @param overrideNodeKey  指定流转的目标节点Key（仅该节点的操作者被覆盖；null 表示不覆盖）
+     * @param overrideAssignee 指定流转的目标操作者（null 表示按节点设置解析）
+     */
+    void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee);
+
 }

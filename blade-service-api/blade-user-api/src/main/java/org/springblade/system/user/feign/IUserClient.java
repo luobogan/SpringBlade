@@ -26,6 +26,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import java.util.List;
+
 /**
  * User Feign接口类
  *
@@ -105,5 +107,79 @@ public interface IUserClient {
 	 */
 	@GetMapping(API_PREFIX + "/user-by-phone")
 	R<UserInfo> getUserByPhone(@RequestParam("tenantId") String tenantId, @RequestParam("phone") String phone);
+
+	// ------------------------------------------------------------------
+	// 以下为「组织维度查用户ID」能力，供流程节点操作者解析（部门/角色/岗位/所有人）使用。
+	// 说明：blade_user 的 dept_id / role_id / post_id 均为 varchar(1000) 逗号串，
+	//      服务端统一用 FIND_IN_SET 匹配；租户条件由租户拦截器自动注入，无需入参。
+	// ------------------------------------------------------------------
+
+	/**
+	 * 按部门查询用户ID集合
+	 *
+	 * @param deptId       部门ID
+	 * @param containChild 是否包含下级部门（true 时含所有子孙部门）
+	 * @return 用户ID集合
+	 */
+	@GetMapping(API_PREFIX + "/user-ids-by-dept")
+	R<List<Long>> userIdsByDept(@RequestParam("deptId") Long deptId,
+								@RequestParam(value = "containChild", required = false) Boolean containChild);
+
+	/**
+	 * 按角色查询用户ID集合
+	 *
+	 * @param roleId 角色ID
+	 * @return 用户ID集合
+	 */
+	@GetMapping(API_PREFIX + "/user-ids-by-role")
+	R<List<Long>> userIdsByRole(@RequestParam("roleId") Long roleId);
+
+	/**
+	 * 按岗位查询用户ID集合
+	 *
+	 * @param postId 岗位ID
+	 * @return 用户ID集合
+	 */
+	@GetMapping(API_PREFIX + "/user-ids-by-post")
+	R<List<Long>> userIdsByPost(@RequestParam("postId") Long postId);
+
+	/**
+	 * 查询全部有效用户ID（用于「所有人」类操作者）
+	 *
+	 * @param limit 返回上限（为空时服务端取默认上限，防止万级用户一次拉爆）
+	 * @return 用户ID集合
+	 */
+	@GetMapping(API_PREFIX + "/user-ids-all")
+	R<List<Long>> allUserIds(@RequestParam(value = "limit", required = false) Integer limit);
+
+	/**
+	 * 取指定用户的「主管」用户ID（上级 / 直线经理，贴近 E9 ManagerID）。
+	 *
+	 * @param userId 用户ID
+	 * @return 主管用户ID；无主管或用户不存在时返回 null
+	 */
+	@GetMapping(API_PREFIX + "/leader-id")
+	R<Long> leaderId(@RequestParam("userId") Long userId);
+
+	/**
+	 * 取指定用户「所在部门」的成员用户ID集合（用于「本部门」类操作者）。
+	 *
+	 * @param userId       用户ID（以其 dept_id 作为目标部门）
+	 * @param containChild 是否包含下级部门
+	 * @return 成员用户ID集合
+	 */
+	@GetMapping(API_PREFIX + "/user-ids-by-dept-of-user")
+	R<List<Long>> userIdsByDeptOfUser(@RequestParam("userId") Long userId,
+									  @RequestParam(value = "containChild", required = false) Boolean containChild);
+
+	/**
+	 * 校验用户密码（用于流程节点「二次认证」设置）。
+	 *
+	 * @param userId   用户ID
+	 * @param password 明文密码（服务端按登录同规则加密后比对）
+	 * @return true=密码正确
+	 */
+	@GetMapping(API_PREFIX + "/verify-password")
+	R<Boolean> verifyPassword(@RequestParam("userId") Long userId, @RequestParam("password") String password);
 
 }

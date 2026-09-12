@@ -82,6 +82,26 @@ public interface IWfDefinitionService {
     List<WfNodeLink> links(Long defId);
 
     /**
+     * 更新节点基础属性（按 nodeKey），保留操作者与字段权限
+     */
+    WfProcessNode updateNode(Long defId, String nodeKey, WfProcessNode node);
+
+    /**
+     * 读取节点操作者
+     */
+    List<WfNodeOperator> nodeOperators(Long defId, String nodeKey);
+
+    /**
+     * 新增 / 更新出口（id 为空则新增）
+     */
+    WfNodeLink saveLink(Long defId, WfNodeLink link);
+
+    /**
+     * 删除出口
+     */
+    boolean deleteLink(Long defId, Long linkId);
+
+    /**
      * 获取定义表单的字段描述（condition 驱动）
      *
      * @param method add=新建 edit=编辑

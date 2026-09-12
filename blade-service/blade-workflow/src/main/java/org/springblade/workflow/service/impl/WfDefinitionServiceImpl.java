@@ -4,17 +4,23 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
+import org.flowable.bpmn.model.SequenceFlow;
+import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
+import org.springblade.workflow.entity.WfNodeDetailPerm;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
 import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
+import org.springblade.workflow.mapper.WfNodeDetailPermMapper;
 import org.springblade.workflow.mapper.WfNodeFieldPermMapper;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
@@ -36,7 +42,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -52,6 +62,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final WfNodeLinkMapper linkMapper;
     private final WfNodeOperatorMapper operatorMapper;
     private final WfNodeFieldPermMapper fieldPermMapper;
+    private final WfNodeDetailPermMapper detailPermMapper;
     private final WfWorkflowTypeMapper wfWorkflowTypeMapper;
     private final IWfInstanceService instanceService;
     private final IProcessService processService;
@@ -71,11 +82,16 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
 
         Long defId = def.getId();
-        // 节点 / 出口 / 操作者整体覆盖
+        // 节点 / 出口 / 操作者整体覆盖：
+        // 先按「节点ID」删除操作者，再删节点。老代码误用 eq(nodeId, defId)（nodeId≠defId）导致操作者残留。
+        List<WfProcessNode> oldNodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+            .select(WfProcessNode::getId).eq(WfProcessNode::getDefId, defId));
+        if (!oldNodes.isEmpty()) {
+            List<Long> oldNodeIds = oldNodes.stream().map(WfProcessNode::getId).collect(Collectors.toList());
+            operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery().in(WfNodeOperator::getNodeId, oldNodeIds));
+        }
         nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
         linkMapper.delete(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
-        operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
-            .eq(WfNodeOperator::getNodeId, defId));
 
         if (dto.getNodes() != null) {
             for (WfProcessNode node : dto.getNodes()) {
@@ -153,7 +169,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             if (def.getProcKey() == null || def.getProcKey().isBlank()) {
                 throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
             }
-            processService.deployProcess(def.getProcKey(), def.getBpmnXml());
+            // 部署前把「出口条件」注入到对应 sequenceFlow，保证 Flowable 运行时按条件流转
+            String deployXml = injectLinkConditions(def.getBpmnXml(), links(defId));
+            processService.deployProcess(def.getProcKey(), deployXml);
         } else {
             throw new ServiceException("尚无 BPMN 定义，请先在「流程画布」中设计并保存");
         }
@@ -192,24 +210,97 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         def.setBpmnXml(bpmnXml);
         defMapper.updateById(def);
 
-        // 重建节点（整体覆盖）
-        nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+        // 解析画布元素 → 按 nodeKey upsert 节点。
+        // 关键：不能整体 delete+insert，否则节点信息（类型/审批方式/扩展/操作者）会被清空。
+        Map<String, WfProcessNode> existNodes = new LinkedHashMap<>();
+        for (WfProcessNode n : nodes(defId)) {
+            existNodes.putIfAbsent(n.getNodeKey(), n);
+        }
+        Set<String> seenNodeKeys = new HashSet<>();
         int sort = 1;
         for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
-            if (fe instanceof UserTask) {
-                UserTask ut = (UserTask) fe;
+            Integer nodeType = nodeTypeOf(fe);
+            if (nodeType == null) {
+                continue;
+            }
+            String key = fe.getId();
+            String nodeName = defaultNodeName(fe, nodeType);
+            WfProcessNode exist = existNodes.get(key);
+            if (exist != null) {
+                // 保留既有语义属性与操作者，仅同步画布名称与排序
+                exist.setNodeName(nodeName);
+                exist.setSortOrder(sort++);
+                nodeMapper.updateById(exist);
+            } else {
                 WfProcessNode node = new WfProcessNode();
                 node.setDefId(defId);
-                node.setNodeKey(ut.getId());
-                node.setNodeName(ut.getName() == null || ut.getName().isBlank() ? ut.getId() : ut.getName());
-                node.setNodeType(1);      // 审批节点
-                node.setSignOrder(0);     // 或签
+                node.setNodeKey(key);
+                node.setNodeName(nodeName);
+                node.setNodeType(nodeType);
+                node.setSignOrder(0); // 或签
                 node.setSortOrder(sort++);
                 nodeMapper.insert(node);
             }
+            seenNodeKeys.add(key);
         }
-        log.info("[blade-workflow] BPMN 已保存并解析节点. defId={}, procKey={}, nodeCount={}",
-            defId, def.getProcKey(), sort - 1);
+        // 删除画布上已不存在的节点及其操作者 / 字段权限 / 明细权限。
+        // ⚠️ 字段权限按 (def_id, node_key) 存储，必须一并清理：
+        //    否则节点删除后权限行残留成孤儿，日后新建节点若复用了同一 nodeKey，旧权限矩阵会「复活」。
+        for (WfProcessNode n : existNodes.values()) {
+            if (!seenNodeKeys.contains(n.getNodeKey())) {
+                operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery().eq(WfNodeOperator::getNodeId, n.getId()));
+                fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+                    .eq(WfNodeFieldPerm::getDefId, defId)
+                    .eq(WfNodeFieldPerm::getNodeKey, n.getNodeKey()));
+                detailPermMapper.delete(Wrappers.<WfNodeDetailPerm>lambdaQuery()
+                    .eq(WfNodeDetailPerm::getDefId, defId)
+                    .eq(WfNodeDetailPerm::getNodeKey, n.getNodeKey()));
+                nodeMapper.deleteById(n.getId());
+            }
+        }
+
+        // 解析 SequenceFlow → 按 from→to upsert 出口（保留已配置的条件/必经/退回等）
+        Map<String, WfNodeLink> existLinks = new LinkedHashMap<>();
+        for (WfNodeLink l : links(defId)) {
+            existLinks.putIfAbsent(linkKey(l.getFromNodeKey(), l.getToNodeKey()), l);
+        }
+        Set<String> seenLinkKeys = new HashSet<>();
+        int linkSort = 1;
+        for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
+            if (!(fe instanceof SequenceFlow sf)) {
+                continue;
+            }
+            String from = sf.getSourceRef();
+            String to = sf.getTargetRef();
+            // 仅保留「节点 → 节点」连线，保证出口信息能映射到具体节点
+            if (!seenNodeKeys.contains(from) || !seenNodeKeys.contains(to)) {
+                continue;
+            }
+            String k = linkKey(from, to);
+            WfNodeLink exist = existLinks.get(k);
+            if (exist != null) {
+                exist.setSortOrder(linkSort++);
+                linkMapper.updateById(exist);
+            } else {
+                WfNodeLink link = new WfNodeLink();
+                link.setDefId(defId);
+                link.setFromNodeKey(from);
+                link.setToNodeKey(to);
+                link.setIsReject(0);
+                link.setIsMustPass(0);
+                link.setSortOrder(linkSort++);
+                linkMapper.insert(link);
+            }
+            seenLinkKeys.add(k);
+        }
+        // 删除画布上已不存在的出口
+        for (WfNodeLink l : existLinks.values()) {
+            if (!seenLinkKeys.contains(linkKey(l.getFromNodeKey(), l.getToNodeKey()))) {
+                linkMapper.deleteById(l.getId());
+            }
+        }
+        log.info("[blade-workflow] BPMN 已保存并解析. defId={}, procKey={}, nodeCount={}, linkCount={}",
+            defId, def.getProcKey(), seenNodeKeys.size(), seenLinkKeys.size());
         return defId;
     }
 
@@ -290,6 +381,109 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public WfProcessNode updateNode(Long defId, String nodeKey, WfProcessNode patch) {
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+        if (node == null) {
+            throw new ServiceException("节点不存在: " + nodeKey);
+        }
+        if (patch != null) {
+            if (patch.getNodeName() != null) {
+                node.setNodeName(patch.getNodeName());
+            }
+            if (patch.getNodeType() != null) {
+                node.setNodeType(patch.getNodeType());
+            }
+            if (patch.getSignOrder() != null) {
+                node.setSignOrder(patch.getSignOrder());
+            }
+            if (patch.getMergeType() != null) {
+                node.setMergeType(patch.getMergeType());
+            }
+            if (patch.getPassNum() != null) {
+                node.setPassNum(patch.getPassNum());
+            }
+            if (patch.getAllowReject() != null) {
+                node.setAllowReject(patch.getAllowReject());
+            }
+            if (patch.getAllowForward() != null) {
+                node.setAllowForward(patch.getAllowForward());
+            }
+            if (patch.getAutoApprove() != null) {
+                node.setAutoApprove(patch.getAutoApprove());
+            }
+            if (patch.getSortOrder() != null) {
+                node.setSortOrder(patch.getSortOrder());
+            }
+            if (patch.getExtJson() != null) {
+                node.setExtJson(patch.getExtJson());
+            }
+        }
+        nodeMapper.updateById(node);
+        return node;
+    }
+
+    @Override
+    public List<WfNodeOperator> nodeOperators(Long defId, String nodeKey) {
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+        if (node == null) {
+            return Collections.emptyList();
+        }
+        return operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+            .eq(WfNodeOperator::getNodeId, node.getId())
+            .orderByAsc(WfNodeOperator::getGroupNo)
+            .orderByAsc(WfNodeOperator::getBatchNo));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public WfNodeLink saveLink(Long defId, WfNodeLink link) {
+        if (link == null) {
+            throw new ServiceException("出口不能为空");
+        }
+        link.setDefId(defId);
+        if (link.getId() == null) {
+            if (link.getIsReject() == null) {
+                link.setIsReject(0);
+            }
+            if (link.getIsMustPass() == null) {
+                link.setIsMustPass(0);
+            }
+            if (link.getSortOrder() == null) {
+                link.setSortOrder(0);
+            }
+            linkMapper.insert(link);
+        } else {
+            WfNodeLink exist = linkMapper.selectById(link.getId());
+            if (exist == null || !defId.equals(exist.getDefId())) {
+                throw new ServiceException("出口不存在");
+            }
+            linkMapper.updateById(link);
+        }
+        return link;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean deleteLink(Long defId, Long linkId) {
+        if (linkId == null) {
+            return false;
+        }
+        WfNodeLink exist = linkMapper.selectById(linkId);
+        if (exist == null || !defId.equals(exist.getDefId())) {
+            return false;
+        }
+        linkMapper.deleteById(linkId);
+        return true;
+    }
+
+    @Override
     public FormConditionVO getFormCondition(String method, Long id) {
         boolean edit = "edit".equalsIgnoreCase(method);
         FormConditionVO vo = new FormConditionVO();
@@ -353,6 +547,76 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         o.setLabel(data.getTypeName());
         o.setDescription(data.getTypeDesc());
         return o;
+    }
+
+    /** 元素 → 节点类型；非节点元素（网关/子流程等）返回 null。0创建 1审批 3归档 */
+    private Integer nodeTypeOf(FlowElement fe) {
+        if (fe instanceof StartEvent) {
+            return 0;
+        }
+        if (fe instanceof UserTask) {
+            return 1;
+        }
+        if (fe instanceof EndEvent) {
+            return 3;
+        }
+        return null;
+    }
+
+    /** 节点默认名称：优先取画布名称，缺省按类型兜底 */
+    private String defaultNodeName(FlowElement fe, Integer nodeType) {
+        if (fe.getName() != null && !fe.getName().isBlank()) {
+            return fe.getName();
+        }
+        if (nodeType != null && nodeType == 0) {
+            return "开始";
+        }
+        if (nodeType != null && nodeType == 3) {
+            return "结束";
+        }
+        return fe.getId();
+    }
+
+    private String linkKey(String from, String to) {
+        return from + "→" + to;
+    }
+
+    /**
+     * 把出口条件表达式注入 BPMN 的 sequenceFlow.conditionExpression，返回新的 XML。
+     * 注入失败时回退原 XML，保证部署不中断。
+     */
+    private String injectLinkConditions(String bpmnXml, List<WfNodeLink> links) {
+        if (bpmnXml == null || bpmnXml.isBlank() || links == null || links.isEmpty()) {
+            return bpmnXml;
+        }
+        Map<String, String> condMap = new LinkedHashMap<>();
+        for (WfNodeLink l : links) {
+            if (l.getConditionExpr() != null && !l.getConditionExpr().isBlank()) {
+                condMap.putIfAbsent(linkKey(l.getFromNodeKey(), l.getToNodeKey()), l.getConditionExpr());
+            }
+        }
+        if (condMap.isEmpty()) {
+            return bpmnXml;
+        }
+        try {
+            BpmnXMLConverter converter = new BpmnXMLConverter();
+            BpmnModel model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
+            Process process = model.getMainProcess();
+            for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
+                if (fe instanceof SequenceFlow sf) {
+                    String expr = condMap.get(linkKey(sf.getSourceRef(), sf.getTargetRef()));
+                    if (expr != null) {
+                        sf.setConditionExpression(expr);
+                    }
+                }
+            }
+            byte[] out = converter.convertToXML(model);
+            return new String(out, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 出口条件注入失败，使用原 BPMN 部署（条件将不生效）: {}", e.getMessage());
+            return bpmnXml;
+        }
     }
 
     /**

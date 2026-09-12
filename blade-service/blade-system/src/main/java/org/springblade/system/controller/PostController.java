@@ -67,7 +67,6 @@ public class PostController extends BladeController {
 	 */
 	@GetMapping("/list")
 	@Operation(summary = "分页", description = "传入post")
-	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R<IPage<PostVO>> list(Post post, Query query) {
 		IPage<Post> pages = postService.page(Condition.getPage(query), Condition.getQueryWrapper(post));
 		return R.data(PostWrapper.build().pageVO(pages));
