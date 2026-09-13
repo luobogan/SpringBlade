@@ -175,6 +175,21 @@ public final class WfNodeSettingsUtil {
         return node == null ? null : str(node.getExtJson(), "postOperate", "script");
     }
 
+    /**
+     * 节点前附加操作「退回时触发」脚本（可为 null）。
+     *
+     * <p>由前端从 items 派生：仅包含勾选「退回时触发」的启用条目。
+     * 退回场景只执行这些命令；未勾选的条目仅正常提交时执行。</p>
+     */
+    public static String preOperateRejectScript(WfProcessNode node) {
+        return node == null ? null : str(node.getExtJson(), "preOperate", "scriptOnReject");
+    }
+
+    /** 节点后附加操作「退回时触发」脚本（可为 null） */
+    public static String postOperateRejectScript(WfProcessNode node) {
+        return node == null ? null : str(node.getExtJson(), "postOperate", "scriptOnReject");
+    }
+
     /** 子流程 Key（可为 null） */
     public static String subflowKey(WfProcessNode node) {
         return node == null ? null : str(node.getExtJson(), "subflow", "flowKey");

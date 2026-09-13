@@ -60,18 +60,34 @@ public class NodeActionExecutor {
         this.instanceService = instanceService;
     }
 
+    /** 执行节点的前/后附加操作（非退回场景，见 {@link #execute(WfInstance, WfProcessNode, String, Long, boolean)}） */
+    public void execute(WfInstance inst, WfProcessNode node, String phase, Long operator) {
+        execute(inst, node, phase, operator, false);
+    }
+
     /**
      * 执行节点的前/后附加操作（未配置则直接返回）。
      *
-     * @param phase {@link #PHASE_PRE} / {@link #PHASE_POST}
+     * @param phase    {@link #PHASE_PRE} / {@link #PHASE_POST}
+     * @param onReject 是否「退回」场景：true 时只执行勾选了「退回时触发」的条目
+     *                 （读取前端派生的 settings 下 preOperate/postOperate 的 scriptOnReject）；
+     *                 false 时执行全部启用条目（settings 下同级的 script）。
      */
-    public void execute(WfInstance inst, WfProcessNode node, String phase, Long operator) {
+    public void execute(WfInstance inst, WfProcessNode node, String phase, Long operator, boolean onReject) {
         if (node == null) {
             return;
         }
-        String script = PHASE_PRE.equals(phase)
-            ? WfNodeSettingsUtil.preOperateScript(node)
-            : WfNodeSettingsUtil.postOperateScript(node);
+        boolean pre = PHASE_PRE.equals(phase);
+        String script;
+        if (onReject) {
+            script = pre
+                ? WfNodeSettingsUtil.preOperateRejectScript(node)
+                : WfNodeSettingsUtil.postOperateRejectScript(node);
+        } else {
+            script = pre
+                ? WfNodeSettingsUtil.preOperateScript(node)
+                : WfNodeSettingsUtil.postOperateScript(node);
+        }
         if (script == null || script.isBlank()) {
             return;
         }
@@ -89,9 +105,18 @@ public class NodeActionExecutor {
     /**
      * 实际动作执行体：委派给 {@link WfActionExecutor} 按 {@code script} 前缀分派
      * （{@code http(s)://} / {@code sql:} / {@code field:}）。
+     *
+     * <p>支持**多行脚本**（对齐 E9：一个节点可挂多条附加操作）：每行一条命令，按顺序依次执行；
+     * 空行与以 {@code #} / {@code //} 开头的注释行跳过。单行脚本（旧数据）行为不变。</p>
      */
     protected void doExecute(WfInstance inst, WfProcessNode node, String phase, String script, Long operator) {
-        actionExecutor.execute(inst, node, phase, script, operator);
+        for (String line : script.split("\\R")) {
+            String cmd = line.trim();
+            if (cmd.isEmpty() || cmd.startsWith("#") || cmd.startsWith("//")) {
+                continue;
+            }
+            actionExecutor.execute(inst, node, phase, cmd, operator);
+        }
     }
 
     /**

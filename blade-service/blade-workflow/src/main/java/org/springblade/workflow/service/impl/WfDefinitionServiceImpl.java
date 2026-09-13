@@ -264,7 +264,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             existNodes.putIfAbsent(n.getNodeKey(), n);
         }
         Set<String> seenNodeKeys = new HashSet<>();
-        int sort = 1;
+        // 列表顺序（sortOrder）由用户在「节点信息」列表拖拽维护：已有节点保留其 sortOrder，
+        // 仅给新增节点续接（现有最大值 + 1 …），避免保存画布时把手动排序打回流程顺序。
+        int newSort = 1;
+        for (WfProcessNode n : existNodes.values()) {
+            if (n.getSortOrder() != null && n.getSortOrder() >= newSort) {
+                newSort = n.getSortOrder() + 1;
+            }
+        }
         for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
             Integer nodeType = nodeTypeOf(fe);
             if (nodeType == null) {
@@ -274,19 +281,28 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             String nodeName = defaultNodeName(fe, nodeType);
             WfProcessNode exist = existNodes.get(key);
             if (exist != null) {
-                // 保留既有语义属性与操作者，仅同步画布名称与排序
+                // 保留既有语义属性与操作者，仅同步画布名称（sortOrder 由列表拖拽维护，不覆盖）
                 exist.setNodeName(nodeName);
-                exist.setSortOrder(sort++);
                 nodeMapper.updateById(exist);
             } else {
-                WfProcessNode node = new WfProcessNode();
-                node.setDefId(defId);
-                node.setNodeKey(key);
-                node.setNodeName(nodeName);
-                node.setNodeType(nodeType);
-                node.setSignOrder(0); // 或签
-                node.setSortOrder(sort++);
-                nodeMapper.insert(node);
+                // ⚠️ 唯一索引 uk_def_node(def_id,node_key) 不含 is_deleted：节点被逻辑删除后
+                //    行仍在、唯一键仍被占用，而 @TableLogic 让 nodes(defId) 看不到它，
+                //    于是画布把该节点重新加回来时会走到这里 insert → DuplicateKeyException。
+                //    故先查「含已删除行」：命中则复活复用原行，未命中才新建。
+                WfProcessNode ghost = nodeMapper.selectAnyByDefAndKey(defId, key);
+                if (ghost != null) {
+                    nodeMapper.reviveNode(defId, key, nodeName, nodeType, 0, newSort++);
+                    log.info("[blade-workflow] saveBpmn 复活逻辑删除节点: defId={}, nodeKey={}, oldId={}", defId, key, ghost.getId());
+                } else {
+                    WfProcessNode node = new WfProcessNode();
+                    node.setDefId(defId);
+                    node.setNodeKey(key);
+                    node.setNodeName(nodeName);
+                    node.setNodeType(nodeType);
+                    node.setSignOrder(0); // 或签
+                    node.setSortOrder(newSort++);
+                    nodeMapper.insert(node);
+                }
             }
             seenNodeKeys.add(key);
         }

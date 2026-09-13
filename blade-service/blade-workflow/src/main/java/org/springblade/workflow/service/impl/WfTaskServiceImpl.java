@@ -213,6 +213,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
         inst.setEndTime(new Date());
         instanceMapper.updateById(inst);
         closeSiblings(inst.getId(), task.getNodeKey(), task.getId());
+        // 节点信息 → 运行时消费：节点后附加操作（退回场景，仅执行勾选「退回时触发」的条目）
+        nodeActionExecutor.execute(inst, loadNode(inst.getDefId(), task.getNodeKey()),
+            NodeActionExecutor.PHASE_POST, SecureUtil.getUserId(), true);
         return true;
     }
 

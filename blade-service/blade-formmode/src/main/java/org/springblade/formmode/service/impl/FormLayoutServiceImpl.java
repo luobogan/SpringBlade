@@ -72,8 +72,14 @@ public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLay
                 return l;
             }
         }
-        // ⑤ 兼容旧数据：任意类型/节点的最新一条
-        return latestByFormId(formId);
+        // ⑤ 兼容旧数据：任意类型的最新一条（仅「表单级」请求兜底）
+        //    ⚠️ 节点请求绝不能落到这里：某节点没有自己的布局时若回退到「全表最新」，
+        //    会拿到其它节点最近保存的布局，表现为「所有节点的表单内容布局都一样」，
+        //    破坏按节点隔离。节点请求到此为止 → 返回 null（设计器打开空布局，供独立设计）。
+        if (node == null) {
+            return latestByFormId(formId);
+        }
+        return null;
     }
 
     @Override
