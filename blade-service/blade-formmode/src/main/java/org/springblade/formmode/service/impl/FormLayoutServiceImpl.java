@@ -40,6 +40,12 @@ public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLay
 
     @Override
     public FormLayout getByFormId(Long formId, Integer layoutType, String nodeKey) {
+        // 默认允许继承表单级通用布局（运行时渲染依赖该行为，跨服务 Feign 走的也是这一条）
+        return getByFormId(formId, layoutType, nodeKey, true);
+    }
+
+    @Override
+    public FormLayout getByFormId(Long formId, Integer layoutType, String nodeKey, boolean inherit) {
         if (formId == null) {
             return null;
         }
@@ -58,6 +64,14 @@ public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLay
                 if (l != null) {
                     return l;
                 }
+            }
+            // ⚠️ inherit=false（布局设计器场景）：节点没有自己的布局时**不继承表单级通用布局**，
+            //    直接返回 null → 设计器打开空白，供该节点从零独立设计
+            //    （新建流程的节点不会被该表单已配的"通用布局"预填内容）。
+            //    运行时（Feign 调用，inherit 默认 true）仍保留继承，
+            //    否则未配布局的节点在办理页会渲染成空表单。
+            if (!inherit) {
+                return null;
             }
         }
         // ③ 表单级 + 指定类型

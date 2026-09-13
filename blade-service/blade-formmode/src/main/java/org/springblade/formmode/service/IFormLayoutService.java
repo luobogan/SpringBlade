@@ -31,6 +31,20 @@ public interface IFormLayoutService extends IService<FormLayout> {
     FormLayout getByFormId(Long formId, Integer layoutType, String nodeKey);
 
     /**
+     * 按 formId + 布局类型 + 节点Key 解析布局（可控制是否继承表单级通用布局）。
+     *
+     * <p>inherit=true（默认，运行时渲染/跨服务 Feign 使用）：节点无自身布局时回退到表单级通用布局；<br>
+     * inherit=false（布局设计器使用）：**只认节点级布局**，该节点没配过就返回 null，
+     * 设计器打开空白，供该节点从零独立设计（不受该表单已配的通用布局影响）。</p>
+     *
+     * @param formId     表单ID
+     * @param layoutType 布局类型（null 视为默认 0）
+     * @param nodeKey    流程节点Key（空=表单级通用）
+     * @param inherit    节点无自身布局时是否继承表单级通用布局
+     */
+    FormLayout getByFormId(Long formId, Integer layoutType, String nodeKey, boolean inherit);
+
+    /**
      * 列出表单下的布局（可按类型/节点过滤）
      * @param formId     表单ID
      * @param layoutType 布局类型（可空）

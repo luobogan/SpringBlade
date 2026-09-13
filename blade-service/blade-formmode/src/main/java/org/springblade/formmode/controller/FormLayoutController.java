@@ -37,8 +37,10 @@ public class FormLayoutController extends BladeController {
     public R<FormLayoutVO> getByFormId(
             @Parameter(description = "表单ID") @PathVariable Long formId,
             @Parameter(description = "布局类型：0编辑(默认) 1显示 3监控 4打印") @RequestParam(value = "layouttype", required = false) Integer layoutType,
-            @Parameter(description = "流程节点Key（空=表单级通用）") @RequestParam(value = "nodeKey", required = false) String nodeKey) {
-        FormLayout formLayout = formLayoutService.getByFormId(formId, layoutType, nodeKey);
+            @Parameter(description = "流程节点Key（空=表单级通用）") @RequestParam(value = "nodeKey", required = false) String nodeKey,
+            @Parameter(description = "节点无自身布局时是否继承表单级通用布局；布局设计器传 false（打开空白布局），默认 true（运行时继承）")
+            @RequestParam(value = "inherit", required = false, defaultValue = "true") boolean inherit) {
+        FormLayout formLayout = formLayoutService.getByFormId(formId, layoutType, nodeKey, inherit);
         if (formLayout == null) {
             return R.data(null);
         }
