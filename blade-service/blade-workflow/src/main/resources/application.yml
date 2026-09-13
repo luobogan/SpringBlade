@@ -47,3 +47,4 @@ blade:
       - WfNodeOperatorMapper
       - WfProcessNodeMapper
       - WfNodeLinkMapper
+      - WfCustomActionMapper

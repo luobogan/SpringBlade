@@ -374,3 +374,27 @@ INSERT IGNORE INTO `wf_workflow_type` (`id`, `type_name`, `type_desc`, `sort_ord
     (3, '财务流程', '报销、预算、付款等', 3),
     (4, 'IT流程',  '系统权限、资源申请、运维', 4),
     (5, '业务流程', '各业务运营审批', 5);
+
+-- 自定义接口动作注册表（对齐 ecology E9「注册自定义接口」）
+-- 节点前后附加操作 → 外部接口 → 自定义接口动作：按 action_key 引用本表，
+-- 执行时由 WfActionExecutor 反射实例化 class_name 并调用 IWfCustomAction#execute。
+-- ⚠️ uk_action_key 唯一且**不含 is_deleted**：删除必须是物理删除（不加 @TableLogic 走逻辑删），
+--    否则逻辑删除的行仍占着标识键，重新注册同一标识会撞唯一键（同 wf_process_node 的坑）。
+CREATE TABLE IF NOT EXISTS `wf_custom_action` (
+    `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+    `action_name`  VARCHAR(200) NOT NULL                COMMENT '接口动作名称',
+    `action_key`   VARCHAR(100) NOT NULL                COMMENT '接口动作标识（唯一，节点附加操作按此引用）',
+    `class_name`   VARCHAR(300) NOT NULL                COMMENT '接口动作类文件：类全名，须实现 org.springblade.workflow.action.IWfCustomAction',
+    `params_json`  JSON         NULL                    COMMENT '参数设置：[{name,value,isDataSource}]',
+    `remark`       VARCHAR(500) NULL                    COMMENT '备注',
+    `tenant_id`    VARCHAR(32)  NOT NULL DEFAULT '000000' COMMENT '租户ID',
+    `create_user`  BIGINT       NULL COMMENT '创建人',
+    `create_dept`  BIGINT       NULL COMMENT '创建部门',
+    `create_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_user`  BIGINT       NULL COMMENT '修改人',
+    `update_time`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+    `status`       INT          NOT NULL DEFAULT 1      COMMENT '状态:1正常 0禁用',
+    `is_deleted`   INT          NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_action_key` (`action_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='自定义接口动作（注册自定义接口）';
