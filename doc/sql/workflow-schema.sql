@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS `wf_process_definition` (
     `name`          VARCHAR(200) NOT NULL                COMMENT '流程名称',
     `bpmn_xml`      MEDIUMTEXT   NULL                    COMMENT 'BPMN 2.0 流程定义 XML（bpmn-js 画布产出，部署时下发引擎）',
     `version`       INT          NOT NULL DEFAULT 1      COMMENT '版本号',
+    `active_version_id` BIGINT UNSIGNED NULL                COMMENT '版本组锚点：指向当前激活版本的 defId；首版=自身id，NULL=单版本流程（组=自身）',
     `is_free`       TINYINT      NOT NULL DEFAULT 0      COMMENT '是否自由流程',
     `free_wf_type`  TINYINT      NULL                    COMMENT '自由流程类型：1简易 2高级',
     `type`          VARCHAR(64)  NULL                    COMMENT '路径类型（对齐 ecology path_type 字典 code）',
