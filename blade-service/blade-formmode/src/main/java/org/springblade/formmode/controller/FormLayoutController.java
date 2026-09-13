@@ -102,6 +102,17 @@ public class FormLayoutController extends BladeController {
     }
 
     /**
+     * 按流程节点删除布局（节点被移除时清理残留，避免孤儿数据）
+     */
+    @DeleteMapping("/node/{formId}")
+    @Operation(summary = "删除节点布局", description = "删除该表单下绑定指定流程节点的全部布局（各布局类型）")
+    public R<Boolean> deleteByNode(
+            @Parameter(description = "表单ID") @PathVariable Long formId,
+            @Parameter(description = "流程节点Key") @RequestParam("nodeKey") String nodeKey) {
+        return R.data(formLayoutService.deleteByNode(formId, nodeKey));
+    }
+
+    /**
      * 解析布局JSON
      */
     @PostMapping("/parse-json")

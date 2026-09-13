@@ -102,6 +102,15 @@ public interface IWfDefinitionService {
     boolean deleteLink(Long defId, Long linkId);
 
     /**
+     * 移除节点并级联清理其全部关联数据（操作者 / 字段权限 / 明细权限 / 出口连线 / 节点布局）。
+     * 避免残留无用或孤立数据。
+     *
+     * @param defId   流程定义ID
+     * @param nodeKey 节点Key
+     */
+    boolean deleteNode(Long defId, String nodeKey);
+
+    /**
      * 获取定义表单的字段描述（condition 驱动）
      *
      * @param method add=新建 edit=编辑

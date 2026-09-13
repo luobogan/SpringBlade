@@ -12,6 +12,7 @@ import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.springblade.core.log.exception.ServiceException;
+import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
 import org.springblade.workflow.entity.WfNodeDetailPerm;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
@@ -66,6 +67,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final WfWorkflowTypeMapper wfWorkflowTypeMapper;
     private final IWfInstanceService instanceService;
     private final IProcessService processService;
+    /** 跨服务清理节点布局（form_layout）用 */
+    private final IFormmodeClient formmodeClient;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -193,21 +196,65 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
 
         // 解析 BPMN，提取 userTask 作为流程节点
+        // 前端传来的 bpmnXml 为 base64（规避 SpringBlade XSS 过滤器对请求体“去标签”，会把 BPMN 的
+        // <bpmn:*> 标签整段删掉、只剩文本而解析失败）。此处解码；若已是含 < 的 XML（XSS 已跳过/旧调用）则直接用。
+        String xmlSource;
+        if (bpmnXml != null && bpmnXml.indexOf('<') >= 0) {
+            xmlSource = bpmnXml;
+        } else {
+            xmlSource = new String(java.util.Base64.getDecoder().decode(bpmnXml), StandardCharsets.UTF_8);
+        }
+        int docStart = xmlSource.indexOf("<?xml");
+        if (docStart < 0) {
+            docStart = xmlSource.indexOf("<bpmn:definitions");
+        }
+        if (docStart > 0) {
+            xmlSource = xmlSource.substring(docStart);
+        }
+        final String xmlInput = xmlSource;
+
         Process process;
+        BpmnModel model;
         try {
             BpmnXMLConverter converter = new BpmnXMLConverter();
-            var model = converter.convertToBpmnModel(
-                () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
-            process = model.getMainProcess();
+            model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(xmlInput.getBytes(StandardCharsets.UTF_8)), false, false);
         } catch (Exception e) {
-            throw new ServiceException("BPMN 解析失败：" + e.getMessage());
+            // 兜底：bpmn-js 导出的 bpmndi 图形交换信息偶尔会让 flowable 的 StAX 解析抛
+            // "Error reading XML"；保存画布只关心流程结构（flow elements），故剔除
+            // <bpmndi:BPMNDiagram> 整段后重试。
+            try {
+                String stripped = xmlInput.replaceAll("(?s)<bpmndi:BPMNDiagram.*?</bpmndi:BPMNDiagram>", "");
+                BpmnXMLConverter converter = new BpmnXMLConverter();
+                model = converter.convertToBpmnModel(
+                    () -> new ByteArrayInputStream(stripped.getBytes(StandardCharsets.UTF_8)), false, false);
+                log.warn("[blade-workflow] BPMN 首次解析失败，剔除 bpmndi 后重试成功. defId={}", defId, e);
+            } catch (Exception e2) {
+                Throwable cause = e2.getCause() != null ? e2.getCause() : e2;
+                String causeMsg = cause.getMessage();
+                // 落盘完整 XML 便于精确定位
+                try {
+                    java.nio.file.Files.writeString(
+                        java.nio.file.Path.of("d:/temp/bpmn_" + defId + ".xml"), xmlInput, StandardCharsets.UTF_8);
+                } catch (Exception ignore) {
+                    // ignore
+                }
+                byte[] head = xmlInput.substring(0, Math.min(xmlInput.length(), 64)).getBytes(StandardCharsets.UTF_8);
+                StringBuilder hex = new StringBuilder();
+                for (byte b : head) {
+                    hex.append(String.format("%02x ", b & 0xff));
+                }
+                log.error("[blade-workflow] BPMN 解析失败. defId={}, cause={}, headHex={}", defId, causeMsg, hex, e2);
+                throw new ServiceException("BPMN 解析失败：" + causeMsg);
+            }
         }
+        process = model.getMainProcess();
         String procId = process.getId();
         if (procId != null && !procId.isBlank()) {
             // 以画布 process id 为准，保证引擎部署一致
             def.setProcKey(procId);
         }
-        def.setBpmnXml(bpmnXml);
+        def.setBpmnXml(xmlInput);
         defMapper.updateById(def);
 
         // 解析画布元素 → 按 nodeKey upsert 节点。
@@ -256,6 +303,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                     .eq(WfNodeDetailPerm::getDefId, defId)
                     .eq(WfNodeDetailPerm::getNodeKey, n.getNodeKey()));
                 nodeMapper.deleteById(n.getId());
+                // 跨服务清理该节点的布局（form_layout），避免画布删节点后留下孤儿布局
+                try {
+                    if (def.getFormId() != null && formmodeClient != null) {
+                        formmodeClient.deleteFormLayoutByNode(def.getFormId(), n.getNodeKey());
+                    }
+                } catch (Exception e) {
+                    log.warn("[blade-workflow] 清理节点布局失败（节点已移除）. defId={}, nodeKey={}", defId, n.getNodeKey(), e);
+                }
             }
         }
 
@@ -480,6 +535,64 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             return false;
         }
         linkMapper.deleteById(linkId);
+        return true;
+    }
+
+    /**
+     * 移除节点并级联清理其全部关联数据，避免残留无用 / 孤立数据。
+     *
+     * <p>清理顺序（先明细后主记录）：
+     * ① 操作者 wf_node_operator（按 node_id）
+     * ② 字段权限 wf_node_field_perm、明细权限 wf_node_detail_perm（按 def_id + node_key）
+     * ③ 出口连线 wf_node_link（进出该节点的都要删，否则连线指向已不存在的节点）
+     * ④ 节点本身 wf_process_node
+     * ⑤ 跨服务清理该节点保存过的布局 form_layout（best-effort：表单服务不可用时仅告警，不回滚主流程）</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean deleteNode(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null || nodeKey.isEmpty()) {
+            return false;
+        }
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+        if (node == null) {
+            throw new ServiceException("节点不存在: " + nodeKey);
+        }
+
+        // ① 操作者
+        if (node.getId() != null) {
+            operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+                .eq(WfNodeOperator::getNodeId, node.getId()));
+        }
+        // ② 字段权限 / 明细权限
+        fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+            .eq(WfNodeFieldPerm::getDefId, defId)
+            .eq(WfNodeFieldPerm::getNodeKey, nodeKey));
+        detailPermMapper.delete(Wrappers.<WfNodeDetailPerm>lambdaQuery()
+            .eq(WfNodeDetailPerm::getDefId, defId)
+            .eq(WfNodeDetailPerm::getNodeKey, nodeKey));
+        // ③ 出口连线（进 / 出）
+        linkMapper.delete(Wrappers.<WfNodeLink>lambdaQuery()
+            .eq(WfNodeLink::getDefId, defId)
+            .and(w -> w.eq(WfNodeLink::getFromNodeKey, nodeKey)
+                .or()
+                .eq(WfNodeLink::getToNodeKey, nodeKey)));
+        // ④ 节点本身
+        nodeMapper.deleteById(node.getId());
+
+        // ⑤ 节点布局（form_layout）：没保存过则无记录，保存过的一并删除，避免孤儿布局
+        try {
+            WfProcessDefinition def = defMapper.selectById(defId);
+            if (def != null && def.getFormId() != null && formmodeClient != null) {
+                formmodeClient.deleteFormLayoutByNode(def.getFormId(), nodeKey);
+            }
+        } catch (Exception e) {
+            // 跨服务清理失败不影响节点移除结果，仅记录告警（布局记录可在表单侧单独清理）
+            log.warn("[blade-workflow] 清理节点布局失败（节点已移除）. defId={}, nodeKey={}", defId, nodeKey, e);
+        }
         return true;
     }
 

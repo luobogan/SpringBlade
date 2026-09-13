@@ -46,6 +46,18 @@ public interface IFormLayoutService extends IService<FormLayout> {
     boolean saveFormLayout(FormLayout formLayout);
 
     /**
+     * 删除某表单下绑定到指定流程节点的**全部**布局（含各布局类型）。
+     *
+     * <p>流程节点被移除时调用：否则该节点保存过的布局会成为孤儿数据
+     * （节点已不存在，但 form_layout 里仍挂着 node_key，且运行时不再被读到）。</p>
+     *
+     * @param formId  表单ID
+     * @param nodeKey 流程节点Key
+     * @return 是否删除成功（无记录时返回 true）
+     */
+    boolean deleteByNode(Long formId, String nodeKey);
+
+    /**
      * 解析布局JSON
      * @param layoutJson 布局JSON
      * @return 解析结果

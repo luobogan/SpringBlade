@@ -44,4 +44,9 @@ public class IFormmodeClientFallback implements IFormmodeClient {
         return R.fail("表单建模服务不可用");
     }
 
+    @Override
+    public R<Boolean> deleteFormLayoutByNode(Long formId, String nodeKey) {
+        return R.fail("表单建模服务不可用");
+    }
+
 }

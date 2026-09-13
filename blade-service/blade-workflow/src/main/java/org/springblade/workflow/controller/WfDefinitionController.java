@@ -161,6 +161,13 @@ public class WfDefinitionController {
         return R.data(definitionService.deleteLink(id, linkId), "删除成功");
     }
 
+    @DeleteMapping("/{id}/node/{nodeKey}")
+    @Operation(summary = "移除节点", description = "级联清理该节点的操作者/字段权限/明细权限/出口连线/布局，避免残留孤立数据")
+    public R<Boolean> deleteNode(@PathVariable("id") Long id,
+                                 @PathVariable("nodeKey") String nodeKey) {
+        return R.data(definitionService.deleteNode(id, nodeKey), "移除成功");
+    }
+
     @PutMapping("/{id}/node/{nodeKey}/operator")
     @Operation(summary = "配置节点操作者", description = "整体覆盖保存；请求体为 { operators: [...] }")
     public R<Boolean> configOperator(@PathVariable("id") Long id,

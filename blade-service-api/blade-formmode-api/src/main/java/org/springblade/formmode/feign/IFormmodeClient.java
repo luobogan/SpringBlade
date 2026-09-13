@@ -63,4 +63,15 @@ public interface IFormmodeClient {
                                   @RequestParam(value = "layouttype", required = false) Integer layoutType,
                                   @RequestParam(value = "nodeKey", required = false) String nodeKey);
 
+    /**
+     * 删除某表单下绑定指定流程节点的全部布局。
+     * 供 blade-workflow 在「移除节点」时级联清理，避免留下孤儿布局数据。
+     *
+     * @param formId  表单ID
+     * @param nodeKey 流程节点Key
+     */
+    @DeleteMapping("/form-layout/node/{formId}")
+    R<Boolean> deleteFormLayoutByNode(@PathVariable("formId") Long formId,
+                                      @RequestParam("nodeKey") String nodeKey);
+
 }

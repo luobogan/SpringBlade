@@ -15,6 +15,7 @@ import org.springblade.formmode.service.IFormLayoutService;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 表单布局服务实现类
@@ -125,6 +126,23 @@ public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLay
         return null;
     }
 
+    /**
+     * 按「表单 + 布局类型 + 流程节点」查找已有布局（不区分 status，用于 upsert 判定）。
+     */
+    private FormLayout findAny(Long formId, int layoutType, String nodeKey) {
+        LambdaQueryWrapper<FormLayout> q = Wrappers.<FormLayout>lambdaQuery()
+                .eq(FormLayout::getFormId, formId)
+                .eq(FormLayout::getLayoutType, layoutType);
+        if (nodeKey == null || nodeKey.isBlank()) {
+            q.and(w -> w.isNull(FormLayout::getNodeKey).or().eq(FormLayout::getNodeKey, ""));
+        } else {
+            q.eq(FormLayout::getNodeKey, nodeKey);
+        }
+        q.orderByDesc(FormLayout::getCreateTime);
+        List<FormLayout> list = list(q);
+        return (list == null || list.isEmpty()) ? null : list.get(0);
+    }
+
     @Override
     public boolean saveFormLayout(FormLayout formLayout) {
         // 检查 formId 是否存在于 workflow_bill 表
@@ -135,12 +153,46 @@ public class FormLayoutServiceImpl extends ServiceImpl<FormLayoutMapper, FormLay
                 throw new IllegalArgumentException("表单ID不存在: " + formLayout.getFormId());
             }
         }
-        
+
+        // Upsert：保存请求不带 id（前端不传），若只按 id 判空，每次保存都会 INSERT 一条新记录，
+        // 同一「表单+类型+节点」堆积多行；读取时按 create_time desc 取第一条，
+        // 同秒写入/时间精度不足时会取到旧行 → 表现为「点了保存但数据没存上」。
+        // 故先按业务键定位已有记录，命中则更新，未命中才新增。
+        if (formLayout.getId() == null) {
+            int type = formLayout.getLayoutType() == null ? DEFAULT_LAYOUT_TYPE : formLayout.getLayoutType();
+            FormLayout existing = findAny(formLayout.getFormId(), type, formLayout.getNodeKey());
+            if (existing != null) {
+                formLayout.setId(existing.getId());
+                log.info("保存表单布局: 命中已有记录 id={}, formId={}, layoutType={}, nodeKey={}",
+                        existing.getId(), formLayout.getFormId(), type, formLayout.getNodeKey());
+            }
+        }
+
         if (formLayout.getId() == null) {
             return save(formLayout);
         } else {
             return updateById(formLayout);
         }
+    }
+
+    @Override
+    public boolean deleteByNode(Long formId, String nodeKey) {
+        if (formId == null || nodeKey == null || nodeKey.isBlank()) {
+            return false;
+        }
+        List<FormLayout> list = lambdaQuery()
+                .eq(FormLayout::getFormId, formId)
+                .eq(FormLayout::getNodeKey, nodeKey)
+                .list();
+        if (list == null || list.isEmpty()) {
+            return true;
+        }
+        List<Long> ids = list.stream().map(FormLayout::getId).filter(Objects::nonNull).collect(Collectors.toList());
+        if (ids.isEmpty()) {
+            return true;
+        }
+        log.info("删除节点布局: formId={}, nodeKey={}, 条数={}", formId, nodeKey, ids.size());
+        return removeByIds(ids);
     }
 
     @Override
