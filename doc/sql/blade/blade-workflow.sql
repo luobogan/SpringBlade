@@ -1754,6 +1754,42 @@ LOCK TABLES `wf_approval_log` WRITE;
 UNLOCK TABLES;
 
 --
+-- Table structure for table `wf_custom_action`
+--
+
+DROP TABLE IF EXISTS `wf_custom_action`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `wf_custom_action` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `action_name` varchar(200) NOT NULL COMMENT '接口动作名称',
+  `action_key` varchar(100) NOT NULL COMMENT '接口动作标识（唯一）',
+  `class_name` varchar(300) NOT NULL COMMENT '接口动作类文件（类全名）',
+  `params_json` json DEFAULT NULL COMMENT '参数设置：[{name,value,isDataSource}]',
+  `remark` varchar(500) DEFAULT NULL COMMENT '备注',
+  `tenant_id` varchar(32) NOT NULL DEFAULT '000000' COMMENT '租户ID',
+  `create_user` bigint DEFAULT NULL COMMENT '创建人',
+  `create_dept` bigint DEFAULT NULL COMMENT '创建部门',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_user` bigint DEFAULT NULL COMMENT '修改人',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+  `status` int NOT NULL DEFAULT '1' COMMENT '状态:1正常 0禁用',
+  `is_deleted` int NOT NULL DEFAULT '0' COMMENT '逻辑删除',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_action_key` (`action_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='自定义接口动作（注册自定义接口）';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `wf_custom_action`
+--
+
+LOCK TABLES `wf_custom_action` WRITE;
+/*!40000 ALTER TABLE `wf_custom_action` DISABLE KEYS */;
+/*!40000 ALTER TABLE `wf_custom_action` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
 -- Table structure for table `wf_form_snapshot`
 --
 
@@ -1927,7 +1963,7 @@ CREATE TABLE `wf_node_field_perm` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
   `def_id` bigint unsigned NOT NULL COMMENT '流程定义ID',
   `node_key` varchar(64) NOT NULL COMMENT '节点Key',
-  `scope` varchar(64) NOT NULL COMMENT '权限作用域：main（主表）| dt{idx}（明细表整表）| dt{idx}_r{row}（明细行级）',
+  `scope` varchar(32) NOT NULL COMMENT 'main | dt{idx} | dt{idx}_r{row}（与 data-excelp-scope 对齐）',
   `field_name` varchar(128) NOT NULL COMMENT '字段名（与 data-excelp-field 对齐）',
   `perm` tinyint NOT NULL DEFAULT '2' COMMENT '0隐藏 1只读 2可编辑 3必填（对齐 ecology fieldattr）',
   `tenant_id` varchar(32) NOT NULL DEFAULT '000000' COMMENT '租户ID',
@@ -1981,7 +2017,7 @@ CREATE TABLE `wf_node_link` (
   PRIMARY KEY (`id`),
   KEY `idx_def_from` (`def_id`,`from_node_key`),
   KEY `idx_def_reject` (`def_id`,`is_reject`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程出口（连线）';
+) ENGINE=InnoDB AUTO_INCREMENT=2099022483173691399 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程出口（连线）';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -1990,6 +2026,7 @@ CREATE TABLE `wf_node_link` (
 
 LOCK TABLES `wf_node_link` WRITE;
 /*!40000 ALTER TABLE `wf_node_link` DISABLE KEYS */;
+INSERT INTO `wf_node_link` VALUES (2099021123724288004,2099021089519738882,'StartEvent_mtzfh5fr0','UserTask_mtzfh5fx0',0,0,NULL,'',1,'000000',NULL,NULL,'2026-09-13 14:23:28',NULL,'2026-09-13 14:23:28',1,0),(2099021123724288005,2099021089519738882,'UserTask_mtzfh5fx0','EndEvent_mtzfh5g40',0,0,NULL,'',2,'000000',NULL,NULL,'2026-09-13 14:23:28',NULL,'2026-09-13 14:23:28',1,0),(2099022483173691397,2099022450722361345,'StartEvent_mtzfo3hc0','UserTask_mtzfo3hg0',0,0,NULL,'',1,'000000',NULL,NULL,'2026-09-13 14:28:52',NULL,'2026-09-13 14:28:52',1,0),(2099022483173691398,2099022450722361345,'UserTask_mtzfo3hg0','EndEvent_mtzfo3hm0',0,0,NULL,'',2,'000000',NULL,NULL,'2026-09-13 14:28:52',NULL,'2026-09-13 14:28:52',1,0);
 /*!40000 ALTER TABLE `wf_node_link` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2023,7 +2060,7 @@ CREATE TABLE `wf_node_operator` (
   PRIMARY KEY (`id`),
   KEY `idx_node_group` (`node_id`,`group_no`),
   KEY `idx_node_type` (`node_id`,`op_type`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='节点操作者';
+) ENGINE=InnoDB AUTO_INCREMENT=2099022342182162435 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='节点操作者';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2032,6 +2069,7 @@ CREATE TABLE `wf_node_operator` (
 
 LOCK TABLES `wf_node_operator` WRITE;
 /*!40000 ALTER TABLE `wf_node_operator` DISABLE KEYS */;
+INSERT INTO `wf_node_operator` VALUES (2099022342182162434,2099021123724288002,1,1,'1123598813738675201,1123598813738675202',0,100,0,0,0,'{\"name\": \"55\"}','000000',NULL,NULL,'2026-09-13 14:28:18',NULL,'2026-09-13 14:28:18',1,0);
 /*!40000 ALTER TABLE `wf_node_operator` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2050,7 +2088,7 @@ CREATE TABLE `wf_process_definition` (
   `bpmn_xml` mediumtext COMMENT 'BPMN 2.0 流程定义 XML（bpmn-js 画布产出，部署时下发引擎）',
   `version` int NOT NULL DEFAULT '1' COMMENT '版本号',
   `is_free` tinyint NOT NULL DEFAULT '0' COMMENT '是否自由流程',
-  `free_wf_type` tinyint DEFAULT '1' COMMENT '自由流程类型：1简易 2高级（对齐 ecology newFreeWfType）',
+  `free_wf_type` tinyint DEFAULT NULL COMMENT '自由流程类型：1简易 2高级',
   `type` varchar(64) DEFAULT NULL COMMENT '路径类型（对齐 ecology path_type 字典 code）',
   `form_type` tinyint DEFAULT NULL COMMENT '对应表单类型：0自定义表单 1系统表单',
   `description` varchar(500) DEFAULT NULL COMMENT '路径描述',
@@ -2066,7 +2104,7 @@ CREATE TABLE `wf_process_definition` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_proc_key_version` (`proc_key`,`version`),
   KEY `idx_form_status` (`form_id`,`status`)
-) ENGINE=InnoDB AUTO_INCREMENT=2098427055579353091 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
+) ENGINE=InnoDB AUTO_INCREMENT=2099022450722361346 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2075,7 +2113,7 @@ CREATE TABLE `wf_process_definition` (
 
 LOCK TABLES `wf_process_definition` WRITE;
 /*!40000 ALTER TABLE `wf_process_definition` DISABLE KEYS */;
-INSERT INTO `wf_process_definition` VALUES (2097902745852928002,'111',2064530495200337922,'test',NULL,1,0,1,'4',0,'',0,'000000',NULL,NULL,'2026-09-10 12:19:26',NULL,'2026-09-11 09:56:14',0,0),(2098051811542872065,'flow_mtvlvtxjj7ak',2098051715644289026,'test1',NULL,1,0,1,'1',0,'',0,'000000',NULL,NULL,'2026-09-10 22:11:46',NULL,'2026-09-11 10:14:29',0,0),(2098056949456220161,'flow_mtvmm35keevg',2098040268054884354,'·1·1',NULL,1,0,1,'1',0,'111',0,'000000',NULL,NULL,'2026-09-10 22:32:11',NULL,'2026-09-10 22:32:11',0,0),(2098059923909816322,'flow_mtvn1ackwkwe',2098051715644289026,'·1·1',NULL,1,0,1,'1',0,'',0,'000000',NULL,NULL,'2026-09-10 22:44:00',NULL,'2026-09-11 10:46:13',0,0),(2098064840540073986,'flow_mtvnqeu5zypb',2098051715644289026,'·1·1',NULL,1,0,1,'1',0,NULL,0,'000000',NULL,NULL,'2026-09-10 23:03:32',NULL,'2026-09-10 23:03:32',0,0),(2098427055579353090,'flow_mtx35dpcjt1n',2061119326280265729,'testt',NULL,1,0,1,'4',1,NULL,0,'000000',NULL,NULL,'2026-09-11 23:02:51',NULL,'2026-09-11 23:02:51',0,0);
+INSERT INTO `wf_process_definition` VALUES (2099021089519738882,'flow_mtzfgz56brfo',2061742319431884801,'托尔斯泰11','<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<bpmn:definitions xmlns:bpmn=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" xmlns:bpmndi=\"http://www.omg.org/spec/BPMN/20100524/DI\" xmlns:dc=\"http://www.omg.org/spec/DD/20100524/DC\" xmlns:di=\"http://www.omg.org/spec/DD/20100524/DI\" id=\"Definitions_1\" targetNamespace=\"http://bpmn.io/schema/bpmn\">\n  <bpmn:process id=\"flow_mtzfgz56brfo\" name=\"托尔斯泰11\" isExecutable=\"true\">\n    <bpmn:startEvent id=\"StartEvent_mtzfh5fr0\" name=\"开始\">\n      <bpmn:outgoing>Flow_0zur9vd</bpmn:outgoing>\n    </bpmn:startEvent>\n    <bpmn:userTask id=\"UserTask_mtzfh5fx0\" name=\"111\">\n      <bpmn:incoming>Flow_0zur9vd</bpmn:incoming>\n      <bpmn:outgoing>Flow_09t5fp0</bpmn:outgoing>\n    </bpmn:userTask>\n    <bpmn:sequenceFlow id=\"Flow_0zur9vd\" sourceRef=\"StartEvent_mtzfh5fr0\" targetRef=\"UserTask_mtzfh5fx0\" />\n    <bpmn:endEvent id=\"EndEvent_mtzfh5g40\" name=\"结束\">\n      <bpmn:incoming>Flow_09t5fp0</bpmn:incoming>\n    </bpmn:endEvent>\n    <bpmn:sequenceFlow id=\"Flow_09t5fp0\" sourceRef=\"UserTask_mtzfh5fx0\" targetRef=\"EndEvent_mtzfh5g40\" />\n  </bpmn:process>\n  <bpmndi:BPMNDiagram id=\"BPMNDiagram_1\">\n    <bpmndi:BPMNPlane id=\"BPMNPlane_1\" bpmnElement=\"flow_mtzfgz56brfo\">\n      <bpmndi:BPMNShape id=\"StartEvent_mtzfh5fr0_di\" bpmnElement=\"StartEvent_mtzfh5fr0\">\n        <dc:Bounds x=\"142\" y=\"142\" width=\"36\" height=\"36\" />\n        <bpmndi:BPMNLabel>\n          <dc:Bounds x=\"149\" y=\"185\" width=\"23\" height=\"14\" />\n        </bpmndi:BPMNLabel>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"UserTask_mtzfh5fx0_di\" bpmnElement=\"UserTask_mtzfh5fx0\">\n        <dc:Bounds x=\"248\" y=\"102\" width=\"100\" height=\"80\" />\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"EndEvent_mtzfh5g40_di\" bpmnElement=\"EndEvent_mtzfh5g40\">\n        <dc:Bounds x=\"450\" y=\"84\" width=\"36\" height=\"36\" />\n        <bpmndi:BPMNLabel>\n          <dc:Bounds x=\"457\" y=\"127\" width=\"23\" height=\"14\" />\n        </bpmndi:BPMNLabel>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNEdge id=\"Flow_0zur9vd_di\" bpmnElement=\"Flow_0zur9vd\">\n        <di:waypoint x=\"178\" y=\"160\" />\n        <di:waypoint x=\"210\" y=\"160\" />\n        <di:waypoint x=\"210\" y=\"142\" />\n        <di:waypoint x=\"248\" y=\"142\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_09t5fp0_di\" bpmnElement=\"Flow_09t5fp0\">\n        <di:waypoint x=\"348\" y=\"142\" />\n        <di:waypoint x=\"400\" y=\"142\" />\n        <di:waypoint x=\"400\" y=\"102\" />\n        <di:waypoint x=\"450\" y=\"102\" />\n      </bpmndi:BPMNEdge>\n    </bpmndi:BPMNPlane>\n  </bpmndi:BPMNDiagram>\n</bpmn:definitions>\n',1,0,NULL,'1',0,NULL,0,'000000',NULL,NULL,'2026-09-13 14:23:20',NULL,'2026-09-13 14:23:20',0,0),(2099022450722361345,'flow_mtzfnxjvun1s',2098049574837972993,'测试','<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<bpmn:definitions xmlns:bpmn=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" xmlns:bpmndi=\"http://www.omg.org/spec/BPMN/20100524/DI\" xmlns:dc=\"http://www.omg.org/spec/DD/20100524/DC\" xmlns:di=\"http://www.omg.org/spec/DD/20100524/DI\" id=\"Definitions_1\" targetNamespace=\"http://bpmn.io/schema/bpmn\">\n  <bpmn:process id=\"flow_mtzfnxjvun1s\" name=\"测试\" isExecutable=\"true\">\n    <bpmn:startEvent id=\"StartEvent_mtzfo3hc0\" name=\"开始\">\n      <bpmn:outgoing>Flow_1c2imuj</bpmn:outgoing>\n    </bpmn:startEvent>\n    <bpmn:userTask id=\"UserTask_mtzfo3hg0\" name=\"方法\">\n      <bpmn:incoming>Flow_1c2imuj</bpmn:incoming>\n      <bpmn:outgoing>Flow_0oiwgwo</bpmn:outgoing>\n    </bpmn:userTask>\n    <bpmn:sequenceFlow id=\"Flow_1c2imuj\" sourceRef=\"StartEvent_mtzfo3hc0\" targetRef=\"UserTask_mtzfo3hg0\" />\n    <bpmn:endEvent id=\"EndEvent_mtzfo3hm0\" name=\"结束\">\n      <bpmn:incoming>Flow_0oiwgwo</bpmn:incoming>\n    </bpmn:endEvent>\n    <bpmn:sequenceFlow id=\"Flow_0oiwgwo\" sourceRef=\"UserTask_mtzfo3hg0\" targetRef=\"EndEvent_mtzfo3hm0\" />\n  </bpmn:process>\n  <bpmndi:BPMNDiagram id=\"BPMNDiagram_1\">\n    <bpmndi:BPMNPlane id=\"BPMNPlane_1\" bpmnElement=\"flow_mtzfnxjvun1s\">\n      <bpmndi:BPMNShape id=\"StartEvent_mtzfo3hc0_di\" bpmnElement=\"StartEvent_mtzfo3hc0\">\n        <dc:Bounds x=\"142\" y=\"142\" width=\"36\" height=\"36\" />\n        <bpmndi:BPMNLabel>\n          <dc:Bounds x=\"149\" y=\"185\" width=\"23\" height=\"14\" />\n        </bpmndi:BPMNLabel>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"UserTask_mtzfo3hg0_di\" bpmnElement=\"UserTask_mtzfo3hg0\">\n        <dc:Bounds x=\"248\" y=\"102\" width=\"100\" height=\"80\" />\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"EndEvent_mtzfo3hm0_di\" bpmnElement=\"EndEvent_mtzfo3hm0\">\n        <dc:Bounds x=\"450\" y=\"84\" width=\"36\" height=\"36\" />\n        <bpmndi:BPMNLabel>\n          <dc:Bounds x=\"457\" y=\"127\" width=\"23\" height=\"14\" />\n        </bpmndi:BPMNLabel>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNEdge id=\"Flow_1c2imuj_di\" bpmnElement=\"Flow_1c2imuj\">\n        <di:waypoint x=\"178\" y=\"160\" />\n        <di:waypoint x=\"210\" y=\"160\" />\n        <di:waypoint x=\"210\" y=\"142\" />\n        <di:waypoint x=\"248\" y=\"142\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_0oiwgwo_di\" bpmnElement=\"Flow_0oiwgwo\">\n        <di:waypoint x=\"348\" y=\"142\" />\n        <di:waypoint x=\"400\" y=\"142\" />\n        <di:waypoint x=\"400\" y=\"102\" />\n        <di:waypoint x=\"450\" y=\"102\" />\n      </bpmndi:BPMNEdge>\n    </bpmndi:BPMNPlane>\n  </bpmndi:BPMNDiagram>\n</bpmn:definitions>\n',1,0,NULL,'1',0,NULL,0,'000000',NULL,NULL,'2026-09-13 14:28:44',NULL,'2026-09-13 14:28:44',0,0);
 /*!40000 ALTER TABLE `wf_process_definition` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2111,7 +2149,7 @@ CREATE TABLE `wf_process_node` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_def_node` (`def_id`,`node_key`),
   KEY `idx_def_sort` (`def_id`,`sort_order`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程节点';
+) ENGINE=InnoDB AUTO_INCREMENT=2099022483173691397 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程节点';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2120,6 +2158,7 @@ CREATE TABLE `wf_process_node` (
 
 LOCK TABLES `wf_process_node` WRITE;
 /*!40000 ALTER TABLE `wf_process_node` DISABLE KEYS */;
+INSERT INTO `wf_process_node` VALUES (2099021123724288001,2099021089519738882,'StartEvent_mtzfh5fr0','开始',0,0,0,0,1,0,0,1,NULL,'000000',NULL,NULL,'2026-09-13 14:23:28',NULL,'2026-09-13 14:23:28',1,0),(2099021123724288002,2099021089519738882,'UserTask_mtzfh5fx0','111',1,0,0,0,1,0,0,2,'{\"settings\": {}}','000000',NULL,NULL,'2026-09-13 14:23:28',NULL,'2026-09-13 14:23:28',1,0),(2099021123724288003,2099021089519738882,'EndEvent_mtzfh5g40','结束',3,0,0,0,1,0,0,3,NULL,'000000',NULL,NULL,'2026-09-13 14:23:28',NULL,'2026-09-13 14:23:28',1,0),(2099022483173691394,2099022450722361345,'StartEvent_mtzfo3hc0','开始',0,0,0,0,1,0,0,1,NULL,'000000',NULL,NULL,'2026-09-13 14:28:52',NULL,'2026-09-13 14:28:52',1,0),(2099022483173691395,2099022450722361345,'UserTask_mtzfo3hg0','方法',1,0,0,0,1,0,0,2,'{\"settings\": {}}','000000',NULL,NULL,'2026-09-13 14:28:52',NULL,'2026-09-13 14:28:52',1,0),(2099022483173691396,2099022450722361345,'EndEvent_mtzfo3hm0','结束',3,0,0,0,1,0,0,3,NULL,'000000',NULL,NULL,'2026-09-13 14:28:52',NULL,'2026-09-13 14:28:52',1,0);
 /*!40000 ALTER TABLE `wf_process_node` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2209,4 +2248,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-09-12 22:57:13
+-- Dump completed on 2026-09-13 14:36:52

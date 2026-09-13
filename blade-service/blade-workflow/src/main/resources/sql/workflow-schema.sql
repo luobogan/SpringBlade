@@ -15,7 +15,9 @@
 --      因此每张表都必须是完整的审计列集合，否则 MyBatis-Plus 会因列缺失报错。
 --   5. 大 JSON（布局快照、表单数据）独立列/独立表，避免撑大主表热点行
 --   6. 无外键约束（跨库/跨模块引用靠逻辑关联，与 ecology 一致）
---   7. 脚本可重复执行（先 DROP 再 CREATE）
+--   7. 脚本**幂等且非破坏**：全部 CREATE TABLE IF NOT EXISTS，不含任何生效的 DROP/DELETE。
+--      重复执行只补建缺失的表，**不会动已有数据**（原「先 DROP 再 CREATE」的写法已于
+--      2026-09-13 移除并注释保留在下方「危险操作区」，防止误清库）
 -- =============================================================================
 
 CREATE DATABASE IF NOT EXISTS `blade_workflow`
@@ -24,28 +26,38 @@ CREATE DATABASE IF NOT EXISTS `blade_workflow`
 
 USE `blade_workflow`;
 
-SET FOREIGN_KEY_CHECKS = 0;
-
-DROP TABLE IF EXISTS `wf_migration_map`;
-DROP TABLE IF EXISTS `wf_form_snapshot`;
-DROP TABLE IF EXISTS `wf_approval_log`;
-DROP TABLE IF EXISTS `wf_task`;
-DROP TABLE IF EXISTS `wf_instance`;
-DROP TABLE IF EXISTS `wf_node_detail_perm`;
-DROP TABLE IF EXISTS `wf_node_field_perm`;
-DROP TABLE IF EXISTS `wf_node_link`;
-DROP TABLE IF EXISTS `wf_node_operator`;
-DROP TABLE IF EXISTS `wf_process_node`;
-DROP TABLE IF EXISTS `wf_process_definition`;
-
-SET FOREIGN_KEY_CHECKS = 1;
+-- =============================================================================
+-- ⚠️⚠️ 危险操作区：默认整段注释掉，**请勿随意放开** ⚠️⚠️
+--
+-- 下面这些 DROP 会清空**全部流程数据**（定义 / 节点 / 连线 / 操作者 / 字段权限 /
+-- 明细权限 / 实例 / 任务 / 审批日志 / 表单快照 / 迁移映射），不可恢复。
+-- 2026-09-13 曾两次因重跑本脚本，导致测试库 wf_* 数据被清空（表结构被重建）。
+--
+-- 日常执行本脚本**不需要**放开这一段：下面所有建表语句都是 CREATE TABLE IF NOT EXISTS，
+-- 已存在的表会被跳过，数据不受影响。
+-- 仅当确实要「重置库结构」时，才放开本段；建议先备份。
+--
+-- SET FOREIGN_KEY_CHECKS = 0;
+-- DROP TABLE IF EXISTS `wf_migration_map`;
+-- DROP TABLE IF EXISTS `wf_form_snapshot`;
+-- DROP TABLE IF EXISTS `wf_approval_log`;
+-- DROP TABLE IF EXISTS `wf_task`;
+-- DROP TABLE IF EXISTS `wf_instance`;
+-- DROP TABLE IF EXISTS `wf_node_detail_perm`;
+-- DROP TABLE IF EXISTS `wf_node_field_perm`;
+-- DROP TABLE IF EXISTS `wf_node_link`;
+-- DROP TABLE IF EXISTS `wf_node_operator`;
+-- DROP TABLE IF EXISTS `wf_process_node`;
+-- DROP TABLE IF EXISTS `wf_process_definition`;
+-- SET FOREIGN_KEY_CHECKS = 1;
+-- =============================================================================
 
 -- =============================================================================
 -- 5.1 流程定义域
 -- =============================================================================
 
 -- 流程定义
-CREATE TABLE `wf_process_definition` (
+CREATE TABLE IF NOT EXISTS `wf_process_definition` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `proc_key`      VARCHAR(64)  NOT NULL                COMMENT '引擎流程Key（= BPMN process id）',
     `form_id`       BIGINT       NOT NULL                COMMENT '关联 workflow_bill.id（表单）',
@@ -53,6 +65,7 @@ CREATE TABLE `wf_process_definition` (
     `bpmn_xml`      MEDIUMTEXT   NULL                    COMMENT 'BPMN 2.0 流程定义 XML（bpmn-js 画布产出，部署时下发引擎）',
     `version`       INT          NOT NULL DEFAULT 1      COMMENT '版本号',
     `is_free`       TINYINT      NOT NULL DEFAULT 0      COMMENT '是否自由流程',
+    `free_wf_type`  TINYINT      NULL                    COMMENT '自由流程类型：1简易 2高级',
     `type`          VARCHAR(64)  NULL                    COMMENT '路径类型（对齐 ecology path_type 字典 code）',
     `form_type`     TINYINT      NULL                    COMMENT '对应表单类型：0自定义表单 1系统表单',
     `description`   VARCHAR(500) NULL                    COMMENT '路径描述',
@@ -71,7 +84,7 @@ CREATE TABLE `wf_process_definition` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
 
 -- 流程节点（对齐 ecology workflow_flownode / workflow_nodebase）
-CREATE TABLE `wf_process_node` (
+CREATE TABLE IF NOT EXISTS `wf_process_node` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `def_id`        BIGINT UNSIGNED NOT NULL                COMMENT '流程定义ID',
     `node_key`      VARCHAR(64)  NOT NULL                COMMENT '引擎节点ID',
@@ -99,7 +112,7 @@ CREATE TABLE `wf_process_node` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程节点';
 
 -- 节点操作者（对齐 ecology workflow_groupdetail）
-CREATE TABLE `wf_node_operator` (
+CREATE TABLE IF NOT EXISTS `wf_node_operator` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `node_id`       BIGINT UNSIGNED NOT NULL                COMMENT '流程节点ID',
     `group_no`      INT          NOT NULL DEFAULT 1      COMMENT '操作组序号',
@@ -125,7 +138,7 @@ CREATE TABLE `wf_node_operator` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='节点操作者';
 
 -- 出口（连线），对齐 ecology workflow_nodelink
-CREATE TABLE `wf_node_link` (
+CREATE TABLE IF NOT EXISTS `wf_node_link` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `def_id`        BIGINT UNSIGNED NOT NULL                COMMENT '流程定义ID',
     `from_node_key` VARCHAR(64)  NOT NULL                COMMENT '源节点',
@@ -155,7 +168,7 @@ CREATE TABLE `wf_node_link` (
 -- 节点级字段权限（对齐 ecology workflow_nodeform，按本项目 scope 体系落地）
 -- scope 与 data-excelp-scope 对齐：main | dt{idx} | dt{idx}_r{row}（行级；回退：行级 → 明细表级 → 主表级）
 -- perm 对齐 ecology fieldattr：0隐藏 1只读 2可编辑 3必填
-CREATE TABLE `wf_node_field_perm` (
+CREATE TABLE IF NOT EXISTS `wf_node_field_perm` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `def_id`        BIGINT UNSIGNED NOT NULL                COMMENT '流程定义ID',
     `node_key`      VARCHAR(64)  NOT NULL                COMMENT '节点Key',
@@ -176,7 +189,7 @@ CREATE TABLE `wf_node_field_perm` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='节点级字段权限矩阵';
 
 -- 节点级明细表权限（对齐 ecology workflow_nodeformgroup 的 10 位 detailgroupattr）
-CREATE TABLE `wf_node_detail_perm` (
+CREATE TABLE IF NOT EXISTS `wf_node_detail_perm` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `def_id`        BIGINT UNSIGNED NOT NULL                COMMENT '流程定义ID',
     `node_key`      VARCHAR(64)  NOT NULL                COMMENT '节点Key',
@@ -204,7 +217,7 @@ CREATE TABLE `wf_node_detail_perm` (
 -- =============================================================================
 
 -- 流程实例
-CREATE TABLE `wf_instance` (
+CREATE TABLE IF NOT EXISTS `wf_instance` (
     `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `engine_inst_id`    VARCHAR(64)  NOT NULL DEFAULT ''    COMMENT '引擎实例ID（Flowable PROC_INST_ID_），弱关联，不依赖 ACT_* 表',
     `def_id`            BIGINT UNSIGNED NOT NULL            COMMENT '流程定义ID',
@@ -236,7 +249,7 @@ CREATE TABLE `wf_instance` (
 -- 任务（待办/已办）
 -- status 对齐 ecology workflow_currentoperator.isremark：
 -- 0待办 2已办 4办结 6自动提交 7协办 8抄送 11传阅
-CREATE TABLE `wf_task` (
+CREATE TABLE IF NOT EXISTS `wf_task` (
     `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `inst_id`           BIGINT UNSIGNED NOT NULL            COMMENT '流程实例ID',
     `engine_task_id`    VARCHAR(64)  NOT NULL DEFAULT ''    COMMENT '引擎任务ID（Flowable），弱关联',
@@ -265,7 +278,7 @@ CREATE TABLE `wf_task` (
 -- log_type 对齐 ecology RequestLogType：
 -- 0批准 2提交 3退回 7转发 9批注 h转办 s督办 t抄送 y批示；正常流转仅认定 SUBMIT(2) 与 APPROVE(0)
 -- 注意：分区列 operate_time 必须纳入主键；p_max 为兜底分区，运维需提前补充后续月份分区
-CREATE TABLE `wf_approval_log` (
+CREATE TABLE IF NOT EXISTS `wf_approval_log` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `inst_id`       BIGINT UNSIGNED NOT NULL                COMMENT '流程实例ID',
     `task_id`       BIGINT UNSIGNED NULL                    COMMENT '任务ID',
@@ -300,7 +313,7 @@ PARTITION BY RANGE COLUMNS(`operate_time`) (
 
 -- 表单数据快照（发起/每次提交留痕，与布局解耦）
 -- data_json key 沿用 {sheetId}__{row}__{col} / dt{idx}__r{n}__...
-CREATE TABLE `wf_form_snapshot` (
+CREATE TABLE IF NOT EXISTS `wf_form_snapshot` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `inst_id`       BIGINT UNSIGNED NOT NULL                COMMENT '流程实例ID',
     `node_key`      VARCHAR(64)  NOT NULL DEFAULT ''      COMMENT '节点Key',
@@ -324,7 +337,7 @@ CREATE TABLE `wf_form_snapshot` (
 -- =============================================================================
 
 -- ecology 存量映射（迁移与回滚的核心凭据）
-CREATE TABLE `wf_migration_map` (
+CREATE TABLE IF NOT EXISTS `wf_migration_map` (
     `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `ec_wf_id`      BIGINT       NOT NULL                  COMMENT 'ecology workflow_base.id',
     `ec_request_id` BIGINT       NULL                      COMMENT 'ecology workflow_requestbase.requestid（在途实例）',
