@@ -9,6 +9,8 @@ import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.VersionDiffVO;
+import org.springblade.workflow.vo.VersionDiffVO;
 
 import java.util.List;
 
@@ -65,6 +67,26 @@ public interface IWfDefinitionService {
      * 另存为新版本
      */
     Long saveAsNewVersion(Long defId);
+
+    /**
+     * 版本列表（同一流程的全部版本，按版本号升序）。
+     *
+     * <p>版本组定位：取该定义的版本组锚点（active_version_id，NULL 视为自身），
+     * 返回 {@code active_version_id = 锚点 OR id = 锚点} 的全部版本，
+     * 与 ecology WorkflowVersion.getAllVersionList 的组查询语义一致。</p>
+     */
+    List<WfProcessDefinition> versions(Long defId);
+
+    /**
+     * 版本差异对比（当前版本 vs 目标版本）。
+     *
+     * <p>按 nodeKey / fromNodeKey-toNodeKey 双向对照节点与出口，
+     * 输出新增/删除/变更三类差异。</p>
+     *
+     * @param defId    当前版本 defId
+     * @param targetId 被对比版本 defId
+     */
+    VersionDiffVO diff(Long defId, Long targetId);
 
     /**
      * 启用 / 停用

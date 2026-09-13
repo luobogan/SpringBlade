@@ -18,6 +18,7 @@ import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
+import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -82,9 +83,22 @@ public class WfDefinitionController {
     }
 
     @PostMapping("/{id}/version")
-    @Operation(summary = "另存为新版本")
+    @Operation(summary = "另存为新版本", description = "完整复制定义/BPMN/节点/出口/权限/操作者为 v+1 草稿，返回新版本 defId")
     public R<String> saveAsNewVersion(@PathVariable("id") Long id) {
         return R.data(String.valueOf(definitionService.saveAsNewVersion(id)), "已生成新版本");
+    }
+
+    @GetMapping("/{id}/versions")
+    @Operation(summary = "版本列表", description = "同一流程（同 procKey 版本组）的全部版本，按版本号升序")
+    public R<List<WfProcessDefinition>> versions(@PathVariable("id") Long id) {
+        return R.data(definitionService.versions(id));
+    }
+
+    @GetMapping("/{id}/version/diff")
+    @Operation(summary = "版本差异对比", description = "当前版本 vs 目标版本（targetId），按节点/出口输出增删改差异")
+    public R<VersionDiffVO> versionDiff(@PathVariable("id") Long id,
+                                        @Parameter(description = "被对比版本defId") @RequestParam("targetId") Long targetId) {
+        return R.data(definitionService.diff(id, targetId));
     }
 
     @GetMapping("/{id}")

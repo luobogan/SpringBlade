@@ -36,6 +36,19 @@ public class WfProcessDefinition extends TenantEntity {
     @Schema(description = "版本号")
     private Integer version;
 
+    /**
+     * 版本组锚点（对齐 ecology workflow_base.activeVersionID）。
+     *
+     * <p>同一流程的多个版本（同 procKey，version 递增）各自一行记录，
+     * 组内每行的该字段都指向「当前激活版本」的 defId；首版 = 自身 id，
+     * NULL = 单版本流程（组 = 自身）。版本切换/激活 = 组内改锚点；
+     * 新发起实例始终使用激活版本，在途实例由 Flowable 按部署时的
+     * ACT_RE_PROCDEF.ID_ 原生隔离，不受新版本影响。</p>
+     */
+    @Schema(description = "版本组锚点：指向当前激活版本的 defId；首版=自身id，NULL=单版本流程（组=自身）")
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long activeVersionId;
+
     @Schema(description = "是否自由流程")
     private Integer isFree;
 

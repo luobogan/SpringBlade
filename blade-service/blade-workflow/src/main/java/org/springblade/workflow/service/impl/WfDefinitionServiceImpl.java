@@ -35,6 +35,8 @@ import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.FormFieldVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.VersionDiffVO;
+import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +49,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -180,7 +183,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         def.setStatus(1);
         defMapper.updateById(def);
-        log.info("[blade-workflow] 流程定义已发布并部署到引擎. defId={}, procKey={}", defId, def.getProcKey());
+        // 发布即激活（版本控制）：组内锚点统一切到本版本；同组其它已发布版本转停用。
+        // 在途实例由 Flowable 绑定创建时的 ACT_RE_PROCDEF.ID_ 原生隔离，不受新版本影响。
+        promoteActiveVersion(def);
+        log.info("[blade-workflow] 流程定义已发布并部署到引擎（并激活为当前版本）. defId={}, procKey={}, version={}",
+            defId, def.getProcKey(), def.getVersion());
         return true;
     }
 
@@ -395,20 +402,30 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         neo.setFormId(old.getFormId());
         neo.setName(old.getName());
         neo.setVersion(newVersion);
+        // 版本组锚点：新版本继承所在组的锚点（NULL = 尚未成组，锚点即旧版本自身）
+        neo.setActiveVersionId(anchorOf(old));
         neo.setIsFree(old.getIsFree());
+        neo.setFreeWfType(old.getFreeWfType());
         neo.setType(old.getType());
         neo.setFormType(old.getFormType());
         neo.setDescription(old.getDescription());
         neo.setSortOrder(old.getSortOrder());
+        // 完整复制 BPMN（画布结构随版本留存；修复此前新版本画布为空的缺口）
+        neo.setBpmnXml(old.getBpmnXml());
         neo.setStatus(0);
         defMapper.insert(neo);
 
-        // 复制节点（节点ID重新生成，与 ecology 版本模型一致）
+        // 复制节点（节点ID重新生成，与 ecology 版本模型一致），并建立 旧节点id-新节点id 映射
         List<WfProcessNode> nodes = nodes(defId);
+        Map<Long, Long> nodeIdMap = new LinkedHashMap<>();
         for (WfProcessNode n : nodes) {
+            Long oldNodeId = n.getId();
             n.setId(null);
             n.setDefId(neo.getId());
             nodeMapper.insert(n);
+            if (oldNodeId != null) {
+                nodeIdMap.put(oldNodeId, n.getId());
+            }
         }
         // 复制出口
         List<WfNodeLink> links = links(defId);
@@ -417,7 +434,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             l.setDefId(neo.getId());
             linkMapper.insert(l);
         }
-        // 复制节点字段权限
+        // 复制节点字段权限（defId + nodeKey 关联，nodeKey 不变，仅换 defId）
         List<WfNodeFieldPerm> perms = fieldPermMapper.selectList(
             Wrappers.<WfNodeFieldPerm>lambdaQuery().eq(WfNodeFieldPerm::getDefId, defId));
         for (WfNodeFieldPerm p : perms) {
@@ -425,6 +442,27 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             p.setDefId(neo.getId());
             fieldPermMapper.insert(p);
         }
+        // 复制节点级明细表权限（defId + nodeKey 关联）
+        List<WfNodeDetailPerm> detailPerms = detailPermMapper.selectList(
+            Wrappers.<WfNodeDetailPerm>lambdaQuery().eq(WfNodeDetailPerm::getDefId, defId));
+        for (WfNodeDetailPerm p : detailPerms) {
+            p.setId(null);
+            p.setDefId(neo.getId());
+            detailPermMapper.insert(p);
+        }
+        // 复制节点操作者（nodeId 关联 wf_process_node.id，须经映射换成新节点ID）
+        for (Map.Entry<Long, Long> e : nodeIdMap.entrySet()) {
+            List<WfNodeOperator> ops = operatorMapper.selectList(
+                Wrappers.<WfNodeOperator>lambdaQuery().eq(WfNodeOperator::getNodeId, e.getKey()));
+            for (WfNodeOperator op : ops) {
+                op.setId(null);
+                op.setNodeId(e.getValue());
+                operatorMapper.insert(op);
+            }
+        }
+        log.info("[blade-workflow] 已另存为新版本. sourceDefId={}, newDefId={}, version={}, 复制节点={} 出口={} 字段权限={} 明细权限={} 操作者组={}",
+            defId, neo.getId(), newVersion, nodes.size(), links.size(),
+            perms.size(), detailPerms.size(), nodeIdMap.size());
         return neo.getId();
     }
 
@@ -437,6 +475,152 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         def.setStatus(enabled ? 1 : 2);
         defMapper.updateById(def);
         return true;
+    }
+
+    @Override
+    public List<WfProcessDefinition> versions(Long defId) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        return versionGroup(anchorOf(def));
+    }
+
+    @Override
+    public VersionDiffVO diff(Long defId, Long targetId) {
+        WfProcessDefinition s = defMapper.selectById(defId);
+        WfProcessDefinition t = defMapper.selectById(targetId);
+        if (s == null || t == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        VersionDiffVO vo = new VersionDiffVO();
+        vo.setSourceDefId(s.getId());
+        vo.setSourceVersion(s.getVersion());
+        vo.setTargetDefId(t.getId());
+        vo.setTargetVersion(t.getVersion());
+
+        // 节点对比：按 nodeKey 匹配
+        Map<String, WfProcessNode> sn = new LinkedHashMap<>();
+        for (WfProcessNode n : nodes(defId)) {
+            sn.putIfAbsent(n.getNodeKey(), n);
+        }
+        Map<String, WfProcessNode> tn = new LinkedHashMap<>();
+        for (WfProcessNode n : nodes(targetId)) {
+            tn.putIfAbsent(n.getNodeKey(), n);
+        }
+        for (Map.Entry<String, WfProcessNode> e : sn.entrySet()) {
+            WfProcessNode ts = tn.get(e.getKey());
+            if (ts == null) {
+                vo.getRemovedNodes().add(toNodeDiff(e.getValue(), null));
+            } else if (nodeChanged(e.getValue(), ts)) {
+                vo.getChangedNodes().add(toNodeDiff(e.getValue(), ts));
+            }
+        }
+        for (Map.Entry<String, WfProcessNode> e : tn.entrySet()) {
+            if (!sn.containsKey(e.getKey())) {
+                vo.getAddedNodes().add(toNodeDiff(null, e.getValue()));
+            }
+        }
+
+        // 出口对比：按 fromNodeKey-toNodeKey 匹配
+        Map<String, WfNodeLink> sl = new LinkedHashMap<>();
+        for (WfNodeLink l : links(defId)) {
+            sl.putIfAbsent(l.getFromNodeKey() + "->" + l.getToNodeKey(), l);
+        }
+        Map<String, WfNodeLink> tl = new LinkedHashMap<>();
+        for (WfNodeLink l : links(targetId)) {
+            tl.putIfAbsent(l.getFromNodeKey() + "->" + l.getToNodeKey(), l);
+        }
+        for (Map.Entry<String, WfNodeLink> e : sl.entrySet()) {
+            WfNodeLink tLink = tl.get(e.getKey());
+            if (tLink == null) {
+                vo.getRemovedLinks().add(toLinkDiff(e.getValue(), null));
+            } else if (linkChanged(e.getValue(), tLink)) {
+                vo.getChangedLinks().add(toLinkDiff(e.getValue(), tLink));
+            }
+        }
+        for (Map.Entry<String, WfNodeLink> e : tl.entrySet()) {
+            if (!sl.containsKey(e.getKey())) {
+                vo.getAddedLinks().add(toLinkDiff(null, e.getValue()));
+            }
+        }
+        return vo;
+    }
+
+    /** 版本组锚点：active_version_id 为空时视为单版本流程（锚点 = 自身） */
+    private Long anchorOf(WfProcessDefinition def) {
+        return def.getActiveVersionId() != null ? def.getActiveVersionId() : def.getId();
+    }
+
+    /** 版本组：active_version_id = 锚点 OR id = 锚点（对齐 ecology WorkflowVersion 组查询语义） */
+    private List<WfProcessDefinition> versionGroup(Long anchor) {
+        return defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
+            .and(w -> w.eq(WfProcessDefinition::getActiveVersionId, anchor)
+                .or().eq(WfProcessDefinition::getId, anchor))
+            .orderByAsc(WfProcessDefinition::getVersion));
+    }
+
+    /** 发布即激活：组内锚点统一切到本版本；同组其它已发布版本转停用 */
+    private void promoteActiveVersion(WfProcessDefinition def) {
+        for (WfProcessDefinition g : versionGroup(anchorOf(def))) {
+            boolean self = g.getId().equals(def.getId());
+            boolean changed = false;
+            if (!Objects.equals(g.getActiveVersionId(), def.getId())) {
+                g.setActiveVersionId(def.getId());
+                changed = true;
+            }
+            if (!self && Integer.valueOf(1).equals(g.getStatus())) {
+                g.setStatus(2);
+                changed = true;
+            }
+            if (changed) {
+                defMapper.updateById(g);
+            }
+        }
+    }
+
+    private VersionDiffVO.NodeDiff toNodeDiff(WfProcessNode s, WfProcessNode t) {
+        VersionDiffVO.NodeDiff d = new VersionDiffVO.NodeDiff();
+        d.setNodeKey((s != null ? s : t).getNodeKey());
+        if (s != null) {
+            d.setSourceName(s.getNodeName());
+            d.setSourceType(s.getNodeType());
+            d.setSourceSignOrder(s.getSignOrder());
+        }
+        if (t != null) {
+            d.setTargetName(t.getNodeName());
+            d.setTargetType(t.getNodeType());
+            d.setTargetSignOrder(t.getSignOrder());
+        }
+        return d;
+    }
+
+    private boolean nodeChanged(WfProcessNode s, WfProcessNode t) {
+        return !Objects.equals(s.getNodeName(), t.getNodeName())
+            || !Objects.equals(s.getNodeType(), t.getNodeType())
+            || !Objects.equals(s.getSignOrder(), t.getSignOrder());
+    }
+
+    private VersionDiffVO.LinkDiff toLinkDiff(WfNodeLink s, WfNodeLink t) {
+        VersionDiffVO.LinkDiff d = new VersionDiffVO.LinkDiff();
+        d.setFromNodeKey((s != null ? s : t).getFromNodeKey());
+        d.setToNodeKey((s != null ? s : t).getToNodeKey());
+        if (s != null) {
+            d.setSourceConditionCn(s.getConditionCn());
+            d.setSourceIsReject(s.getIsReject());
+        }
+        if (t != null) {
+            d.setTargetConditionCn(t.getConditionCn());
+            d.setTargetIsReject(t.getIsReject());
+        }
+        return d;
+    }
+
+    private boolean linkChanged(WfNodeLink s, WfNodeLink t) {
+        return !Objects.equals(s.getConditionCn(), t.getConditionCn())
+            || !Objects.equals(s.getConditionExpr(), t.getConditionExpr())
+            || !Objects.equals(s.getIsReject(), t.getIsReject())
+            || !Objects.equals(s.getIsMustPass(), t.getIsMustPass());
     }
 
     @Override
