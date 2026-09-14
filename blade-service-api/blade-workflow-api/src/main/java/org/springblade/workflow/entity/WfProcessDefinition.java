@@ -25,6 +25,7 @@ public class WfProcessDefinition extends TenantEntity {
     private String procKey;
 
     @Schema(description = "关联 workflow_bill.id（表单）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long formId;
 
     @Schema(description = "流程名称")

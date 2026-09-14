@@ -1,5 +1,7 @@
 package org.springblade.workflow.vo;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -24,9 +26,11 @@ public class FormRenderVO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     @Schema(description = "流程实例ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long instanceId;
 
     @Schema(description = "当前任务ID（若为待办渲染）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long taskId;
 
     @Schema(description = "当前节点Key")
@@ -36,15 +40,18 @@ public class FormRenderVO implements Serializable {
     private String nodeName;
 
     @Schema(description = "表单ID（workflow_bill.id）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long formId;
 
     @Schema(description = "业务数据ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long dataId;
 
     @Schema(description = "流程实例状态 0运行中 1通过 2不通过 3撤销 4暂停")
     private Integer instanceStatus;
 
     @Schema(description = "布局ID（form_layout.id）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long layoutId;
 
     @Schema(description = "布局 JSON（Univer 结构：sheetOrder/sheets/detailTables）")

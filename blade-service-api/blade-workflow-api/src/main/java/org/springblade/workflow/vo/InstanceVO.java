@@ -1,6 +1,8 @@
 package org.springblade.workflow.vo;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import org.springblade.core.tool.utils.DateUtil;
@@ -18,18 +20,22 @@ public class InstanceVO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     @Schema(description = "实例ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
 
     @Schema(description = "流程定义ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long defId;
 
     @Schema(description = "流程定义名称")
     private String defName;
 
     @Schema(description = "表单ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long formId;
 
     @Schema(description = "业务数据ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long dataId;
 
     @Schema(description = "流程标题")
@@ -48,6 +54,7 @@ public class InstanceVO implements Serializable {
     private String currentNodeName;
 
     @Schema(description = "发起人")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long starter;
 
     @Schema(description = "发起人姓名")

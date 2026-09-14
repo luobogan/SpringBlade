@@ -1,6 +1,8 @@
 package org.springblade.workflow.vo;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import org.springblade.core.tool.utils.DateUtil;
@@ -21,9 +23,11 @@ public class WfTaskVO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     @Schema(description = "任务ID（wf_task.id）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
 
     @Schema(description = "流程实例ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long instId;
 
     @Schema(description = "流程标题")
@@ -33,9 +37,11 @@ public class WfTaskVO implements Serializable {
     private String defName;
 
     @Schema(description = "表单ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long formId;
 
     @Schema(description = "业务数据ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long dataId;
 
     @Schema(description = "节点Key")
@@ -45,12 +51,14 @@ public class WfTaskVO implements Serializable {
     private String nodeName;
 
     @Schema(description = "办理人")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long assignee;
 
     @Schema(description = "任务状态 0待办 2已办 4办结 6自动提交 7协办 8抄送 11传阅")
     private Integer status;
 
     @Schema(description = "发起人")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long starter;
 
     @JsonFormat(pattern = DateUtil.PATTERN_DATETIME)

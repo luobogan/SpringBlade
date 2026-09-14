@@ -2,6 +2,8 @@ package org.springblade.workflow.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -47,12 +49,15 @@ public class WfInstance extends TenantEntity {
     private String engineInstId;
 
     @Schema(description = "流程定义ID")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long defId;
 
     @Schema(description = "表单ID（workflow_bill.id）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long formId;
 
     @Schema(description = "业务数据ID（formtable_main_{id}.id）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long dataId;
 
     @Schema(description = "流程标题")
@@ -65,6 +70,7 @@ public class WfInstance extends TenantEntity {
     private String currentNodeKey;
 
     @Schema(description = "发起人")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long starter;
 
     @DateTimeFormat(pattern = DateUtil.PATTERN_DATETIME)
@@ -81,6 +87,17 @@ public class WfInstance extends TenantEntity {
     private Integer urgency;
 
     @Schema(description = "父流程实例（子流程）")
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long parentId;
+
+    /**
+     * 主键以字符串形式序列化（对齐 {@code WfProcessDefinition}）：
+     * 避免 19 位雪花 ID 在前端 JS 解析时丢失精度。
+     */
+    @Override
+    @JsonSerialize(using = ToStringSerializer.class)
+    public Long getId() {
+        return super.getId();
+    }
 
 }
