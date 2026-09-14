@@ -395,7 +395,12 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (old == null) {
             throw new ServiceException("流程定义不存在");
         }
-        int newVersion = (old.getVersion() == null ? 1 : old.getVersion()) + 1;
+        // 版本号 = 同 procKey 组内最大值 + 1（对齐 ecology 防重；唯一键 uk_proc_key_version 兜底并发）
+        int newVersion = defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
+            .eq(WfProcessDefinition::getProcKey, old.getProcKey()))
+            .stream()
+            .mapToInt(d -> d.getVersion() == null ? 0 : d.getVersion())
+            .max().orElse(0) + 1;
 
         WfProcessDefinition neo = new WfProcessDefinition();
         neo.setProcKey(old.getProcKey());
@@ -547,6 +552,20 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return vo;
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean activateVersion(Long defId) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        // 仅切换版本组锚点：不部署引擎、不改 status（区别于 deploy 的“发布即激活”）
+        setGroupAnchor(def);
+        log.info("[blade-workflow] 已切换当前（激活）版本. defId={}, procKey={}, version={}",
+            defId, def.getProcKey(), def.getVersion());
+        return true;
+    }
+
     /** 版本组锚点：active_version_id 为空时视为单版本流程（锚点 = 自身） */
     private Long anchorOf(WfProcessDefinition def) {
         return def.getActiveVersionId() != null ? def.getActiveVersionId() : def.getId();
@@ -560,20 +579,23 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             .orderByAsc(WfProcessDefinition::getVersion));
     }
 
+    /** 版本组锚点统一切到本版本（不含发布停用等副作用） */
+    private void setGroupAnchor(WfProcessDefinition def) {
+        Long target = def.getId();
+        for (WfProcessDefinition g : versionGroup(anchorOf(def))) {
+            if (!Objects.equals(g.getActiveVersionId(), target)) {
+                g.setActiveVersionId(target);
+                defMapper.updateById(g);
+            }
+        }
+    }
+
     /** 发布即激活：组内锚点统一切到本版本；同组其它已发布版本转停用 */
     private void promoteActiveVersion(WfProcessDefinition def) {
-        for (WfProcessDefinition g : versionGroup(anchorOf(def))) {
-            boolean self = g.getId().equals(def.getId());
-            boolean changed = false;
-            if (!Objects.equals(g.getActiveVersionId(), def.getId())) {
-                g.setActiveVersionId(def.getId());
-                changed = true;
-            }
-            if (!self && Integer.valueOf(1).equals(g.getStatus())) {
+        setGroupAnchor(def);
+        for (WfProcessDefinition g : versionGroup(def.getId())) {
+            if (!g.getId().equals(def.getId()) && Integer.valueOf(1).equals(g.getStatus())) {
                 g.setStatus(2);
-                changed = true;
-            }
-            if (changed) {
                 defMapper.updateById(g);
             }
         }

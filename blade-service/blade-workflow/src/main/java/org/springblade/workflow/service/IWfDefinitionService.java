@@ -89,6 +89,17 @@ public interface IWfDefinitionService {
     VersionDiffVO diff(Long defId, Long targetId);
 
     /**
+     * 切换当前（激活）版本：把该定义所在版本组的版本组锚点统一指向本版本，
+     * 即“选哪个版本就激活哪个版本”。
+     * 与 {@link #deploy} 的区别：本方法<b>不部署 Flowable、不改变 status</b>，
+     * 仅切换版本组内生效的版本指针，用于设计器里的版本切换/回退查看。
+     *
+     * @param defId 目标版本 defId
+     * @return 是否成功
+     */
+    boolean activateVersion(Long defId);
+
+    /**
      * 启用 / 停用
      */
     boolean enable(Long defId, boolean enabled);

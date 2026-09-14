@@ -94,6 +94,12 @@ public class WfDefinitionController {
         return R.data(definitionService.versions(id));
     }
 
+    @PostMapping("/{id}/version/activate")
+    @Operation(summary = "切换当前版本", description = "把该定义所在版本组的当前（激活）版本切为本版本；不部署引擎、不改发布状态")
+    public R<Boolean> activateVersion(@PathVariable("id") Long id) {
+        return R.data(definitionService.activateVersion(id), "已切换为当前版本");
+    }
+
     @GetMapping("/{id}/version/diff")
     @Operation(summary = "版本差异对比", description = "当前版本 vs 目标版本（targetId），按节点/出口输出增删改差异")
     public R<VersionDiffVO> versionDiff(@PathVariable("id") Long id,
