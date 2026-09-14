@@ -819,6 +819,44 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean removeDefinition(Long id) {
+        WfProcessDefinition def = defMapper.selectById(id);
+        if (def == null) {
+            return false;
+        }
+        // ① 节点列表（用于级联清理操作者 / 布局）
+        List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, id));
+        List<Long> nodeIds = nodes.stream().map(WfProcessNode::getId)
+            .filter(Objects::nonNull).collect(Collectors.toList());
+        // ② 操作者（按 node_id 批量）
+        if (!nodeIds.isEmpty()) {
+            operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+                .in(WfNodeOperator::getNodeId, nodeIds));
+        }
+        // ③ 字段权限 / 明细权限 / 出口连线（按 def_id 整定义清理）
+        fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery().eq(WfNodeFieldPerm::getDefId, id));
+        detailPermMapper.delete(Wrappers.<WfNodeDetailPerm>lambdaQuery().eq(WfNodeDetailPerm::getDefId, id));
+        linkMapper.delete(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, id));
+        // ④ 节点本身
+        nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, id));
+        // ⑤ 表单布局（best-effort，跨服务）
+        try {
+            if (def.getFormId() != null && formmodeClient != null) {
+                for (WfProcessNode n : nodes) {
+                    formmodeClient.deleteFormLayoutByNode(def.getFormId(), n.getNodeKey());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 清理流程布局失败（定义已移除）. defId={}", id, e);
+        }
+        // ⑥ 删除定义本身（逻辑删除或物理删除取决于实体 @TableLogic 配置；均会从列表消失）
+        defMapper.deleteById(id);
+        return true;
+    }
+
+    @Override
     public FormConditionVO getFormCondition(String method, Long id) {
         boolean edit = "edit".equalsIgnoreCase(method);
         FormConditionVO vo = new FormConditionVO();

@@ -132,6 +132,12 @@ public class WfDefinitionController {
         return R.data(definitionService.enable(id, false), "已停用");
     }
 
+    @DeleteMapping("/{id}")
+    @Operation(summary = "删除流程定义", description = "级联清理节点、出口、操作者、权限与布局，再删除定义本身")
+    public R<Boolean> remove(@PathVariable("id") Long id) {
+        return R.data(definitionService.removeDefinition(id), "已删除");
+    }
+
     @GetMapping("/{id}/nodes")
     @Operation(summary = "节点列表")
     public R<List<WfProcessNode>> nodes(@PathVariable("id") Long id) {
