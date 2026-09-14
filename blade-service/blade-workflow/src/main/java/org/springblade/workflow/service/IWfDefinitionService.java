@@ -105,6 +105,11 @@ public interface IWfDefinitionService {
     boolean enable(Long defId, boolean enabled);
 
     /**
+     * 删除流程定义（级联清理节点 / 出口 / 操作者 / 权限 / 布局）
+     */
+    boolean removeDefinition(Long id);
+
+    /**
      * 实例详情（供控制器复用）
      */
     InstanceVO instanceDetail(Long id);
