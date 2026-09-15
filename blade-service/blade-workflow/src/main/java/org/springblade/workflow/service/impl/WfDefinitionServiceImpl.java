@@ -9,6 +9,10 @@ import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
+import org.flowable.bpmn.model.BoundaryEvent;
+import org.flowable.bpmn.model.IntermediateCatchEvent;
+import org.flowable.bpmn.model.IntermediateThrowEvent;
+import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.springblade.core.log.exception.ServiceException;
@@ -979,6 +983,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (fe instanceof EndEvent) {
             return 3;
         }
+        // 中间事件（中间件）/ 边界事件：画布上追加后也要落成「等待」节点，否则节点信息与出口会丢失
+        if (fe instanceof IntermediateCatchEvent || fe instanceof IntermediateThrowEvent
+            || fe instanceof BoundaryEvent) {
+            return 5;
+        }
+        // 服务任务 → 自动处理
+        if (fe instanceof ServiceTask) {
+            return 6;
+        }
         return null;
     }
 
@@ -986,6 +999,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private String defaultNodeName(FlowElement fe, Integer nodeType) {
         if (fe.getName() != null && !fe.getName().isBlank()) {
             return fe.getName();
+        }
+        if (fe instanceof IntermediateCatchEvent || fe instanceof IntermediateThrowEvent) {
+            return "中间事件";
+        }
+        if (fe instanceof BoundaryEvent) {
+            return "边界事件";
+        }
+        if (fe instanceof ServiceTask) {
+            return "自动处理";
         }
         if (nodeType != null && nodeType == 0) {
             return "开始";
