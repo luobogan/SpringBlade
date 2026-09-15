@@ -18,6 +18,7 @@ import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
+import org.springblade.workflow.vo.SimulateResultVO;
 import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -148,6 +149,22 @@ public class WfDefinitionController {
     @Operation(summary = "出口列表")
     public R<List<WfNodeLink>> links(@PathVariable("id") Long id) {
         return R.data(definitionService.links(id));
+    }
+
+    @PostMapping("/{id}/simulate")
+    @Operation(summary = "流程模拟运行", description = "带模拟表单数据走查节点/网关条件，逐节点校验并回写测试状态（设计期校验）")
+    public R<SimulateResultVO> simulate(@PathVariable("id") Long id,
+                                       @RequestBody(required = false) Map<String, Object> formData) {
+        return R.data(definitionService.simulate(id, formData), "模拟完成");
+    }
+
+    @PostMapping("/{id}/node/{nodeKey}/test-status")
+    @Operation(summary = "保存节点测试状态", description = "0未测试 1通过 2未通过（模拟运行结果，或手动标记）")
+    public R<Boolean> saveNodeTestStatus(@PathVariable("id") Long id,
+                                        @PathVariable("nodeKey") String nodeKey,
+                                        @RequestParam("status") int status) {
+        definitionService.saveNodeTestStatus(id, nodeKey, status);
+        return R.data(true, "已保存");
     }
 
     @PutMapping("/{id}/node/{nodeKey}")

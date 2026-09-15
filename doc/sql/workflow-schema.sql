@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS `wf_process_node` (
     `allow_forward` TINYINT      NOT NULL DEFAULT 0      COMMENT '允许转发/转办',
     `auto_approve`  TINYINT      NOT NULL DEFAULT 0      COMMENT '自动批准',
     `sort_order`    INT          NOT NULL DEFAULT 0      COMMENT '排序',
+    `test_status`   TINYINT      NOT NULL DEFAULT 0      COMMENT '节点测试状态 0未测试 1测试通过 2测试未通过（模拟运行校验结果）',
     `ext_json`      JSON         NULL                    COMMENT '扩展属性（超时、提醒、签章等）',
     `tenant_id`     VARCHAR(32)  NOT NULL DEFAULT '000000' COMMENT '租户ID',
     `create_user`   BIGINT       NULL COMMENT '创建人',
@@ -149,6 +150,7 @@ CREATE TABLE IF NOT EXISTS `wf_node_link` (
     `condition_expr` TEXT         NULL                    COMMENT '条件表达式',
     `condition_cn`  VARCHAR(1000) NOT NULL DEFAULT ''    COMMENT '条件中文描述',
     `sort_order`    INT          NOT NULL DEFAULT 0      COMMENT '排序',
+    `via_gateway`   TINYINT      NOT NULL DEFAULT 0      COMMENT '是否经由网关折叠而来的逻辑连线 1=是',
     `tenant_id`     VARCHAR(32)  NOT NULL DEFAULT '000000' COMMENT '租户ID',
     `create_user`   BIGINT       NULL COMMENT '创建人',
     `create_dept`   BIGINT       NULL COMMENT '创建部门',
@@ -412,3 +414,25 @@ CREATE TABLE IF NOT EXISTS `wf_custom_action` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_action_key` (`action_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='自定义接口动作（注册自定义接口）';
+
+-- =============================================================================
+-- 6. 增量变更（幂等）：为已存在的表补齐新列，可重复执行。
+--    2026-09-15：节点测试状态 test_status、网关折叠连线标记 via_gateway。
+-- =============================================================================
+SET @add_col = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'wf_process_node' AND column_name = 'test_status'
+);
+SET @sql1 = IF(@add_col = 0,
+  "ALTER TABLE wf_process_node ADD COLUMN test_status TINYINT NOT NULL DEFAULT 0 COMMENT '节点测试状态 0未测试 1测试通过 2测试未通过'",
+  'SELECT 1');
+PREPARE stmt1 FROM @sql1; EXECUTE stmt1; DEALLOCATE PREPARE stmt1;
+
+SET @add_col2 = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'wf_node_link' AND column_name = 'via_gateway'
+);
+SET @sql2 = IF(@add_col2 = 0,
+  "ALTER TABLE wf_node_link ADD COLUMN via_gateway TINYINT NOT NULL DEFAULT 0 COMMENT '是否经由网关折叠而来的逻辑连线 1=是'",
+  'SELECT 1');
+PREPARE stmt2 FROM @sql2; EXECUTE stmt2; DEALLOCATE PREPARE stmt2;

@@ -44,4 +44,7 @@ public class WfNodeLink extends TenantEntity {
     @Schema(description = "排序")
     private Integer sortOrder;
 
+    @Schema(description = "是否经由网关折叠而来的逻辑连线 1=是（A→网关→B 折叠为 A→B，条件取自网关出口分支）")
+    private Integer viaGateway;
+
 }

@@ -58,6 +58,9 @@ public class WfProcessNode extends TenantEntity {
     @Schema(description = "排序")
     private Integer sortOrder;
 
+    @Schema(description = "节点测试状态 0未测试 1测试通过 2测试未通过（模拟运行校验结果，设计期使用）")
+    private Integer testStatus;
+
     @Schema(description = "扩展属性（超时、提醒、签章等）")
     private String extJson;
 

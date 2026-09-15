@@ -9,7 +9,7 @@ import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.InstanceVO;
-import org.springblade.workflow.vo.VersionDiffVO;
+import org.springblade.workflow.vo.SimulateResultVO;
 import org.springblade.workflow.vo.VersionDiffVO;
 
 import java.util.List;
@@ -183,5 +183,23 @@ public interface IWfDefinitionService {
      * @param data 待保存的数据（如 WfWorkflowType）
      */
     BrowserOptionVO saveBrowserOption(String type, WfWorkflowType data);
+
+    /**
+     * 流程模拟运行：带模拟表单数据，从开始节点走查节点 / 网关条件，逐节点校验并回写测试状态。
+     *
+     * @param defId    流程定义ID
+     * @param formData 模拟表单数据（字段名 → 值），用于求条件表达式
+     * @return 走查路径 + 逐节点校验结果 + 是否全部通过
+     */
+    SimulateResultVO simulate(Long defId, java.util.Map<String, Object> formData);
+
+    /**
+     * 持久化单个节点的模拟测试状态（0未测试 1通过 2未通过）。
+     *
+     * @param defId    流程定义ID
+     * @param nodeKey  节点Key
+     * @param status   测试状态
+     */
+    void saveNodeTestStatus(Long defId, String nodeKey, int status);
 
 }

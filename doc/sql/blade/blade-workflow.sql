@@ -2017,7 +2017,7 @@ CREATE TABLE `wf_node_link` (
   PRIMARY KEY (`id`),
   KEY `idx_def_from` (`def_id`,`from_node_key`),
   KEY `idx_def_reject` (`def_id`,`is_reject`)
-) ENGINE=InnoDB AUTO_INCREMENT=2099467532848123910 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程出口（连线）';
+) ENGINE=InnoDB AUTO_INCREMENT=2099688981668089860 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程出口（连线）';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2026,6 +2026,7 @@ CREATE TABLE `wf_node_link` (
 
 LOCK TABLES `wf_node_link` WRITE;
 /*!40000 ALTER TABLE `wf_node_link` DISABLE KEYS */;
+INSERT INTO `wf_node_link` VALUES (2099477068447293442,2099475845245640706,'StartEvent_mu18738g0','UserTask_mu18738m0',0,0,NULL,'',1,'000000',NULL,NULL,'2026-09-14 20:35:14',NULL,'2026-09-14 20:35:25',1,1),(2099477068447293443,2099475845245640706,'UserTask_mu18738m0','EndEvent_mu18738u0',0,0,NULL,'',2,'000000',NULL,NULL,'2026-09-14 20:35:14',NULL,'2026-09-14 20:35:25',1,1),(2099477117248020482,2099475845245640706,'StartEvent_mu18738g0','EndEvent_mu18738u0',0,0,NULL,'',1,'000000',NULL,NULL,'2026-09-14 20:35:25',NULL,'2026-09-15 08:28:28',1,1),(2099656559220019203,2099475845245640706,'StartEvent_mu18738g0','UserTask_mu1xob7r0',0,0,NULL,'',1,'000000',NULL,NULL,'2026-09-15 08:28:28',NULL,'2026-09-15 08:28:28',1,0),(2099656559220019204,2099475845245640706,'UserTask_mu1xob7r0','EndEvent_mu18738u0',0,0,NULL,'',2,'000000',NULL,NULL,'2026-09-15 08:28:28',NULL,'2026-09-15 10:35:46',1,1),(2099687772060176386,2099475845245640706,'UserTask_mu1xob7r0','Activity_1dw3jwq',0,0,NULL,'',3,'000000',NULL,NULL,'2026-09-15 10:32:29',NULL,'2026-09-15 10:33:25',1,1),(2099687772060176387,2099475845245640706,'Activity_1dw3jwq','EndEvent_mu18738u0',0,0,NULL,'',4,'000000',NULL,NULL,'2026-09-15 10:32:29',NULL,'2026-09-15 10:33:25',1,1),(2099688954895847427,2099475845245640706,'Activity_1m8w40y','EndEvent_mu18738u0',0,0,NULL,'',3,'000000',NULL,NULL,'2026-09-15 10:37:11',NULL,'2026-09-15 10:37:11',1,0),(2099688981668089859,2099475845245640706,'Activity_06no0fv','EndEvent_mu18738u0',0,0,NULL,'',2,'000000',NULL,NULL,'2026-09-15 10:37:18',NULL,'2026-09-15 10:37:18',1,0);
 /*!40000 ALTER TABLE `wf_node_link` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2104,7 +2105,7 @@ CREATE TABLE `wf_process_definition` (
   UNIQUE KEY `uk_proc_key_version` (`proc_key`,`version`),
   KEY `idx_form_status` (`form_id`,`status`),
   KEY `idx_active_version` (`active_version_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2099467532722294787 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
+) ENGINE=InnoDB AUTO_INCREMENT=2099475894742622210 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2113,6 +2114,7 @@ CREATE TABLE `wf_process_definition` (
 
 LOCK TABLES `wf_process_definition` WRITE;
 /*!40000 ALTER TABLE `wf_process_definition` DISABLE KEYS */;
+INSERT INTO `wf_process_definition` VALUES (2099475845245640706,'flow_mu180u86md3e',2064530495200337922,'测试914','<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<bpmn:definitions xmlns:bpmn=\"http://www.omg.org/spec/BPMN/20100524/MODEL\" xmlns:bpmndi=\"http://www.omg.org/spec/BPMN/20100524/DI\" xmlns:dc=\"http://www.omg.org/spec/DD/20100524/DC\" xmlns:di=\"http://www.omg.org/spec/DD/20100524/DI\" id=\"Definitions_1\" targetNamespace=\"http://bpmn.io/schema/bpmn\">\n  <bpmn:process id=\"flow_mu180u86md3e\" name=\"测试914\" isExecutable=\"true\">\n    <bpmn:startEvent id=\"StartEvent_mu18738g0\" name=\"开始\">\n      <bpmn:outgoing>Flow_0yenwcd</bpmn:outgoing>\n    </bpmn:startEvent>\n    <bpmn:endEvent id=\"EndEvent_mu18738u0\" name=\"结束\">\n      <bpmn:incoming>Flow_1gxy9sv</bpmn:incoming>\n      <bpmn:incoming>Flow_1prutey</bpmn:incoming>\n    </bpmn:endEvent>\n    <bpmn:userTask id=\"UserTask_mu1xob7r0\" name=\"test\">\n      <bpmn:incoming>Flow_0yenwcd</bpmn:incoming>\n      <bpmn:outgoing>Flow_0mf8q4s</bpmn:outgoing>\n    </bpmn:userTask>\n    <bpmn:sequenceFlow id=\"Flow_0yenwcd\" sourceRef=\"StartEvent_mu18738g0\" targetRef=\"UserTask_mu1xob7r0\" />\n    <bpmn:sequenceFlow id=\"Flow_1gxy9sv\" sourceRef=\"Activity_06no0fv\" targetRef=\"EndEvent_mu18738u0\" />\n    <bpmn:sequenceFlow id=\"Flow_1prutey\" sourceRef=\"Activity_1m8w40y\" targetRef=\"EndEvent_mu18738u0\" />\n    <bpmn:userTask id=\"Activity_1m8w40y\" name=\"test2\">\n      <bpmn:incoming>Flow_0w92rme</bpmn:incoming>\n      <bpmn:outgoing>Flow_1prutey</bpmn:outgoing>\n    </bpmn:userTask>\n    <bpmn:userTask id=\"Activity_06no0fv\" name=\"test1\">\n      <bpmn:incoming>Flow_018beiw</bpmn:incoming>\n      <bpmn:outgoing>Flow_1gxy9sv</bpmn:outgoing>\n    </bpmn:userTask>\n    <bpmn:sequenceFlow id=\"Flow_0mf8q4s\" sourceRef=\"UserTask_mu1xob7r0\" targetRef=\"Gateway_01rq8qo\" />\n    <bpmn:parallelGateway id=\"Gateway_01rq8qo\">\n      <bpmn:incoming>Flow_0mf8q4s</bpmn:incoming>\n      <bpmn:outgoing>Flow_018beiw</bpmn:outgoing>\n      <bpmn:outgoing>Flow_0w92rme</bpmn:outgoing>\n    </bpmn:parallelGateway>\n    <bpmn:sequenceFlow id=\"Flow_018beiw\" sourceRef=\"Gateway_01rq8qo\" targetRef=\"Activity_06no0fv\" />\n    <bpmn:sequenceFlow id=\"Flow_0w92rme\" sourceRef=\"Gateway_01rq8qo\" targetRef=\"Activity_1m8w40y\" />\n  </bpmn:process>\n  <bpmndi:BPMNDiagram id=\"BPMNDiagram_1\">\n    <bpmndi:BPMNPlane id=\"BPMNPlane_1\" bpmnElement=\"flow_mu180u86md3e\">\n      <bpmndi:BPMNShape id=\"StartEvent_mu18738g0_di\" bpmnElement=\"StartEvent_mu18738g0\">\n        <dc:Bounds x=\"142\" y=\"142\" width=\"36\" height=\"36\" />\n        <bpmndi:BPMNLabel>\n          <dc:Bounds x=\"149\" y=\"185\" width=\"23\" height=\"14\" />\n        </bpmndi:BPMNLabel>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"UserTask_mu1xob7r0_di\" bpmnElement=\"UserTask_mu1xob7r0\">\n        <dc:Bounds x=\"248\" y=\"102\" width=\"100\" height=\"80\" />\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"EndEvent_mu18738u0_di\" bpmnElement=\"EndEvent_mu18738u0\">\n        <dc:Bounds x=\"852\" y=\"272\" width=\"36\" height=\"36\" />\n        <bpmndi:BPMNLabel>\n          <dc:Bounds x=\"859\" y=\"248\" width=\"22\" height=\"14\" />\n        </bpmndi:BPMNLabel>\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"Activity_1bevfca_di\" bpmnElement=\"Activity_1m8w40y\">\n        <dc:Bounds x=\"460\" y=\"360\" width=\"100\" height=\"80\" />\n        <bpmndi:BPMNLabel />\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"Activity_1yvz5ju_di\" bpmnElement=\"Activity_06no0fv\">\n        <dc:Bounds x=\"590\" y=\"60\" width=\"100\" height=\"80\" />\n        <bpmndi:BPMNLabel />\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNShape id=\"Gateway_1vr9n8d_di\" bpmnElement=\"Gateway_01rq8qo\">\n        <dc:Bounds x=\"285\" y=\"375\" width=\"50\" height=\"50\" />\n      </bpmndi:BPMNShape>\n      <bpmndi:BPMNEdge id=\"Flow_0yenwcd_di\" bpmnElement=\"Flow_0yenwcd\">\n        <di:waypoint x=\"178\" y=\"160\" />\n        <di:waypoint x=\"210\" y=\"160\" />\n        <di:waypoint x=\"210\" y=\"142\" />\n        <di:waypoint x=\"248\" y=\"142\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_1gxy9sv_di\" bpmnElement=\"Flow_1gxy9sv\">\n        <di:waypoint x=\"690\" y=\"100\" />\n        <di:waypoint x=\"771\" y=\"100\" />\n        <di:waypoint x=\"771\" y=\"290\" />\n        <di:waypoint x=\"852\" y=\"290\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_1prutey_di\" bpmnElement=\"Flow_1prutey\">\n        <di:waypoint x=\"560\" y=\"400\" />\n        <di:waypoint x=\"706\" y=\"400\" />\n        <di:waypoint x=\"706\" y=\"290\" />\n        <di:waypoint x=\"852\" y=\"290\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_0mf8q4s_di\" bpmnElement=\"Flow_0mf8q4s\">\n        <di:waypoint x=\"298\" y=\"182\" />\n        <di:waypoint x=\"298\" y=\"229\" />\n        <di:waypoint x=\"310\" y=\"229\" />\n        <di:waypoint x=\"310\" y=\"375\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_018beiw_di\" bpmnElement=\"Flow_018beiw\">\n        <di:waypoint x=\"325\" y=\"390\" />\n        <di:waypoint x=\"430\" y=\"320\" />\n        <di:waypoint x=\"640\" y=\"209\" />\n        <di:waypoint x=\"640\" y=\"140\" />\n      </bpmndi:BPMNEdge>\n      <bpmndi:BPMNEdge id=\"Flow_0w92rme_di\" bpmnElement=\"Flow_0w92rme\">\n        <di:waypoint x=\"335\" y=\"400\" />\n        <di:waypoint x=\"398\" y=\"400\" />\n        <di:waypoint x=\"398\" y=\"420\" />\n        <di:waypoint x=\"460\" y=\"420\" />\n      </bpmndi:BPMNEdge>\n    </bpmndi:BPMNPlane>\n  </bpmndi:BPMNDiagram>\n</bpmn:definitions>\n',1,2099475845245640706,0,NULL,'2',0,NULL,0,'000000',NULL,NULL,'2026-09-14 20:30:22',NULL,'2026-09-14 20:30:22',0,0),(2099475894742622209,'flow_mu180u86md3e',2064530495200337922,'测试914',NULL,2,2099475845245640706,0,NULL,'2',0,NULL,0,'000000',NULL,NULL,'2026-09-14 20:30:34',NULL,'2026-09-14 20:30:34',0,0);
 /*!40000 ALTER TABLE `wf_process_definition` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2148,7 +2150,7 @@ CREATE TABLE `wf_process_node` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_def_node` (`def_id`,`node_key`),
   KEY `idx_def_sort` (`def_id`,`sort_order`)
-) ENGINE=InnoDB AUTO_INCREMENT=2099467532848123907 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程节点';
+) ENGINE=InnoDB AUTO_INCREMENT=2099688981668089859 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程节点';
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -2157,6 +2159,7 @@ CREATE TABLE `wf_process_node` (
 
 LOCK TABLES `wf_process_node` WRITE;
 /*!40000 ALTER TABLE `wf_process_node` DISABLE KEYS */;
+INSERT INTO `wf_process_node` VALUES (2099477068380184577,2099475845245640706,'StartEvent_mu18738g0','开始',0,0,0,0,1,0,0,1,NULL,'000000',NULL,NULL,'2026-09-14 20:35:14',NULL,'2026-09-14 20:35:14',1,0),(2099477068380184578,2099475845245640706,'UserTask_mu18738m0','1213',1,0,0,0,1,0,0,2,'{\"settings\": {}}','000000',NULL,NULL,'2026-09-14 20:35:14',NULL,'2026-09-14 20:35:25',1,1),(2099477068380184579,2099475845245640706,'EndEvent_mu18738u0','结束',3,0,0,0,1,0,0,5,NULL,'000000',NULL,NULL,'2026-09-14 20:35:14',NULL,'2026-09-14 20:35:14',1,0),(2099656559220019202,2099475845245640706,'UserTask_mu1xob7r0','test',1,0,0,0,1,0,0,2,'{\"settings\": {}}','000000',NULL,NULL,'2026-09-15 08:28:28',NULL,'2026-09-15 08:28:28',1,0),(2099687772060176385,2099475845245640706,'Activity_1dw3jwq','Activity_1dw3jwq',1,0,0,0,1,0,0,5,NULL,'000000',NULL,NULL,'2026-09-15 10:32:29',NULL,'2026-09-15 10:33:24',1,1),(2099688954895847426,2099475845245640706,'Activity_1m8w40y','test2',1,0,0,0,1,0,0,3,NULL,'000000',NULL,NULL,'2026-09-15 10:37:11',NULL,'2026-09-15 10:37:11',1,0),(2099688981668089858,2099475845245640706,'Activity_06no0fv','test1',1,0,0,0,1,0,0,4,NULL,'000000',NULL,NULL,'2026-09-15 10:37:18',NULL,'2026-09-15 10:37:18',1,0);
 /*!40000 ALTER TABLE `wf_process_node` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -2246,4 +2249,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-09-14 20:27:06
+-- Dump completed on 2026-09-15 13:23:11

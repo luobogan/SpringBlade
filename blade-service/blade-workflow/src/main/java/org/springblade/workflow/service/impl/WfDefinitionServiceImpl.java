@@ -35,6 +35,7 @@ import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.FormFieldVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.SimulateResultVO;
 import org.springblade.workflow.vo.VersionDiffVO;
 import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.stereotype.Service;
@@ -337,39 +338,84 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             }
         }
 
-        // 解析 SequenceFlow → 按 from→to upsert 出口（保留已配置的条件/必经/退回等）
+        // 解析 SequenceFlow → 按 from→to upsert 出口（保留已配置的条件/必经/退回等）。
+        // 关键：把「经过网关」的连线折叠成「节点 → 节点」出口（A→网关→B 记为 A→B，
+        // via_gateway=1），否则网关分支在「出口信息」里完全不可见、条件也无法配置，
+        // 且部署时条件注入（injectLinkConditions 按 A→B 匹配）也会漏掉网关分支。
         Map<String, WfNodeLink> existLinks = new LinkedHashMap<>();
         for (WfNodeLink l : links(defId)) {
             existLinks.putIfAbsent(linkKey(l.getFromNodeKey(), l.getToNodeKey()), l);
         }
-        Set<String> seenLinkKeys = new HashSet<>();
-        int linkSort = 1;
+        // 全量出边（含网关端点），用于折叠走查；cond 取 BPMN sequenceFlow 条件（设计期多为空，以库里为准）
+        Map<String, List<SeqEdge>> outEdges = new LinkedHashMap<>();
         for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
             if (!(fe instanceof SequenceFlow sf)) {
                 continue;
             }
             String from = sf.getSourceRef();
             String to = sf.getTargetRef();
-            // 仅保留「节点 → 节点」连线，保证出口信息能映射到具体节点
-            if (!seenNodeKeys.contains(from) || !seenNodeKeys.contains(to)) {
+            if (from == null || to == null) {
                 continue;
             }
-            String k = linkKey(from, to);
-            WfNodeLink exist = existLinks.get(k);
-            if (exist != null) {
-                exist.setSortOrder(linkSort++);
-                linkMapper.updateById(exist);
-            } else {
-                WfNodeLink link = new WfNodeLink();
-                link.setDefId(defId);
-                link.setFromNodeKey(from);
-                link.setToNodeKey(to);
-                link.setIsReject(0);
-                link.setIsMustPass(0);
-                link.setSortOrder(linkSort++);
-                linkMapper.insert(link);
+            outEdges.computeIfAbsent(from, k -> new ArrayList<>())
+                .add(new SeqEdge(to, sf.getConditionExpression()));
+        }
+        Set<String> seenLinkKeys = new HashSet<>();
+        int linkSort = 1;
+        // 每个节点出发：沿出边走查，遇到网关继续穿透，遇到节点即记为一条逻辑出口（A→B）。
+        // 不穿透节点（避免跳过中间节点产生 A→C 捷径），故 A→B→C 仍拆成 A→B 与 B→C。
+        for (String start : seenNodeKeys) {
+            // 逻辑出口：目标节点 → 末跳条件（进入该节点的那条边上的条件，即网关分支判别条件）
+            Map<String, String> logicalTargets = new LinkedHashMap<>();
+            java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+            Set<String> visited = new HashSet<>();
+            queue.add(start);
+            visited.add(start);
+            while (!queue.isEmpty()) {
+                String v = queue.poll();
+                for (SeqEdge e : outEdges.getOrDefault(v, Collections.emptyList())) {
+                    boolean isNode = seenNodeKeys.contains(e.to);
+                    if (isNode) {
+                        if (!e.to.equals(start)) {
+                            logicalTargets.putIfAbsent(e.to, e.cond);
+                        }
+                        // 节点即止，不再越过
+                    } else {
+                        // 网关：继续穿透（防环）
+                        if (visited.add(e.to)) {
+                            queue.add(e.to);
+                        }
+                    }
+                }
             }
-            seenLinkKeys.add(k);
+            for (Map.Entry<String, String> en : logicalTargets.entrySet()) {
+                String to = en.getKey();
+                String k = linkKey(start, to);
+                boolean isDirect = outEdges.getOrDefault(start, Collections.emptyList())
+                    .stream().anyMatch(x -> x.to.equals(to) && seenNodeKeys.contains(to));
+                WfNodeLink exist = existLinks.get(k);
+                if (exist != null) {
+                    exist.setSortOrder(linkSort++);
+                    exist.setViaGateway(isDirect ? 0 : 1);
+                    linkMapper.updateById(exist);
+                } else {
+                    WfNodeLink link = new WfNodeLink();
+                    link.setDefId(defId);
+                    link.setFromNodeKey(start);
+                    link.setToNodeKey(to);
+                    link.setIsReject(0);
+                    link.setIsMustPass(0);
+                    link.setViaGateway(isDirect ? 0 : 1);
+                    // 优先用库里已配置的条件；BPMN 末跳条件兜底（设计期多为空）
+                    String cond = en.getValue();
+                    if (cond != null && !cond.isBlank()) {
+                        link.setConditionExpr(cond);
+                    }
+                    link.setSortOrder(linkSort++);
+                    linkMapper.insert(link);
+                }
+                seenLinkKeys.add(k);
+            }
         }
         // 删除画布上已不存在的出口
         for (WfNodeLink l : existLinks.values()) {
@@ -976,12 +1022,25 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             BpmnModel model = converter.convertToBpmnModel(
                 () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
             Process process = model.getMainProcess();
+            // 全量出边邻接（source → 其全部 sequenceFlow），用于把「节点→节点」逻辑出口
+            // 映射到实际 sequenceFlow：直接连线对 source=from&target=to；网关分支则取
+            // from 经网关穿透、末跳进入 to 的那条（即网关分支判别条件应挂的线）。
+            Map<String, List<SequenceFlow>> outFlows = new LinkedHashMap<>();
             for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
-                if (fe instanceof SequenceFlow sf) {
-                    String expr = condMap.get(linkKey(sf.getSourceRef(), sf.getTargetRef()));
-                    if (expr != null) {
-                        sf.setConditionExpression(expr);
-                    }
+                if (fe instanceof SequenceFlow sf && sf.getSourceRef() != null && sf.getTargetRef() != null) {
+                    outFlows.computeIfAbsent(sf.getSourceRef(), k -> new ArrayList<>()).add(sf);
+                }
+            }
+            for (Map.Entry<String, String> en : condMap.entrySet()) {
+                String[] pair = en.getKey().split("→", 2);
+                if (pair.length != 2) {
+                    continue;
+                }
+                String from = pair[0];
+                String to = pair[1];
+                SequenceFlow target = findBranchFlow(outFlows, from, to);
+                if (target != null) {
+                    target.setConditionExpression(en.getValue());
                 }
             }
             byte[] out = converter.convertToXML(model);
@@ -990,6 +1049,38 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             log.warn("[blade-workflow] 出口条件注入失败，使用原 BPMN 部署（条件将不生效）: {}", e.getMessage());
             return bpmnXml;
         }
+    }
+
+    /**
+     * 在 BPMN 出边邻接里，找到「逻辑出口 from→to」对应的实际 sequenceFlow：
+     * 优先直接连线（source=from & target=to）；否则从 from 经网关（非 from/to 的中间顶点）穿透 BFS，
+     * 命中 target=to 的那条即网关分支末跳线。
+     */
+    private SequenceFlow findBranchFlow(Map<String, List<SequenceFlow>> outFlows, String from, String to) {
+        // 直接连线优先
+        for (SequenceFlow sf : outFlows.getOrDefault(from, Collections.emptyList())) {
+            if (to.equals(sf.getTargetRef())) {
+                return sf;
+            }
+        }
+        // 网关穿透：中间顶点既非 from 也非 to
+        java.util.Deque<String> queue = new java.util.ArrayDeque<>();
+        Set<String> visited = new HashSet<>();
+        queue.add(from);
+        visited.add(from);
+        while (!queue.isEmpty()) {
+            String v = queue.poll();
+            for (SequenceFlow sf : outFlows.getOrDefault(v, Collections.emptyList())) {
+                String w = sf.getTargetRef();
+                if (to.equals(w)) {
+                    return sf;
+                }
+                if (!from.equals(w) && !to.equals(w) && visited.add(w)) {
+                    queue.add(w);
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -1102,6 +1193,360 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         o.setValue(value);
         o.setLabel(label);
         return o;
+    }
+
+    // ============================================================
+    // 流程模拟运行（设计期校验）：带模拟表单数据走查节点 / 网关条件
+    // ============================================================
+
+    /**
+     * 流程模拟运行：从开始节点出发，按出口条件（结合模拟表单数据）选择分支，逐节点校验其配置
+     * 是否足以正常流转，回写每条节点的测试状态（test_status）；全部通过方可生成出口属性。
+     *
+     * <p>走查逻辑：每个节点按 nodeType 校验（人工节点需配置操作者）；某个节点有多条出口时，
+     * 取「无条件」或「条件求值为真」的分支（条件都不满足时退回走无条件的默认分支），并行网关
+     * 会同时走多条；路径环与步数均设上限，避免死循环。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SimulateResultVO simulate(Long defId, Map<String, Object> formData) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        List<WfProcessNode> nodeList = nodes(defId);
+        List<WfNodeLink> linkList = links(defId);
+        // 先重置全部节点测试状态，再标记本次走查到的节点
+        for (WfProcessNode n : nodeList) {
+            if (n.getTestStatus() == null || n.getTestStatus() != 0) {
+                n.setTestStatus(0);
+                nodeMapper.updateById(n);
+            }
+        }
+        Map<String, WfProcessNode> nodeMap = new LinkedHashMap<>();
+        for (WfProcessNode n : nodeList) {
+            nodeMap.putIfAbsent(n.getNodeKey(), n);
+        }
+        Map<String, List<WfNodeLink>> outLinks = new LinkedHashMap<>();
+        for (WfNodeLink l : linkList) {
+            outLinks.computeIfAbsent(l.getFromNodeKey(), k -> new ArrayList<>()).add(l);
+        }
+
+        SimulateResultVO result = new SimulateResultVO();
+        List<SimulateResultVO.NodeSimResult> nodeResults = new ArrayList<>();
+        List<SimulateResultVO.PathStep> path = new ArrayList<>();
+        Map<String, Integer> nodeStatus = new LinkedHashMap<>();
+        Map<String, String> nodeMsg = new LinkedHashMap<>();
+        // 未带模拟表单数据 → 全量走查（忽略条件，验证连通性）；带数据 → 按条件选分支
+        boolean full = formData == null || formData.isEmpty();
+
+        // 起点：创建节点（nodeType=0）；否则取无入边的节点；再否则取第一个节点
+        String startKey = nodeList.stream().filter(n -> n.getNodeType() != null && n.getNodeType() == 0)
+            .map(WfProcessNode::getNodeKey).findFirst().orElse(null);
+        if (startKey == null) {
+            Set<String> hasIncoming = new HashSet<>();
+            for (WfNodeLink l : linkList) {
+                hasIncoming.add(l.getToNodeKey());
+            }
+            startKey = nodeList.stream().filter(n -> !hasIncoming.contains(n.getNodeKey()))
+                .map(WfProcessNode::getNodeKey).findFirst().orElse(null);
+        }
+        if (startKey == null && !nodeList.isEmpty()) {
+            startKey = nodeList.get(0).getNodeKey();
+        }
+
+        Set<String> visitedNodes = new HashSet<>();
+        int[] steps = {0};
+        final int MAX_STEPS = 500;
+        WalkCtx ctx = new WalkCtx(nodeMap, outLinks, formData, nodeStatus, nodeMsg, path, full);
+        if (startKey != null) {
+            walkNode(startKey, visitedNodes, steps, MAX_STEPS, ctx);
+        }
+
+        // 汇总逐节点结果（含未走到但存在的节点，统一标记未测试）
+        boolean allPassed = true;
+        int unreached = 0;
+        int blocked = 0;
+        for (WfProcessNode n : nodeList) {
+            Integer st = nodeStatus.get(n.getNodeKey());
+            if (st == null) {
+                st = 0;
+            }
+            if (st != 1) {
+                allPassed = false;
+                if (st == 0) {
+                    unreached++;
+                } else if (st == 2) {
+                    blocked++;
+                }
+            }
+            SimulateResultVO.NodeSimResult nr = new SimulateResultVO.NodeSimResult();
+            nr.setNodeKey(n.getNodeKey());
+            nr.setNodeName(n.getNodeName());
+            nr.setNodeType(n.getNodeType());
+            nr.setStatus(st);
+            if (st == 1) {
+                nr.setMessage("走通");
+            } else if (st == 2) {
+                nr.setMessage(nodeMsg.getOrDefault(n.getNodeKey(), "流程走不通（连线可能画错或节点未配置）"));
+            } else {
+                nr.setMessage("未走到该节点（与起点不连通，可能连线缺失或画错）");
+            }
+            nodeResults.add(nr);
+        }
+        // 回写测试状态到库（已在 walkNode 内对走到节点标记，这里对未走到也统一落库）
+        for (WfProcessNode n : nodeList) {
+            Integer st = nodeStatus.getOrDefault(n.getNodeKey(), 0);
+            if (!Objects.equals(n.getTestStatus(), st)) {
+                n.setTestStatus(st);
+                nodeMapper.updateById(n);
+            }
+        }
+        result.setAllPassed(allPassed && !path.isEmpty());
+        result.setNodes(nodeResults);
+        result.setPath(path);
+        if (allPassed && !path.isEmpty()) {
+            result.setSummary("流程图走通：所有节点均从起点可达且能到达终点。");
+        } else {
+            StringBuilder sb = new StringBuilder("流程图未完全走通：");
+            if (unreached > 0) {
+                sb.append(unreached).append(" 个节点未连通（可能连线缺失/画错）；");
+            }
+            if (blocked > 0) {
+                sb.append(blocked).append(" 个节点走不通（死路或节点未配置）；");
+            }
+            sb.append("请检查并修正连线或节点设置。");
+            result.setSummary(sb.toString());
+        }
+        return result;
+    }
+
+    /** 走查上下文（避免方法参数过长） */
+    private static class WalkCtx {
+        final Map<String, WfProcessNode> nodeMap;
+        final Map<String, List<WfNodeLink>> outLinks;
+        final Map<String, Object> formData;
+        final Map<String, Integer> nodeStatus;
+        final Map<String, String> nodeMsg;
+        final List<SimulateResultVO.PathStep> path;
+        /** 无模拟数据时按「全量走查」：忽略条件、所有分支都走，验证可达性与死路 */
+        final boolean full;
+
+        WalkCtx(Map<String, WfProcessNode> nodeMap, Map<String, List<WfNodeLink>> outLinks,
+                Map<String, Object> formData, Map<String, Integer> nodeStatus,
+                Map<String, String> nodeMsg, List<SimulateResultVO.PathStep> path, boolean full) {
+            this.nodeMap = nodeMap;
+            this.outLinks = outLinks;
+            this.formData = formData;
+            this.nodeStatus = nodeStatus;
+            this.nodeMsg = nodeMsg;
+            this.path = path;
+            this.full = full;
+        }
+    }
+
+    /** 递归走查单个节点：校验 + 选分支 + 记录路径 */
+    private void walkNode(String nodeKey, Set<String> visitedNodes, int[] steps, int maxSteps, WalkCtx ctx) {
+        if (nodeKey == null || steps[0] >= maxSteps) {
+            return;
+        }
+        steps[0]++;
+        WfProcessNode node = ctx.nodeMap.get(nodeKey);
+        if (node == null) {
+            return;
+        }
+        // 节点校验（仅校验一次）
+        if (!ctx.nodeStatus.containsKey(nodeKey)) {
+            int vs = validateNode(node);
+            ctx.nodeStatus.put(nodeKey, vs);
+            if (vs == 2) {
+                ctx.nodeMsg.put(nodeKey, "人工节点未配置操作者，无法提交/审批（请在节点信息补充操作者）");
+            }
+        }
+        // 归档节点：终点
+        if (node.getNodeType() != null && node.getNodeType() == 3) {
+            return;
+        }
+        List<WfNodeLink> outs = ctx.outLinks.getOrDefault(nodeKey, Collections.emptyList());
+        // 全量走查（无模拟数据）：忽略条件，所有分支都走，用于验证流程图是否连通、有无死路。
+        // 否则：按条件选分支（无条件分支 或 条件求值为真的分支）。
+        List<WfNodeLink> taken;
+        if (ctx.full) {
+            taken = outs;
+        } else {
+            List<WfNodeLink> matched = new ArrayList<>();
+            List<WfNodeLink> noCond = new ArrayList<>();
+            for (WfNodeLink l : outs) {
+                boolean blank = l.getConditionExpr() == null || l.getConditionExpr().isBlank();
+                if (blank) {
+                    noCond.add(l);
+                } else if (evalCondition(l.getConditionExpr(), ctx.formData)) {
+                    matched.add(l);
+                }
+            }
+            taken = matched.isEmpty() ? noCond : matched;
+        }
+        if (taken.isEmpty()) {
+            // 非归档节点却无后续出口 → 死路（线可能画错，或漏连出口）
+            if (node.getNodeType() != null && node.getNodeType() != 3) {
+                ctx.nodeStatus.put(nodeKey, 2);
+                ctx.nodeMsg.put(nodeKey, "非归档节点却无后续出口，流程走不通（连线可能画错或漏连）");
+            }
+            return;
+        }
+        for (WfNodeLink l : taken) {
+            SimulateResultVO.PathStep step = new SimulateResultVO.PathStep();
+            step.setFromNodeKey(l.getFromNodeKey());
+            step.setToNodeKey(l.getToNodeKey());
+            step.setConditionCn(l.getConditionCn());
+            ctx.path.add(step);
+            String next = l.getToNodeKey();
+            if (!visitedNodes.contains(next)) {
+                visitedNodes.add(next);
+                walkNode(next, visitedNodes, steps, maxSteps, ctx);
+            }
+        }
+    }
+
+    /** 节点配置校验：人工节点（审批1/提交2）必须有操作者；其余默认通过 */
+    private int validateNode(WfProcessNode node) {
+        Integer t = node.getNodeType();
+        if (t != null && (t == 1 || t == 2)) {
+            Long count = operatorMapper.selectCount(Wrappers.<WfNodeOperator>lambdaQuery()
+                .eq(WfNodeOperator::getNodeId, node.getId()));
+            if (count == null || count == 0) {
+                return 2;
+            }
+        }
+        return 1;
+    }
+
+    @Override
+    public void saveNodeTestStatus(Long defId, String nodeKey, int status) {
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+        if (node == null) {
+            throw new ServiceException("节点不存在: " + nodeKey);
+        }
+        node.setTestStatus(status);
+        nodeMapper.updateById(node);
+    }
+
+    /**
+     * 求条件表达式（格式 {@code ${field op value && ...}}）在给定模拟表单数据下是否为真。
+     * 字段 key 形如 {@code main.xxx} / {@code dt1.xxx}，查找时优先精确匹配，其次按字段名后缀匹配。
+     */
+    private boolean evalCondition(String expr, Map<String, Object> formData) {
+        if (expr == null || expr.isBlank()) {
+            return true;
+        }
+        String body = expr.trim();
+        if (body.startsWith("${") && body.endsWith("}")) {
+            body = body.substring(2, body.length() - 1);
+        }
+        String[] segs = body.split("&&");
+        for (String seg : segs) {
+            seg = seg.trim();
+            if (seg.isEmpty()) {
+                continue;
+            }
+            if (!evalSingle(seg, formData)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean evalSingle(String seg, Map<String, Object> formData) {
+        // field.contains('val')
+        java.util.regex.Matcher cm = java.util.regex.Pattern.compile("^([\\w.]+)\\.contains\\(['\"](.*)['\"]\\)$").matcher(seg);
+        if (cm.find()) {
+            Object v = lookupField(cm.group(1), formData);
+            return v != null && v.toString().contains(cm.group(2));
+        }
+        java.util.regex.Matcher mm = java.util.regex.Pattern.compile("^([\\w.]+)\\s*(>=|<=|==|!=|>|<)\\s*(.*)$").matcher(seg);
+        if (!mm.find()) {
+            return false;
+        }
+        String field = mm.group(1);
+        String op = mm.group(2);
+        String raw = mm.group(3).trim().replaceAll("^['\"]|['\"]$", "");
+        Object fv = lookupField(field, formData);
+        if (fv == null) {
+            // 仅「不等于」在空值下为真，其余为假
+            return "==".equals(op) ? false : "!=".equals(op);
+        }
+        String fs = fv.toString();
+        boolean bothNum = isNumberLike(fs) && isNumberLike(raw);
+        if (bothNum) {
+            double a = Double.parseDouble(fs);
+            double b = Double.parseDouble(raw);
+            return compareNum(a, b, op);
+        }
+        int cmp = fs.compareTo(raw);
+        switch (op) {
+            case "==": return cmp == 0;
+            case "!=": return cmp != 0;
+            case ">": return cmp > 0;
+            case "<": return cmp < 0;
+            case ">=": return cmp >= 0;
+            case "<=": return cmp <= 0;
+            default: return false;
+        }
+    }
+
+    private Object lookupField(String key, Map<String, Object> formData) {
+        if (formData == null) {
+            return null;
+        }
+        if (formData.containsKey(key)) {
+            return formData.get(key);
+        }
+        // 按字段名后缀匹配（main.xxx / dt1.xxx → xxx）
+        int idx = key.lastIndexOf('.');
+        if (idx >= 0) {
+            String suffix = key.substring(idx + 1);
+            if (formData.containsKey(suffix)) {
+                return formData.get(suffix);
+            }
+        }
+        return null;
+    }
+
+    private boolean isNumberLike(String v) {
+        if (v == null || v.isEmpty()) {
+            return false;
+        }
+        try {
+            Double.parseDouble(v);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private boolean compareNum(double a, double b, String op) {
+        switch (op) {
+            case "==": return a == b;
+            case "!=": return a != b;
+            case ">": return a > b;
+            case "<": return a < b;
+            case ">=": return a >= b;
+            case "<=": return a <= b;
+            default: return false;
+        }
+    }
+
+    /** 出口解析 / 条件注入共用的有向边（目标 + 该边条件表达式） */
+    private static class SeqEdge {
+        final String to;
+        final String cond;
+        SeqEdge(String to, String cond) {
+            this.to = to;
+            this.cond = cond;
+        }
     }
 
 }
