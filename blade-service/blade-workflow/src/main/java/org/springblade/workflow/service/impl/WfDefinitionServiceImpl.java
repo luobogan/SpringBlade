@@ -10,6 +10,12 @@ import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.BoundaryEvent;
+import org.flowable.bpmn.model.BusinessRuleTask;
+import org.flowable.bpmn.model.CallActivity;
+import org.flowable.bpmn.model.ReceiveTask;
+import org.flowable.bpmn.model.ScriptTask;
+import org.flowable.bpmn.model.SendTask;
+import org.flowable.bpmn.model.Task;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
 import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
@@ -35,6 +41,7 @@ import org.springblade.workflow.mapper.WfWorkflowTypeMapper;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
+import org.springblade.workflow.utils.WfConditionUtil;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.FormFieldVO;
@@ -196,6 +203,24 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return true;
     }
 
+        @Override
+    public String deployForTest(Long defId) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        if (def.getBpmnXml() == null || def.getBpmnXml().isBlank()) {
+            throw new ServiceException("尚无 BPMN 定义，请先在「流程画布」中设计并保存");
+        }
+        if (def.getProcKey() == null || def.getProcKey().isBlank()) {
+            throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
+        }
+        String deployXml = injectLinkConditions(def.getBpmnXml(), links(defId));
+        String deploymentId = processService.deployProcess(def.getProcKey(), deployXml);
+        log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态）. defId={}, procKey={}, deploymentId={}",
+            defId, def.getProcKey(), deploymentId);
+        return deploymentId;
+    }
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Long saveBpmn(Long defId, String bpmnXml) {
@@ -994,6 +1019,25 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (fe instanceof ServiceTask) {
             return 6;
         }
+        // 画布「更改元素」（bpmn-js 替换元素）会为新元素**重新生成 id**（原 id 仍被旧元素占用，
+        // moddle ids 拒绝复用）。若此处不识别新类型，saveBpmn 会跳过它 → 「节点信息」不生成，
+        // 且旧节点因「画布上已不存在」被连带删除。故补齐其余任务类元素。
+        // 调用活动（调用子流程）→ 自动处理
+        if (fe instanceof CallActivity) {
+            return 6;
+        }
+        if (fe instanceof Task) {
+            // 发送 / 脚本 / 业务规则任务 → 自动处理；接收任务 → 等待（等外部消息）
+            if (fe instanceof SendTask || fe instanceof ScriptTask
+                || fe instanceof BusinessRuleTask) {
+                return 6;
+            }
+            if (fe instanceof ReceiveTask) {
+                return 5;
+            }
+            // 通用任务 / 手工任务（UserTask 已在前面返回）→ 审批
+            return 1;
+        }
         return null;
     }
 
@@ -1010,6 +1054,17 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         if (fe instanceof ServiceTask) {
             return "自动处理";
+        }
+        // 画布「更改元素」新纳入识别的任务类型：补中文默认名（节点信息列表不显示裸 id）
+        if (fe instanceof ReceiveTask) {
+            return "等待";
+        }
+        if (fe instanceof SendTask || fe instanceof ScriptTask
+            || fe instanceof BusinessRuleTask || fe instanceof CallActivity) {
+            return "自动处理";
+        }
+        if (fe instanceof Task) {
+            return "审批";
         }
         if (nodeType != null && nodeType == 0) {
             return "开始";
@@ -1463,104 +1518,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
      * 字段 key 形如 {@code main.xxx} / {@code dt1.xxx}，查找时优先精确匹配，其次按字段名后缀匹配。
      */
     private boolean evalCondition(String expr, Map<String, Object> formData) {
-        if (expr == null || expr.isBlank()) {
-            return true;
-        }
-        String body = expr.trim();
-        if (body.startsWith("${") && body.endsWith("}")) {
-            body = body.substring(2, body.length() - 1);
-        }
-        String[] segs = body.split("&&");
-        for (String seg : segs) {
-            seg = seg.trim();
-            if (seg.isEmpty()) {
-                continue;
-            }
-            if (!evalSingle(seg, formData)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean evalSingle(String seg, Map<String, Object> formData) {
-        // field.contains('val')
-        java.util.regex.Matcher cm = java.util.regex.Pattern.compile("^([\\w.]+)\\.contains\\(['\"](.*)['\"]\\)$").matcher(seg);
-        if (cm.find()) {
-            Object v = lookupField(cm.group(1), formData);
-            return v != null && v.toString().contains(cm.group(2));
-        }
-        java.util.regex.Matcher mm = java.util.regex.Pattern.compile("^([\\w.]+)\\s*(>=|<=|==|!=|>|<)\\s*(.*)$").matcher(seg);
-        if (!mm.find()) {
-            return false;
-        }
-        String field = mm.group(1);
-        String op = mm.group(2);
-        String raw = mm.group(3).trim().replaceAll("^['\"]|['\"]$", "");
-        Object fv = lookupField(field, formData);
-        if (fv == null) {
-            // 仅「不等于」在空值下为真，其余为假
-            return "==".equals(op) ? false : "!=".equals(op);
-        }
-        String fs = fv.toString();
-        boolean bothNum = isNumberLike(fs) && isNumberLike(raw);
-        if (bothNum) {
-            double a = Double.parseDouble(fs);
-            double b = Double.parseDouble(raw);
-            return compareNum(a, b, op);
-        }
-        int cmp = fs.compareTo(raw);
-        switch (op) {
-            case "==": return cmp == 0;
-            case "!=": return cmp != 0;
-            case ">": return cmp > 0;
-            case "<": return cmp < 0;
-            case ">=": return cmp >= 0;
-            case "<=": return cmp <= 0;
-            default: return false;
-        }
-    }
-
-    private Object lookupField(String key, Map<String, Object> formData) {
-        if (formData == null) {
-            return null;
-        }
-        if (formData.containsKey(key)) {
-            return formData.get(key);
-        }
-        // 按字段名后缀匹配（main.xxx / dt1.xxx → xxx）
-        int idx = key.lastIndexOf('.');
-        if (idx >= 0) {
-            String suffix = key.substring(idx + 1);
-            if (formData.containsKey(suffix)) {
-                return formData.get(suffix);
-            }
-        }
-        return null;
-    }
-
-    private boolean isNumberLike(String v) {
-        if (v == null || v.isEmpty()) {
-            return false;
-        }
-        try {
-            Double.parseDouble(v);
-            return true;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private boolean compareNum(double a, double b, String op) {
-        switch (op) {
-            case "==": return a == b;
-            case "!=": return a != b;
-            case ">": return a > b;
-            case "<": return a < b;
-            case ">=": return a >= b;
-            case "<=": return a <= b;
-            default: return false;
-        }
+        return WfConditionUtil.eval(expr, formData);
     }
 
     /** 出口解析 / 条件注入共用的有向边（目标 + 该边条件表达式） */

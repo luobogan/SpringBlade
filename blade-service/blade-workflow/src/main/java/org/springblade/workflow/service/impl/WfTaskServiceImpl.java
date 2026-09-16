@@ -188,8 +188,12 @@ public class WfTaskServiceImpl implements IWfTaskService {
         }
 
         // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（异常策略由 NodeActionExecutor 吸收）
-        nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, operator);
-        nodeActionExecutor.triggerSubflow(inst, node, NodeActionExecutor.TRIGGER_AFTER_SUBMIT, operator);
+        // 测试态：跳过附加操作/子流程副作用（对齐 ecology istest，避免污染真实业务数据）
+        boolean testInst = inst.getIsTest() != null && inst.getIsTest() == 1;
+        if (!testInst) {
+            nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, operator);
+            nodeActionExecutor.triggerSubflow(inst, node, NodeActionExecutor.TRIGGER_AFTER_SUBMIT, operator);
+        }
         return true;
     }
 

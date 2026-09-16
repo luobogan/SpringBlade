@@ -90,6 +90,12 @@ public class WfInstance extends TenantEntity {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long parentId;
 
+    @Schema(description = "测试态标记 1=测试产生的实例（可一键清理，不污染正常数据）")
+    private Integer isTest;
+
+    @Schema(description = "测试临时部署ID（Flowable deploymentId），清理时级联卸载")
+    private String testDeploymentId;
+
     /**
      * 主键以字符串形式序列化（对齐 {@code WfProcessDefinition}）：
      * 避免 19 位雪花 ID 在前端 JS 解析时丢失精度。

@@ -105,8 +105,22 @@ public class WfOperatorResolver {
      * @return 办理人ID集合；为空表示「无法解析」，调用方应回退原有行为
      */
     public List<Long> resolve(Long defId, String nodeKey, Long instId, Long starter, Long currentOperator) {
+        return resolveWithForm(defId, nodeKey, loadFormData(instId), starter, currentOperator);
+    }
+
+    /**
+     * 同 {@link #resolve}，但表单数据由调用方直接传入。
+     *
+     * <p>供「流程测试」使用：测试走的是<b>配置走查</b>，没有真实实例与表单快照，
+     * 模拟表单数据只能由调用方给出（用于「字段-人员」类操作者解析）。</p>
+     */
+    public List<Long> resolveWithForm(Long defId, String nodeKey, Map<String, Object> formData,
+                                      Long starter, Long currentOperator) {
         if (defId == null || nodeKey == null) {
             return List.of();
+        }
+        if (formData == null) {
+            formData = Map.of();
         }
         WfProcessNode node = nodeMapper.selectOne(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
@@ -122,7 +136,6 @@ public class WfOperatorResolver {
         if (operators.isEmpty()) {
             return List.of();
         }
-        Map<String, Object> formData = loadFormData(instId);
         Set<Long> ids = new LinkedHashSet<>();
         for (WfNodeOperator op : operators) {
             ids.addAll(resolveByType(op, starter, currentOperator, formData));

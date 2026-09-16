@@ -52,6 +52,17 @@ public interface IWfDefinitionService {
     boolean deploy(Long defId);
 
     /**
+     * 测试专用部署：把草稿流程的 BPMN 部署到 Flowable，<b>但不改 status、不激活版本</b>。
+     *
+     * <p>用于「流程测试」真实发起：草稿未发布不可走正式 deploy，这里单独部署一份临时流程定义，
+     * 返回 deploymentId 供测试清理时级联卸载（cascade 清掉 ACT_* 数据）。</p>
+     *
+     * @param defId 流程定义ID（草稿/任何状态均可）
+     * @return Flowable deploymentId
+     */
+    String deployForTest(Long defId);
+
+    /**
      * 保存 BPMN 2.0 定义（bpmn-js 画布产出）
      *
      * <p>持久化 XML，并解析其中的 userTask 重建流程节点，以 BPMN process id 校正 procKey。</p>

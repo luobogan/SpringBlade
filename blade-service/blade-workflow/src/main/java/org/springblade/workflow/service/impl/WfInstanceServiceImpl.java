@@ -93,6 +93,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         inst.setParentId(dto.getParentId());
         inst.setStartTime(new Date());
         inst.setUrgency(dto.getUrgency() == null ? 0 : dto.getUrgency());
+        // 测试态标记：测试产生的实例打 is_test=1，并记下临时部署ID，便于一键清理且不污染正常数据
+        boolean test = Boolean.TRUE.equals(dto.getTestFlag());
+        inst.setIsTest(test ? 1 : 0);
+        inst.setTestDeploymentId(dto.getTestDeploymentId());
         inst.setStatus(WfInstance.STATUS_RUNNING);
         instanceMapper.insert(inst);
 
@@ -244,9 +248,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setCurrentNodeKey("");
             instanceMapper.updateById(inst);
             // 节点信息 → 运行时消费：归档后子流程触发（settings.subflow.trigger=afterArchive）
-            if (lastNodeKey != null && !lastNodeKey.isEmpty()) {
-                nodeActionExecutor.triggerSubflow(inst, loadNode(inst.getDefId(), lastNodeKey),
-                    NodeActionExecutor.TRIGGER_AFTER_ARCHIVE, inst.getStarter());
+            // 测试态：跳过附加操作/子流程副作用，避免污染真实业务数据（对齐 ecology istest）
+            if (inst.getIsTest() == null || inst.getIsTest() != 1) {
+                if (lastNodeKey != null && !lastNodeKey.isEmpty()) {
+                    nodeActionExecutor.triggerSubflow(inst, loadNode(inst.getDefId(), lastNodeKey),
+                        NodeActionExecutor.TRIGGER_AFTER_ARCHIVE, inst.getStarter());
+                }
             }
             return;
         }
@@ -257,8 +264,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setCurrentNodeKey(nodeKey);
         }
         instanceMapper.updateById(inst);
-        if (nodeChanged) {
+        if (nodeChanged && (inst.getIsTest() == null || inst.getIsTest() != 1)) {
             // 新节点激活 → 执行「节点前附加操作」（受「流程异常处理」策略保护）
+            // 测试态：跳过附加操作副作用
             nodeActionExecutor.execute(inst, loadNode(inst.getDefId(), nodeKey),
                 NodeActionExecutor.PHASE_PRE, inst.getStarter());
         }
@@ -312,6 +320,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         task.setEngineTaskId(t.getTaskId());
         task.setNodeKey(nodeKey);
         task.setAssignee(assignee);
+        task.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
         task.setStatus(WfTask.STATUS_TODO);
         task.setReceiveTime(new Date());
         Date due = resolveDueTime(inst.getDefId(), nodeKey, task.getReceiveTime());

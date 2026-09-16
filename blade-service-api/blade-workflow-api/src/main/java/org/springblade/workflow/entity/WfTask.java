@@ -60,6 +60,9 @@ public class WfTask extends TenantEntity {
     @Schema(description = "会签关系")
     private Integer signOrder;
 
+    @Schema(description = "测试态标记 1=测试产生的待办（可一键清理）")
+    private Integer isTest;
+
     @DateTimeFormat(pattern = DateUtil.PATTERN_DATETIME)
     @JsonFormat(pattern = DateUtil.PATTERN_DATETIME)
     @Schema(description = "接收时间")

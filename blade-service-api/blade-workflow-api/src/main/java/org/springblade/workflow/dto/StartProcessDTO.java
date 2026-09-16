@@ -70,4 +70,14 @@ public class StartProcessDTO implements Serializable {
      */
     private Long parentId;
 
+    /**
+     * 测试态标记：为 true 时本次发起的实例/待办打 is_test=1，可一键清理，且不触发节点附加操作/子流程副作用
+     */
+    private Boolean testFlag;
+
+    /**
+     * 测试临时部署ID（Flowable deploymentId），用于测试清理时级联卸载
+     */
+    private String testDeploymentId;
+
 }

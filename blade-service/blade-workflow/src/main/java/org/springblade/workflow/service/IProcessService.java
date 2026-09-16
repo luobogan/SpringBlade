@@ -1,5 +1,7 @@
 package org.springblade.workflow.service;
 
+import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.springblade.workflow.vo.TaskVO;
 
 import java.util.List;
@@ -61,5 +63,45 @@ public interface IProcessService {
      * @param variables       跳转前写入的流程变量（可为 null）
      */
     void moveActivity(String engineInstId, String fromActivityKey, String toActivityKey, Map<String, Object> variables);
+
+    /**
+     * 查询引擎实例经历过的<b>历史活动实例</b>（节点 + 流转），按开始时间升序。
+     *
+     * <p>用于「真实引擎假数据测试」的<b>覆盖率采集</b>：把引擎实际经过的节点集合，
+     * 与 {@code wf_process_node} / {@code wf_node_link} 全量集合比对，识别死节点与未验证分支。
+     * 排他网关走了哪条分支，由下游被激活的节点反推（无需 history=full 记录 sequenceFlow）。</p>
+     *
+     * @param engineInstId 引擎实例ID
+     * @return 历史活动实例列表（含 startEvent / userTask / endEvent / 网关等）
+     */
+    List<HistoricActivityInstance> historicActivities(String engineInstId);
+
+    /**
+     * 查询引擎实例的历史流程实例（含结束状态、开始/结束时间）。
+     *
+     * @param engineInstId 引擎实例ID
+     * @return 历史流程实例（未结束返回 null）
+     */
+    HistoricProcessInstance historicProcess(String engineInstId);
+
+    /**
+     * 删除引擎部署（级联清理流程定义与历史数据）。
+     *
+     * <p>用于「真实引擎假数据测试」的<b>测试态清理</b>：测试部署走 {@code test_<procKey>} 独立 key，
+     * 跑完即卸载，不污染生产定义。</p>
+     *
+     * @param deploymentId 部署ID
+     */
+    void deleteDeployment(String deploymentId);
+
+    /**
+     * 统计引擎当前待执行作业数（普通作业 + 定时作业）。
+     *
+     * <p>用于断言一次正常流转后<b>没有残留引擎作业</b>（验证异步/定时未被意外触发）。
+     * 定时器边界事件（节点类型 5）等高级场景的覆盖将借助此方法驱动 {@code ManagementService} 执行作业。</p>
+     *
+     * @return 待执行作业总数
+     */
+    long pendingJobCount();
 
 }

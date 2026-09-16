@@ -2,9 +2,13 @@ package org.springblade.workflow.service.impl;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.flowable.engine.HistoryService;
+import org.flowable.engine.ManagementService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
+import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
@@ -30,6 +34,8 @@ public class ProcessServiceImpl implements IProcessService {
     private final RuntimeService runtimeService;
     private final TaskService taskService;
     private final RepositoryService repositoryService;
+    private final HistoryService historyService;
+    private final ManagementService managementService;
 
     @Override
     public String startInstance(String procKey, String bizKey, Map<String, Object> variables) {
@@ -106,6 +112,34 @@ public class ProcessServiceImpl implements IProcessService {
             result.add(vo);
         }
         return result;
+    }
+
+    @Override
+    public List<HistoricActivityInstance> historicActivities(String engineInstId) {
+        return historyService.createHistoricActivityInstanceQuery()
+            .processInstanceId(engineInstId)
+            .orderByHistoricActivityInstanceStartTime()
+            .asc()
+            .list();
+    }
+
+    @Override
+    public HistoricProcessInstance historicProcess(String engineInstId) {
+        return historyService.createHistoricProcessInstanceQuery()
+            .processInstanceId(engineInstId)
+            .singleResult();
+    }
+
+    @Override
+    public void deleteDeployment(String deploymentId) {
+        repositoryService.deleteDeployment(deploymentId, true);
+        log.info("[blade-workflow] 测试部署已卸载. deploymentId={}", deploymentId);
+    }
+
+    @Override
+    public long pendingJobCount() {
+        return managementService.createJobQuery().count()
+            + managementService.createTimerJobQuery().count();
     }
 
 }
