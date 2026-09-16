@@ -11,7 +11,7 @@ import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.BoundaryEvent;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
-import org.flowable.bpmn.model.IntermediateThrowEvent;
+import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
@@ -983,8 +983,10 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (fe instanceof EndEvent) {
             return 3;
         }
-        // 中间事件（中间件）/ 边界事件：画布上追加后也要落成「等待」节点，否则节点信息与出口会丢失
-        if (fe instanceof IntermediateCatchEvent || fe instanceof IntermediateThrowEvent
+        // 中间事件（中间件，catch/throw 都落到这里）/ 边界事件：画布上追加后也要落成「等待」节点，
+        // 否则节点信息与出口会丢失。（flowable 无 IntermediateThrowEvent 类，抛出事件解析为
+        // IntermediateCatchEvent 或 ThrowEvent 基类，故用 ThrowEvent 兜底）
+        if (fe instanceof IntermediateCatchEvent || fe instanceof ThrowEvent
             || fe instanceof BoundaryEvent) {
             return 5;
         }
@@ -1000,7 +1002,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (fe.getName() != null && !fe.getName().isBlank()) {
             return fe.getName();
         }
-        if (fe instanceof IntermediateCatchEvent || fe instanceof IntermediateThrowEvent) {
+        if (fe instanceof IntermediateCatchEvent || fe instanceof ThrowEvent) {
             return "中间事件";
         }
         if (fe instanceof BoundaryEvent) {
