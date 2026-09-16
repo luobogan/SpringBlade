@@ -10,6 +10,12 @@ import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.BoundaryEvent;
+import org.flowable.bpmn.model.BusinessRuleTask;
+import org.flowable.bpmn.model.CallActivity;
+import org.flowable.bpmn.model.ReceiveTask;
+import org.flowable.bpmn.model.ScriptTask;
+import org.flowable.bpmn.model.SendTask;
+import org.flowable.bpmn.model.Task;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
 import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
@@ -994,6 +1000,25 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (fe instanceof ServiceTask) {
             return 6;
         }
+        // 画布「更改元素」（bpmn-js 替换元素）会为新元素**重新生成 id**（原 id 仍被旧元素占用，
+        // moddle ids 拒绝复用）。若此处不识别新类型，saveBpmn 会跳过它 → 「节点信息」不生成，
+        // 且旧节点因「画布上已不存在」被连带删除。故补齐其余任务类元素。
+        // 调用活动（调用子流程）→ 自动处理
+        if (fe instanceof CallActivity) {
+            return 6;
+        }
+        if (fe instanceof Task) {
+            // 发送 / 脚本 / 业务规则任务 → 自动处理；接收任务 → 等待（等外部消息）
+            if (fe instanceof SendTask || fe instanceof ScriptTask
+                || fe instanceof BusinessRuleTask) {
+                return 6;
+            }
+            if (fe instanceof ReceiveTask) {
+                return 5;
+            }
+            // 通用任务 / 手工任务（UserTask 已在前面返回）→ 审批
+            return 1;
+        }
         return null;
     }
 
@@ -1010,6 +1035,17 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         if (fe instanceof ServiceTask) {
             return "自动处理";
+        }
+        // 画布「更改元素」新纳入识别的任务类型：补中文默认名（节点信息列表不显示裸 id）
+        if (fe instanceof ReceiveTask) {
+            return "等待";
+        }
+        if (fe instanceof SendTask || fe instanceof ScriptTask
+            || fe instanceof BusinessRuleTask || fe instanceof CallActivity) {
+            return "自动处理";
+        }
+        if (fe instanceof Task) {
+            return "审批";
         }
         if (nodeType != null && nodeType == 0) {
             return "开始";
