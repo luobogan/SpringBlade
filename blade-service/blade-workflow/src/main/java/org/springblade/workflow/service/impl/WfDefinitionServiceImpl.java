@@ -21,6 +21,9 @@ import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
+import org.flowable.bpmn.model.EventDefinition;
+import org.flowable.bpmn.model.ManualTask;
+import org.flowable.bpmn.model.TimerEventDefinition;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
@@ -214,8 +217,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (def.getProcKey() == null || def.getProcKey().isBlank()) {
             throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
         }
-        // 测试部署：注入出口条件，但不改 status、不激活版本（与 deploy 区分）
-        String deployXml = injectLinkConditions(def.getBpmnXml(), links(defId));
+        // 测试部署：注入出口条件 + 测试态消毒（businessRuleTask 降级等），不改 status、不激活版本
+        String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)));
         String deploymentId = processService.deployProcessForTest(def.getProcKey(), deployXml);
         log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态）. defId={}, procKey={}, deploymentId={}",
             defId, def.getProcKey(), deploymentId);
@@ -1078,6 +1081,78 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     private String linkKey(String from, String to) {
         return from + "→" + to;
+    }
+
+    /**
+     * 测试态 BPMN 消毒：把「依赖可选依赖 / 运行期必失败 / 必卡死等待」的元素降级为 manualTask
+     * （具体类、运行时自动通过），让草稿能用「关闭校验」的方式部署并跑通主干路径，
+     * 而不引入 Drools 等重型依赖、也不因未配置元素卡死。
+     * 当前处理：
+     *  - businessRuleTask（Flowable 解析即需 org.kie / Drools 类）；
+     *  - intermediateThrowEvent（未配置 / 不支持的抛出事件，运行期失败）；
+     *  - intermediateCatchEvent / boundaryEvent 含 timerEventDefinition（未配置则卡死、已配置则测试不应真等待）。
+     * 消毒失败时回退原 XML，保证部署不中断。
+     */
+    private String neutralizeForTest(String bpmnXml) {
+        if (bpmnXml == null || bpmnXml.isBlank()) {
+            return bpmnXml;
+        }
+        try {
+            BpmnXMLConverter converter = new BpmnXMLConverter();
+            BpmnModel model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
+            Process process = model.getMainProcess();
+            boolean changed = false;
+            for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
+                if (needsNeutralize(fe)) {
+                    ManualTask task = new ManualTask();
+                    task.setId(fe.getId());
+                    task.setName(fe.getName());
+                    process.removeFlowElement(fe.getId());
+                    process.addFlowElement(task);
+                    changed = true;
+                    log.info("[blade-workflow] 测试态消毒：{} 降级为 manualTask（自动通过） id={}",
+                        fe.getClass().getSimpleName(), fe.getId());
+                }
+            }
+            if (!changed) {
+                return bpmnXml;
+            }
+            byte[] out = converter.convertToXML(model);
+            return new String(out, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 测试态 BPMN 消毒失败，使用原 BPMN 部署: {}", e.getMessage());
+            return bpmnXml;
+        }
+    }
+
+    /** 测试态需降级为自动通过占位的元素：依赖可选依赖 / 运行期必失败 / 必卡死等待。 */
+    private boolean needsNeutralize(FlowElement fe) {
+        if (fe instanceof BusinessRuleTask) {
+            return true; // 解析期需 org.kie（Drools），本工程未引入
+        }
+        if (fe instanceof ThrowEvent) {
+            return true; // 中间抛出事件：未配置 / 不支持的抛出事件（如缺 messageRef 的 message throw）运行期失败
+        }
+        if (fe instanceof IntermediateCatchEvent ice) {
+            return hasTimer(ice.getEventDefinitions()); // 定时捕获：未配置卡死、已配置测试不应真等待
+        }
+        if (fe instanceof BoundaryEvent be) {
+            return hasTimer(be.getEventDefinitions());
+        }
+        return false;
+    }
+
+    private boolean hasTimer(List<EventDefinition> defs) {
+        if (defs == null) {
+            return false;
+        }
+        for (EventDefinition ed : defs) {
+            if (ed instanceof TimerEventDefinition) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

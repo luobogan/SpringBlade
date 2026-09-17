@@ -1,6 +1,7 @@
 package org.springblade.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -118,6 +119,11 @@ public class WfTestServiceImpl implements IWfTestService {
         startDto.setTestFlag(true);
         startDto.setTestDeploymentId(deploymentId);
         startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
+        // 测试态无真实业务数据行：构造唯一 dataId，否则 data_id NOT NULL 校验失败，
+        // 且 uk_biz_key(formId:dataId) 会在多次测试同一流程时重复。
+        if (startDto.getDataId() == null) {
+            startDto.setDataId(IdWorker.getId());
+        }
         Long instId = instanceService.start(startDto);
         WfInstance inst = instanceMapper.selectById(instId);
         logLines.add(fmt.format(new Date()) + " 已真实发起测试实例 instId=" + instId
