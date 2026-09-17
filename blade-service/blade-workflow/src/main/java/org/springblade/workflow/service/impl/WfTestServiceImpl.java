@@ -264,7 +264,7 @@ public class WfTestServiceImpl implements IWfTestService {
         }
         for (String dep : deployments) {
             try {
-                processService.deleteDeployment(dep, true);
+                processService.deleteDeployment(dep);
             } catch (Exception e) {
                 log.warn("[blade-workflow] 测试部署卸载失败（可能已手动删除）. deploymentId={}, err={}", dep, e.getMessage());
             }

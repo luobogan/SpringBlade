@@ -26,7 +26,10 @@ import java.util.Map;
 @RestController
 // 路径统一：后端原为 /form/data，前端 formDataApi 用 /form-data，
 // 此处同时暴露两个路径，保证新旧调用方均可命中，避免联调阻塞（文档 3.4-7）
-@RequestMapping({"/api/blade-formmode/form/data", "/api/blade-formmode/form-data"})
+// 网关对 blade-formmode 做 StripPrefix，前端实际命中无前缀路径 /form/data、/form-data；
+// Feign 直连（IFormmodeClient）使用带前缀路径 /api/blade-formmode/form/data。
+// 两类路径均暴露，保证网关调用与 Feign 直连都能命中。
+@RequestMapping({"/api/blade-formmode/form/data", "/api/blade-formmode/form-data", "/form/data", "/form-data"})
 @Tag(name = "表单数据", description = "表单数据的增删改查")
 @RequiredArgsConstructor
 public class FormDataController extends BladeController {
@@ -94,6 +97,18 @@ public class FormDataController extends BladeController {
     @GetMapping("/fields/{modeId}")
     public R<List<FieldDefinitionDTO>> getFields(@PathVariable Long modeId) {
         List<FieldDefinitionDTO> fields = formModeService.getFieldDefinitions(modeId);
+        return R.data(fields);
+    }
+
+    /**
+     * 获取字段定义（前端契约：GET /form-data/{formId}/fields）
+     *
+     * <p>与 {@link #getFields} 语义一致，仅路径顺序不同以对齐前端 {@code formDataApi.getFieldDefinitions}；
+     * 网关 StripPrefix 后前端命中的正是无前缀的 /form-data/{formId}/fields。</p>
+     */
+    @GetMapping("/{formId}/fields")
+    public R<List<FieldDefinitionDTO>> getFieldsByForm(@PathVariable Long formId) {
+        List<FieldDefinitionDTO> fields = formModeService.getFieldDefinitions(formId);
         return R.data(fields);
     }
 
