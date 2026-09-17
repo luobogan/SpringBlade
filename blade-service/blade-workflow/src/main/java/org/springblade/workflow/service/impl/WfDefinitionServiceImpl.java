@@ -41,13 +41,12 @@ import org.springblade.workflow.mapper.WfWorkflowTypeMapper;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
-import org.springblade.workflow.utils.WfConditionUtil;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.FormFieldVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.SimulateResultVO;
-import org.springblade.workflow.vo.VersionDiffVO;
+import org.springblade.workflow.utils.WfConditionUtil;
 import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -203,7 +202,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return true;
     }
 
-        @Override
+    @Override
     public String deployForTest(Long defId) {
         WfProcessDefinition def = defMapper.selectById(defId);
         if (def == null) {
@@ -215,12 +214,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (def.getProcKey() == null || def.getProcKey().isBlank()) {
             throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
         }
+        // 测试部署：注入出口条件，但不改 status、不激活版本（与 deploy 区分）
         String deployXml = injectLinkConditions(def.getBpmnXml(), links(defId));
-        String deploymentId = processService.deployProcess(def.getProcKey(), deployXml);
+        String deploymentId = processService.deployProcessForTest(def.getProcKey(), deployXml);
         log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态）. defId={}, procKey={}, deploymentId={}",
             defId, def.getProcKey(), deploymentId);
         return deploymentId;
     }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Long saveBpmn(Long defId, String bpmnXml) {

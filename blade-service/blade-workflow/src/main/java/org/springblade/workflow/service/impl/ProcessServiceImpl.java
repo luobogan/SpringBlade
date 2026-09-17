@@ -84,6 +84,23 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public String deployProcessForTest(String procKey, String bpmnXml) {
+        if (procKey == null || procKey.isBlank() || bpmnXml == null || bpmnXml.isBlank()) {
+            throw new IllegalArgumentException("测试部署 BPMN 失败：procKey 与 bpmnXml 均不能为空");
+        }
+        Deployment deployment = repositoryService.createDeployment()
+            .name(procKey)
+            .key(procKey)
+            .addString(procKey + ".bpmn20.xml", bpmnXml)
+            .disableSchemaValidation()
+            .disableBpmnValidation()
+            .deploy();
+        log.info("[blade-workflow] BPMN 已测试部署到引擎（已关闭语义校验，未改发布状态）. procKey={}, deploymentId={}",
+            procKey, deployment.getId());
+        return deployment.getId();
+    }
+
+    @Override
     public void moveActivity(String engineInstId, String fromActivityKey, String toActivityKey,
                              Map<String, Object> variables) {
         if (engineInstId == null || fromActivityKey == null || toActivityKey == null) {

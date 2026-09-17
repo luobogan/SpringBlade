@@ -52,6 +52,20 @@ public interface IProcessService {
     String deployProcess(String procKey, String bpmnXml);
 
     /**
+     * 部署 BPMN 2.0 定义到引擎（测试专用：关闭 BPMN 语义校验）。
+     *
+     * <p>草稿流程在画布中保存时可能含未配置完整的元素（如未配时间的定时事件、
+     * 未关联 messageRef 的抛出事件、空 executionListener 等），Flowable 默认语义校验会拒绝部署。
+     * 测试态仅需「能跑通主干路径」，故关闭 BPMN 语义校验与 XML Schema 校验，
+     * 让草稿可被部署；与 {@link #deployProcess}（生产发布，保留完整校验）区分。</p>
+     *
+     * @param procKey  流程定义Key（BPMN process id）
+     * @param bpmnXml  BPMN 2.0 XML 文本
+     * @return 引擎部署ID
+     */
+    String deployProcessForTest(String procKey, String bpmnXml);
+
+    /**
      * 将引擎实例的当前活动节点跳转到指定节点（「节点信息 → 指定流转」的运行期消费）。
      *
      * <p>用于处理人手动指定下一节点：不按 BPMN 默认流向，直接 move 到 {@code toActivityKey}。
