@@ -47,4 +47,7 @@ public class WfNodeLink extends TenantEntity {
     @Schema(description = "是否经由网关折叠而来的逻辑连线 1=是（A→网关→B 折叠为 A→B，条件取自网关出口分支）")
     private Integer viaGateway;
 
+    @Schema(description = "经由的网关节点 key（A→网关→B 折叠为 A→B 时记录该网关；网关本身不入 wf_process_node，凭此字段让网关节点呈现/配置其下游分支）")
+    private String viaGatewayKey;
+
 }

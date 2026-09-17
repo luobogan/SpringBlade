@@ -24,6 +24,7 @@ import org.flowable.bpmn.model.UserTask;
 import org.flowable.bpmn.model.EventDefinition;
 import org.flowable.bpmn.model.ManualTask;
 import org.flowable.bpmn.model.TimerEventDefinition;
+import org.flowable.bpmn.model.Gateway;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
@@ -393,29 +394,70 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             outEdges.computeIfAbsent(from, k -> new ArrayList<>())
                 .add(new SeqEdge(to, sf.getConditionExpression()));
         }
+        // 边界事件不是独立的流转节点：它附加在宿主上，其出线应视为「宿主的逃逸出口」（超时/异常等），
+        // 必须归入宿主，否则——
+        // 1) bpmn-js「追加边界事件」会把宿主原出线(A→B)的 sourceRef 改挂到边界事件(BE→B)，
+        //    删除边界事件时这条线随之一并被删，宿主原出口(含出口条件)丢失；
+        // 2) 会产生 BE→X 的孤立出口，出口信息里出现无意义的边界事件连线。
+        // 故：把边界事件出线并入宿主、并把边界事件本身从出边起点中剔除。
+        Map<String, String> beHost = new LinkedHashMap<>();
+        for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
+            if (fe instanceof BoundaryEvent be && be.getAttachedToRef() != null
+                && seenNodeKeys.contains(be.getAttachedToRef().getId())) {
+                beHost.put(be.getId(), be.getAttachedToRef().getId());
+            }
+        }
+        for (Map.Entry<String, String> en : beHost.entrySet()) {
+            List<SeqEdge> bes = outEdges.remove(en.getKey());
+            if (bes != null && !bes.isEmpty()) {
+                outEdges.computeIfAbsent(en.getValue(), k -> new ArrayList<>()).addAll(bes);
+            }
+        }
+        // 网关集合：网关本身不入 wf_process_node，仅作为穿透中转；穿透时记录其 key，
+        // 供网关节点（选中时）直接呈现 / 配置其下游分支（出口按 via_gateway_key 归属网关）。
+        Set<String> gatewayKeys = new HashSet<>();
+        for (FlowElement fe : process.getFlowElements()) {
+            if (fe instanceof Gateway g) {
+                gatewayKeys.add(g.getId());
+            }
+        }
         Set<String> seenLinkKeys = new HashSet<>();
         int linkSort = 1;
         // 每个节点出发：沿出边走查，遇到网关继续穿透，遇到节点即记为一条逻辑出口（A→B）。
         // 不穿透节点（避免跳过中间节点产生 A→C 捷径），故 A→B→C 仍拆成 A→B 与 B→C。
         for (String start : seenNodeKeys) {
+            // 边界事件不是流转节点，跳过（其出线已并入宿主）
+            if (beHost.containsKey(start)) {
+                continue;
+            }
             // 逻辑出口：目标节点 → 末跳条件（进入该节点的那条边上的条件，即网关分支判别条件）
+            // + 经过的网关节点 key（供网关节点呈现 / 配置其下游分支）。
             Map<String, String> logicalTargets = new LinkedHashMap<>();
+            Map<String, String> targetGateway = new LinkedHashMap<>();
             java.util.Deque<String> queue = new java.util.ArrayDeque<>();
             Set<String> visited = new HashSet<>();
+            Map<String, String> gwOf = new LinkedHashMap<>();
             queue.add(start);
             visited.add(start);
+            gwOf.put(start, null);
             while (!queue.isEmpty()) {
                 String v = queue.poll();
+                String curGw = gwOf.get(v);
                 for (SeqEdge e : outEdges.getOrDefault(v, Collections.emptyList())) {
-                    boolean isNode = seenNodeKeys.contains(e.to);
+                    // 边界事件视为透传（不会作为出口终点），其出线已并入宿主
+                    boolean isNode = seenNodeKeys.contains(e.to) && !beHost.containsKey(e.to);
+                    // 该条边经过的网关：终点本身是网关则记为其自身，否则沿用上游已穿过的网关
+                    String edgeGw = gatewayKeys.contains(e.to) ? e.to : curGw;
                     if (isNode) {
                         if (!e.to.equals(start)) {
                             logicalTargets.putIfAbsent(e.to, e.cond);
+                            targetGateway.putIfAbsent(e.to, edgeGw);
                         }
                         // 节点即止，不再越过
                     } else {
                         // 网关：继续穿透（防环）
                         if (visited.add(e.to)) {
+                            gwOf.put(e.to, edgeGw);
                             queue.add(e.to);
                         }
                     }
@@ -424,12 +466,13 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             for (Map.Entry<String, String> en : logicalTargets.entrySet()) {
                 String to = en.getKey();
                 String k = linkKey(start, to);
-                boolean isDirect = outEdges.getOrDefault(start, Collections.emptyList())
-                    .stream().anyMatch(x -> x.to.equals(to) && seenNodeKeys.contains(to));
+                String gw = targetGateway.get(to);
+                boolean viaGw = gw != null;
                 WfNodeLink exist = existLinks.get(k);
                 if (exist != null) {
                     exist.setSortOrder(linkSort++);
-                    exist.setViaGateway(isDirect ? 0 : 1);
+                    exist.setViaGateway(viaGw ? 1 : 0);
+                    exist.setViaGatewayKey(gw);
                     linkMapper.updateById(exist);
                 } else {
                     WfNodeLink link = new WfNodeLink();
@@ -438,7 +481,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                     link.setToNodeKey(to);
                     link.setIsReject(0);
                     link.setIsMustPass(0);
-                    link.setViaGateway(isDirect ? 0 : 1);
+                    link.setViaGateway(viaGw ? 1 : 0);
+                    link.setViaGatewayKey(gw);
                     // 优先用库里已配置的条件；BPMN 末跳条件兜底（设计期多为空）
                     String cond = en.getValue();
                     if (cond != null && !cond.isBlank()) {
