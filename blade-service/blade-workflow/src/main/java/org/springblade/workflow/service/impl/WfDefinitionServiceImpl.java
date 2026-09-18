@@ -47,6 +47,7 @@ import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.BrowserOptionVO;
+import org.springblade.workflow.vo.FormBindingVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.FormFieldVO;
 import org.springblade.workflow.vo.InstanceVO;
@@ -76,6 +77,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class WfDefinitionServiceImpl implements IWfDefinitionService {
+
+    /** 表单绑定提示中最多展示的流程名称数量 */
+    private static final int MAX_BINDING_NAME = 10;
 
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
@@ -148,6 +152,37 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
             .eq(formId != null, WfProcessDefinition::getFormId, formId)
             .orderByDesc(WfProcessDefinition::getVersion));
+    }
+
+    @Override
+    public FormBindingVO formBinding(Long formId) {
+        FormBindingVO vo = new FormBindingVO();
+        if (formId == null) {
+            return vo;
+        }
+
+        List<WfProcessDefinition> defs = defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
+            .eq(WfProcessDefinition::getFormId, formId)
+            .orderByAsc(WfProcessDefinition::getVersion));
+        int instanceCount = instanceService.countByForm(formId);
+
+        List<String> names = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        for (WfProcessDefinition def : defs) {
+            ids.add(String.valueOf(def.getId()));
+            // 只展示前 10 个，避免提示信息过长
+            if (names.size() < MAX_BINDING_NAME) {
+                String name = def.getName() == null ? def.getProcKey() : def.getName();
+                names.add(def.getVersion() == null ? name : name + "（v" + def.getVersion() + "）");
+            }
+        }
+
+        vo.setDefinitionIds(ids);
+        vo.setDefinitionNames(names);
+        vo.setDefinitionCount(defs.size());
+        vo.setInstanceCount(instanceCount);
+        vo.setBound(!defs.isEmpty() || instanceCount > 0);
+        return vo;
     }
 
     @Override

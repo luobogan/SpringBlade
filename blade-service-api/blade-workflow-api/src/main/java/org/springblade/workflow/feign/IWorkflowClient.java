@@ -3,7 +3,10 @@ package org.springblade.workflow.feign;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.StartProcessDTO;
+import org.springblade.workflow.vo.FormBindingVO;
 import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
@@ -35,5 +38,16 @@ public interface IWorkflowClient {
      */
     @PostMapping("/instance/start")
     R<Long> startProcess(@RequestBody StartProcessDTO dto);
+
+    /**
+     * 查询表单被流程绑定的情况（流程定义 + 流程实例）。
+     *
+     * <p>供 blade-formmode 删除表单前校验：已被流程设计绑定的表单不允许删除。</p>
+     *
+     * @param formId 表单ID（workflow_bill.id）
+     * @return 绑定数量与流程名称，bound=true 表示已被占用
+     */
+    @GetMapping("/definition/form-binding/{formId}")
+    R<FormBindingVO> getFormBinding(@PathVariable("formId") Long formId);
 
 }

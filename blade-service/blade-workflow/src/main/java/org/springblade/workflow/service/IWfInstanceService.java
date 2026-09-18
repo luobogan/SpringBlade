@@ -32,6 +32,14 @@ public interface IWfInstanceService {
     InstanceVO getByBiz(Long formId, Long dataId);
 
     /**
+     * 统计某表单下已产生的流程实例数量
+     *
+     * @param formId 表单ID（workflow_bill.id）
+     * @return 实例数量（逻辑未删除）
+     */
+    int countByForm(Long formId);
+
+    /**
      * 流转/审批记录
      */
     List<ApprovalLogVO> logs(Long instId);

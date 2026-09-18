@@ -17,6 +17,7 @@ import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.vo.BrowserOptionVO;
+import org.springblade.workflow.vo.FormBindingVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.SimulateResultVO;
 import org.springblade.workflow.vo.VersionDiffVO;
@@ -119,6 +120,12 @@ public class WfDefinitionController {
     public R<List<WfProcessDefinition>> list(
         @Parameter(description = "表单ID") @RequestParam(value = "formId", required = false) Long formId) {
         return R.data(definitionService.listByForm(formId));
+    }
+
+    @GetMapping("/form-binding/{formId}")
+    @Operation(summary = "查询表单绑定情况", description = "返回绑定该表单的流程定义与流程实例数量；供表单删除前校验")
+    public R<FormBindingVO> formBinding(@PathVariable("formId") Long formId) {
+        return R.data(definitionService.formBinding(formId));
     }
 
     @PostMapping("/{id}/enable")

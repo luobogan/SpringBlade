@@ -7,6 +7,7 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.vo.BrowserOptionVO;
+import org.springblade.workflow.vo.FormBindingVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.SimulateResultVO;
@@ -35,6 +36,17 @@ public interface IWfDefinitionService {
      * 按表单查定义列表
      */
     List<WfProcessDefinition> listByForm(Long formId);
+
+    /**
+     * 查询表单被流程绑定的情况（流程定义 + 流程实例）。
+     *
+     * <p>供 blade-formmode 删除表单前校验：已被流程设计绑定的表单不允许删除，
+     * 否则流程画布渲染时取不到表单布局/字段。</p>
+     *
+     * @param formId 表单ID（workflow_bill.id）
+     * @return 绑定情况（不含校验失败语义，异常由调用方兜底）
+     */
+    FormBindingVO formBinding(Long formId);
 
     /**
      * 节点列表

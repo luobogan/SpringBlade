@@ -13,6 +13,7 @@ import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.core.tool.utils.StringUtil;
+import org.springblade.formmode.dto.BatchDeleteDTO;
 import org.springblade.formmode.entity.FieldDefinition;
 import org.springblade.formmode.entity.WorkflowBill;
 import org.springblade.formmode.service.IDynamicTableService;
@@ -27,7 +28,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * 表单定义控制器
@@ -120,23 +120,74 @@ public class WorkflowBillController extends BladeController {
     }
 
     /**
-     * 删除表单
+     * 删除前检查：流程绑定情况 + 关联数据统计
+     */
+    @GetMapping("/{id}/delete-check")
+    @Operation(summary = "删除前检查", description = "返回表单的流程绑定情况与关联数据统计，供前端二次确认/拦截提示")
+    public R<Map<String, Object>> deleteCheck(
+            @Parameter(description = "表单ID") @PathVariable String id) {
+        return R.data(workflowBillService.deleteCheck(Long.parseLong(id)));
+    }
+
+    /**
+     * 删除表单（级联清理关联数据；被流程绑定时拒绝删除）
      */
     @DeleteMapping("/{id}")
-    @Operation(summary = "删除表单", description = "删除表单定义")
+    @Operation(summary = "删除表单", description = "级联清理字段定义、布局、字段扩展/选项与动态数据表；被流程设计绑定或已产生流程实例时拒绝删除")
     public R<Boolean> delete(
             @Parameter(description = "表单ID") @PathVariable String id) {
-        return R.data(workflowBillService.removeById(id));
+        return R.data(workflowBillService.deleteForm(Long.parseLong(id)), "删除成功");
     }
 
     /**
      * 批量删除表单
+     * <p>逐个删除：被流程占用的表单会被跳过并返回原因，其余正常清理。</p>
      */
     @PostMapping("/batch-delete")
-    @Operation(summary = "批量删除表单", description = "批量删除表单定义")
-    public R<Boolean> batchDelete(@RequestBody String[] ids) {
-        List<String> idList = Arrays.asList(ids);
-        return R.data(workflowBillService.removeByIds(idList.stream().map(Long::parseLong).collect(Collectors.toList())));
+    @Operation(summary = "批量删除表单", description = "逐个级联删除；被流程占用的表单跳过并在结果中返回原因")
+    public R<Map<String, Object>> batchDelete(@RequestBody BatchDeleteDTO body) {
+        List<String> ids = body == null ? null : body.getIds();
+        if (ids == null || ids.isEmpty()) {
+            return R.fail("请选择要删除的表单");
+        }
+
+        int deleted = 0;
+        List<Map<String, Object>> blocked = new ArrayList<>();
+        for (String idStr : ids) {
+            if (StringUtil.isBlank(idStr)) {
+                continue;
+            }
+            Long formId;
+            try {
+                formId = Long.parseLong(idStr);
+            } catch (NumberFormatException e) {
+                blocked.add(buildBlockedItem(idStr, null, "表单ID不合法"));
+                continue;
+            }
+            try {
+                workflowBillService.deleteForm(formId);
+                deleted++;
+            } catch (Exception e) {
+                WorkflowBill form = workflowBillService.getById(formId);
+                blocked.add(buildBlockedItem(idStr,
+                        form == null ? null : form.getFormName(),
+                        e.getMessage()));
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("deleted", deleted);
+        result.put("failed", blocked.size());
+        result.put("blocked", blocked);
+        return R.data(result);
+    }
+
+    private Map<String, Object> buildBlockedItem(String id, String formName, String reason) {
+        Map<String, Object> item = new HashMap<>();
+        item.put("id", id);
+        item.put("formName", formName);
+        item.put("reason", reason);
+        return item;
     }
 
     /**

@@ -132,6 +132,16 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     @Override
+    public int countByForm(Long formId) {
+        if (formId == null) {
+            return 0;
+        }
+        Long count = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getFormId, formId));
+        return count == null ? 0 : count.intValue();
+    }
+
+    @Override
     public List<ApprovalLogVO> logs(Long instId) {
         List<WfApprovalLog> logs = logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
             .eq(WfApprovalLog::getInstId, instId)
