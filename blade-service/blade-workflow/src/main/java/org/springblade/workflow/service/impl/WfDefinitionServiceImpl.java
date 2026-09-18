@@ -163,6 +163,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
         List<WfProcessDefinition> defs = defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
             .eq(WfProcessDefinition::getFormId, formId)
+            .eq(WfProcessDefinition::getIsDeleted, 0)
             .orderByAsc(WfProcessDefinition::getVersion));
         int instanceCount = instanceService.countByForm(formId);
 

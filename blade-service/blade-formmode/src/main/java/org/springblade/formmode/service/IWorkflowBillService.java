@@ -38,8 +38,12 @@ public interface IWorkflowBillService extends IService<WorkflowBill> {
      * <p><b>拦截</b>：表单已被流程设计（wf_process_definition）绑定或已产生流程实例时拒绝删除，
      * 抛出 {@code ServiceException} 提示被哪个流程占用。</p>
      *
-     * @param id 表单ID
+     * <p><b>强制删除（force=true）</b>：跳过流程绑定校验（通常在审批流程服务不可用、无法校验时使用）。
+     * 仅当确实确认表单未被任何流程占用时方可传入，否则可能残留脏数据。</p>
+     *
+     * @param id    表单ID
+     * @param force 是否强制删除（跳过流程绑定校验），默认 false
      * @return 是否删除成功
      */
-    boolean deleteForm(Long id);
+    boolean deleteForm(Long id, Boolean force);
 }

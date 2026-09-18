@@ -131,12 +131,15 @@ public class WorkflowBillController extends BladeController {
 
     /**
      * 删除表单（级联清理关联数据；被流程绑定时拒绝删除）
+     *
+     * @param force 强制删除（跳过流程绑定校验），仅当审批流程服务不可用且确认无绑定时使用
      */
     @DeleteMapping("/{id}")
     @Operation(summary = "删除表单", description = "级联清理字段定义、布局、字段扩展/选项与动态数据表；被流程设计绑定或已产生流程实例时拒绝删除")
     public R<Boolean> delete(
-            @Parameter(description = "表单ID") @PathVariable String id) {
-        return R.data(workflowBillService.deleteForm(Long.parseLong(id)), "删除成功");
+            @Parameter(description = "表单ID") @PathVariable String id,
+            @Parameter(description = "强制删除（跳过流程绑定校验）") @RequestParam(required = false) Boolean force) {
+        return R.data(workflowBillService.deleteForm(Long.parseLong(id), force), "删除成功");
     }
 
     /**
@@ -165,7 +168,7 @@ public class WorkflowBillController extends BladeController {
                 continue;
             }
             try {
-                workflowBillService.deleteForm(formId);
+                workflowBillService.deleteForm(formId, null);
                 deleted++;
             } catch (Exception e) {
                 WorkflowBill form = workflowBillService.getById(formId);

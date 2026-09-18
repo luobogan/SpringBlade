@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>删除前经 Feign 调 blade-workflow 校验表单是否被流程设计绑定（wf_process_definition.form_id）
  *       或已产生流程实例（wf_instance.form_id），被占用则拒绝删除并给出流程名称；
- *       流程服务不可用时同样拒绝（宁可拦截，不产生脏数据）。</li>
+ *       流程服务不可用时拒绝（除非传入 force=true 强制删除）。</li>
  *   <li>删除时清理：动态主表/明细表/历史表（物理 DROP）、字段定义、表单布局、
  *       字段扩展属性、字段选项，最后物理删除表单定义本身。</li>
  * </ul>
@@ -108,20 +108,24 @@ public class WorkflowBillServiceImpl extends ServiceImpl<WorkflowBillMapper, Wor
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean deleteForm(Long id) {
+    public boolean deleteForm(Long id, Boolean force) {
         WorkflowBill bill = getById(id);
         if (bill == null) {
             throw new ServiceException("表单不存在或已被删除");
         }
 
-        // 1. 绑定校验：被流程设计绑定 / 已产生流程实例 / 校验失败，一律拒绝删除
-        FormBindingVO binding = fetchBinding(id);
-        if (Boolean.TRUE.equals(binding.getCheckFailed())) {
-            throw new ServiceException("无法校验表单绑定关系："
-                + (StringUtil.isBlank(binding.getFailReason()) ? "流程服务不可用" : binding.getFailReason()));
-        }
-        if (Boolean.TRUE.equals(binding.getBound())) {
-            throw new ServiceException(buildCheckMessage(bill, binding));
+        // 1. 绑定校验：强制删除时跳过；否则被流程设计绑定 / 已产生流程实例 / 校验失败，一律拒绝删除
+        if (!Boolean.TRUE.equals(force)) {
+            FormBindingVO binding = fetchBinding(id);
+            if (Boolean.TRUE.equals(binding.getCheckFailed())) {
+                throw new ServiceException("无法校验表单绑定关系："
+                    + (StringUtil.isBlank(binding.getFailReason()) ? "流程服务不可用" : binding.getFailReason()));
+            }
+            if (Boolean.TRUE.equals(binding.getBound())) {
+                throw new ServiceException(buildCheckMessage(bill, binding));
+            }
+        } else {
+            log.warn("[formmode] 表单强制删除（跳过流程绑定校验）: id={}, name={}", id, bill.getFormName());
         }
 
         String formId = String.valueOf(id);
