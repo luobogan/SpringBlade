@@ -1670,8 +1670,6 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (t == null || t == 7) {
             return null;
         }
-        boolean hasFormContent = fieldPermNodeKeys != null
-            && fieldPermNodeKeys.contains(node.getNodeKey());
         // ① 操作者
         if (t == 0) {
             if (!hasOperator(node)) {
@@ -1692,11 +1690,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (t >= 0 && t <= 3 && !isLayoutMode(node)) {
             return "节点未设置表单内容，请在「节点信息-表单内容」选择「节点布局」后再测试";
         }
-        // ③ 字段权限（创建 / 归档额外要求：这两个端点没有可用字段则表单无法使用）
-        if ((t == 0 || t == 3) && !hasFormContent) {
-            String what = t == 0 ? "创建" : "归档";
-            return what + "节点未设置表单内容（字段权限），请在「节点信息-字段权限」配置后再测试";
-        }
+        // 注：不再把「字段权限」当作「表单内容」的判据 —— 表单内容统一由上面的
+        // ext_json.settings.formContent.mode 判定（节点布局），字段权限是独立维度，不在此拦截。
         return null;
     }
 

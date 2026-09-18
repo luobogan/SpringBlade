@@ -547,10 +547,6 @@ public class WfTestServiceImpl implements IWfTestService {
                     what + "节点未设置操作者，请在「节点信息-操作者」中配置后再测试");
                 continue;
             }
-            if (!fieldPermNodeKeys.contains(n.getNodeKey())) {
-                issues.putIfAbsent(n.getNodeKey(),
-                    what + "节点未设置表单内容（字段权限），请在「节点信息-字段权限」中配置后再测试");
-            }
         }
         // 4. 表单内容：会渲染表单的节点（0创建/1审批/2提交/3归档）必须设置为「节点布局」。
         //    本系统已屏蔽「普通模式」，故「是否设置了表单内容」= ext_json.settings.formContent.mode
