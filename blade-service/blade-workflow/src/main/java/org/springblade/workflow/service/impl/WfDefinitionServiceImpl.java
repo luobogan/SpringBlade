@@ -43,6 +43,7 @@ import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfWorkflowTypeMapper;
 import org.springblade.workflow.service.IProcessService;
+import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.BrowserOptionVO;
@@ -1445,10 +1446,21 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             startKey = nodeList.get(0).getNodeKey();
         }
 
+        // 已配置「表单内容（字段权限）」的节点集合：创建 / 归档节点必须配置，
+        // 否则模拟运行不应判「走通」（此前只校验审批/提交的操作者，创建与归档即使全空也显示通过）。
+        Set<String> fieldPermNodeKeys = new HashSet<>();
+        for (WfNodeFieldPerm p : fieldPermMapper.selectList(
+                Wrappers.<WfNodeFieldPerm>lambdaQuery().eq(WfNodeFieldPerm::getDefId, defId))) {
+            if (p.getNodeKey() != null) {
+                fieldPermNodeKeys.add(p.getNodeKey());
+            }
+        }
+
         Set<String> visitedNodes = new HashSet<>();
         int[] steps = {0};
         final int MAX_STEPS = 500;
-        WalkCtx ctx = new WalkCtx(nodeMap, outLinks, formData, nodeStatus, nodeMsg, path, full);
+        WalkCtx ctx = new WalkCtx(nodeMap, outLinks, formData, nodeStatus, nodeMsg, path, full,
+            fieldPermNodeKeys);
         if (startKey != null) {
             walkNode(startKey, visitedNodes, steps, MAX_STEPS, ctx);
         }
@@ -1521,10 +1533,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         final List<SimulateResultVO.PathStep> path;
         /** 无模拟数据时按「全量走查」：忽略条件、所有分支都走，验证可达性与死路 */
         final boolean full;
+        /** 已配置「表单内容（字段权限）」的节点 key 集合（创建/归档节点据此校验） */
+        final Set<String> fieldPermNodeKeys;
 
         WalkCtx(Map<String, WfProcessNode> nodeMap, Map<String, List<WfNodeLink>> outLinks,
                 Map<String, Object> formData, Map<String, Integer> nodeStatus,
-                Map<String, String> nodeMsg, List<SimulateResultVO.PathStep> path, boolean full) {
+                Map<String, String> nodeMsg, List<SimulateResultVO.PathStep> path, boolean full,
+                Set<String> fieldPermNodeKeys) {
+            this.fieldPermNodeKeys = fieldPermNodeKeys;
             this.nodeMap = nodeMap;
             this.outLinks = outLinks;
             this.formData = formData;
@@ -1547,10 +1563,12 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         // 节点校验（仅校验一次）
         if (!ctx.nodeStatus.containsKey(nodeKey)) {
-            int vs = validateNode(node);
-            ctx.nodeStatus.put(nodeKey, vs);
-            if (vs == 2) {
-                ctx.nodeMsg.put(nodeKey, "人工节点未配置操作者，无法提交/审批（请在节点信息补充操作者）");
+            String problem = validateNode(node, ctx.fieldPermNodeKeys);
+            if (problem == null) {
+                ctx.nodeStatus.put(nodeKey, 1);
+            } else {
+                ctx.nodeStatus.put(nodeKey, 2);
+                ctx.nodeMsg.put(nodeKey, problem);
             }
         }
         // 归档节点：终点
@@ -1598,17 +1616,64 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
     }
 
-    /** 节点配置校验：人工节点（审批1/提交2）必须有操作者；其余默认通过 */
-    private int validateNode(WfProcessNode node) {
+    /**
+     * 节点配置校验：返回问题描述（null = 通过）。
+     *
+     * <p>校验口径（与「流程测试」的真引擎校验保持一致）：
+     * <ul>
+     *   <li>网关(7)：系统节点，免校验；</li>
+     *   <li>创建(0)：必须有<b>操作者</b>（否则无人可发起）+ 必须有<b>表单内容</b>（字段权限）；</li>
+     *   <li>归档(3)：必须有<b>操作者</b> + 必须有<b>表单内容</b>（字段权限）；</li>
+     *   <li>审批(1)/提交(2)：必须有操作者（原有）；</li>
+     *   <li>其余（等待 5 / 自动处理 6 等）：免校验。</li>
+     * </ul>
+     * ⚠️ 此前只校验 1/2 的操作者，导致创建 / 归档节点即使「操作者与表单内容全空」也显示「走通」。</p>
+     */
+    private String validateNode(WfProcessNode node, Set<String> fieldPermNodeKeys) {
         Integer t = node.getNodeType();
-        if (t != null && (t == 1 || t == 2)) {
-            Long count = operatorMapper.selectCount(Wrappers.<WfNodeOperator>lambdaQuery()
-                .eq(WfNodeOperator::getNodeId, node.getId()));
-            if (count == null || count == 0) {
-                return 2;
+        if (t == null || t == 7) {
+            return null;
+        }
+        boolean hasFormContent = fieldPermNodeKeys != null
+            && fieldPermNodeKeys.contains(node.getNodeKey());
+        // ① 操作者
+        if (t == 0) {
+            if (!hasOperator(node)) {
+                return "创建节点未设置操作者：无人可发起该流程（请在「节点信息-操作者」配置）";
+            }
+        } else if (t == 3) {
+            if (!hasOperator(node)) {
+                return "归档节点未设置操作者（请在「节点信息-操作者」配置）";
+            }
+        } else if (t == 1 || t == 2) {
+            if (!hasOperator(node)) {
+                return "人工节点未配置操作者，无法提交/审批（请在节点信息补充操作者）";
             }
         }
-        return 1;
+        // ② 表单内容：会渲染表单的节点（创建 0 / 审批 1 / 提交 2 / 归档 3）必须设置「节点布局」。
+        //    本系统已屏蔽「普通模式」，故「是否设置了表单内容」= ext_json.settings.formContent.mode 是否为 custom；
+        //    未设置（含存量的 normal）一律视为未配置，测试不通过。
+        if (t >= 0 && t <= 3 && !isLayoutMode(node)) {
+            return "节点未设置表单内容，请在「节点信息-表单内容」选择「节点布局」后再测试";
+        }
+        // ③ 字段权限（创建 / 归档额外要求：这两个端点没有可用字段则表单无法使用）
+        if ((t == 0 || t == 3) && !hasFormContent) {
+            String what = t == 0 ? "创建" : "归档";
+            return what + "节点未设置表单内容（字段权限），请在「节点信息-字段权限」配置后再测试";
+        }
+        return null;
+    }
+
+    /** 节点「表单内容」是否已设置为「节点布局」（ext_json.settings.formContent.mode = custom） */
+    private boolean isLayoutMode(WfProcessNode node) {
+        return "custom".equals(WfNodeSettingsUtil.str(node.getExtJson(), "formContent", "mode"));
+    }
+
+    /** 节点是否已配置操作者 */
+    private boolean hasOperator(WfProcessNode node) {
+        Long count = operatorMapper.selectCount(Wrappers.<WfNodeOperator>lambdaQuery()
+            .eq(WfNodeOperator::getNodeId, node.getId()));
+        return count != null && count > 0;
     }
 
     @Override

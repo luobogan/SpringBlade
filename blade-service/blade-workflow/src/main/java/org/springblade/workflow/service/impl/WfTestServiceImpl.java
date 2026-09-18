@@ -20,11 +20,13 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.entity.WfNodeLink;
+import org.springblade.workflow.entity.WfNodeFieldPerm;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfTestLog;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfNodeFieldPermMapper;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
@@ -36,6 +38,7 @@ import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.service.IWfTestService;
+import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.vo.WfTestResultVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -92,6 +95,7 @@ public class WfTestServiceImpl implements IWfTestService {
     private final IProcessService processService;
     private final WfNodeLinkMapper linkMapper;
     private final WfNodeOperatorMapper operatorMapper;
+    private final WfNodeFieldPermMapper fieldPermMapper;
 
     @Override
     public WfTestResultVO run(WfTestRunDTO dto) {
@@ -130,7 +134,7 @@ public class WfTestServiceImpl implements IWfTestService {
                     .in(WfNodeOperator::getNodeId, nodeIds));
 
         // 预校验：节点配置是否完整/合法（在部署与真实发起前拦截，避免运行期炸出原始引擎异常）
-        Map<String, String> issues = validateBeforeRun(links, nodeList, operators);
+        Map<String, String> issues = validateBeforeRun(defId, links, nodeList, operators);
         WfTestResultVO result;
         if (!issues.isEmpty()) {
             logLines.add(fmt.format(new Date()) + " 预校验发现 " + issues.size()
@@ -495,7 +499,7 @@ public class WfTestServiceImpl implements IWfTestService {
      * 测试前静态校验：在部署/真实发起前拦截明显非法或未设置的节点，避免运行期炸出原始引擎异常。
      * 返回 nodeKey -> 问题描述（空表示通过）。
      */
-    private Map<String, String> validateBeforeRun(List<WfNodeLink> links,
+    private Map<String, String> validateBeforeRun(Long defId, List<WfNodeLink> links,
             List<WfProcessNode> nodeList, List<WfNodeOperator> operators) {
         Map<String, String> issues = new LinkedHashMap<>();
         // 1. 出口条件表达式含被 HTML 转义的运算符（XSS 过滤器把 > < & 转义成实体），引擎无法解析
@@ -510,7 +514,7 @@ public class WfTestServiceImpl implements IWfTestService {
                 }
             }
         }
-        // 2. 审批(1)/提交(2)节点未设置操作者
+        // 2. 人工节点未设置操作者：审批(1) / 提交(2)
         Set<Long> opNodeIds = operators == null ? Collections.emptySet()
                 : operators.stream().map(WfNodeOperator::getNodeId).collect(Collectors.toSet());
         for (WfProcessNode n : nodeList) {
@@ -518,6 +522,47 @@ public class WfTestServiceImpl implements IWfTestService {
             if (t != null && (t == 1 || t == 2) && !opNodeIds.contains(n.getId())) {
                 issues.put(n.getNodeKey(),
                     "未设置操作者，请在「节点信息-操作者」中配置办理人后再测试");
+            }
+        }
+        // 3. 创建(0) / 归档(3)：必须有操作者 + 必须有表单内容（字段权限）。
+        //    与「模拟运行」的校验口径保持一致；此前两条路径都只校验审批/提交的操作者，
+        //    导致创建 / 归档节点即使操作者与表单内容全空也被判「通过」。
+        Set<String> fieldPermNodeKeys = new LinkedHashSet<>();
+        if (fieldPermMapper != null) {
+            for (WfNodeFieldPerm p : fieldPermMapper.selectList(
+                    Wrappers.<WfNodeFieldPerm>lambdaQuery().eq(WfNodeFieldPerm::getDefId, defId))) {
+                if (p.getNodeKey() != null) {
+                    fieldPermNodeKeys.add(p.getNodeKey());
+                }
+            }
+        }
+        for (WfProcessNode n : nodeList) {
+            Integer t = n.getNodeType();
+            if (t == null || (t != 0 && t != 3)) {
+                continue;
+            }
+            String what = t == 0 ? "创建" : "归档";
+            if (!opNodeIds.contains(n.getId())) {
+                issues.putIfAbsent(n.getNodeKey(),
+                    what + "节点未设置操作者，请在「节点信息-操作者」中配置后再测试");
+                continue;
+            }
+            if (!fieldPermNodeKeys.contains(n.getNodeKey())) {
+                issues.putIfAbsent(n.getNodeKey(),
+                    what + "节点未设置表单内容（字段权限），请在「节点信息-字段权限」中配置后再测试");
+            }
+        }
+        // 4. 表单内容：会渲染表单的节点（0创建/1审批/2提交/3归档）必须设置为「节点布局」。
+        //    本系统已屏蔽「普通模式」，故「是否设置了表单内容」= ext_json.settings.formContent.mode
+        //    是否为 custom；未设置（含存量的 normal）一律视为未配置。
+        for (WfProcessNode n : nodeList) {
+            Integer t = n.getNodeType();
+            if (t == null || t < 0 || t > 3) {
+                continue;
+            }
+            if (!"custom".equals(WfNodeSettingsUtil.str(n.getExtJson(), "formContent", "mode"))) {
+                issues.putIfAbsent(n.getNodeKey(),
+                    "未设置表单内容，请在「节点信息-表单内容」选择「节点布局」后再测试");
             }
         }
         return issues;
