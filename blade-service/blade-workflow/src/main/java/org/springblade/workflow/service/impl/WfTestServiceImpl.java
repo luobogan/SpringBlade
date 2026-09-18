@@ -191,6 +191,9 @@ public class WfTestServiceImpl implements IWfTestService {
 
             result = buildResult(nodeList, issues, sampleInstId, nodeTimesUnion, visitedUnion,
                 logLines, begin, anyReachedEnd, anyAborted);
+            // 回传测试态实例 ID：供前端用 /form/render 渲染「真实流程表单界面」
+            // （对齐 ecology 自动测试页右侧的流程表单）。预校验未过（未发起）时为 null。
+            result.setInstId(sampleInstId);
             result.setPath(buildPathFromLinkTimes(links, linkTimesUnion));
             result.setScenarios(scenarioVos);
             result.setScenarioCount(scenarioVos.size());

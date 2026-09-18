@@ -44,8 +44,9 @@ public class WfFormRenderController {
     @Operation(summary = "审批态渲染包", description = "布局 + 业务数据 + 节点字段权限 + 明细权限；taskId 为空则只读")
     public R<org.springblade.workflow.vo.FormRenderVO> render(
         @Parameter(description = "流程实例ID") @RequestParam("instanceId") Long instanceId,
-        @Parameter(description = "任务ID（待办渲染时传入，用于判定读写态）") @RequestParam(value = "taskId", required = false) Long taskId) {
-        return R.data(formRenderService.render(instanceId, taskId));
+        @Parameter(description = "任务ID（待办渲染时传入，用于判定读写态）") @RequestParam(value = "taskId", required = false) Long taskId,
+        @Parameter(description = "指定渲染节点Key（测试页直显某节点布局；为空取当前/任务节点）") @RequestParam(value = "nodeKey", required = false) String nodeKey) {
+        return R.data(formRenderService.render(instanceId, taskId, nodeKey));
     }
 
     @PostMapping("/validate")

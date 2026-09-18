@@ -17,8 +17,9 @@ public interface IWfFormRenderService {
      *
      * @param instanceId 流程实例ID
      * @param taskId     任务ID（待办渲染时传入，用于判定读写态；为空则只读）
+     * @param nodeKey    指定渲染的节点Key（测试页用于直显某节点布局；为空时取当前节点/任务节点）
      */
-    FormRenderVO render(Long instanceId, Long taskId);
+    FormRenderVO render(Long instanceId, Long taskId, String nodeKey);
 
     /**
      * 按节点必填矩阵做服务端校验（前端校验不可信）

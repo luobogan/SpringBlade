@@ -37,6 +37,15 @@ public class WfTestResultVO {
     @Schema(description = "耗时（毫秒）")
     private Long costMs;
 
+    /**
+     * 本次测试发起的测试态实例 ID（wf_instance.id，is_test=1）。
+     * 供前端用 {@code GET /form/render?instanceId=} 渲染**真实流程表单界面**
+     * （对齐 ecology「自动测试」页右侧的流程表单）。预校验未通过（未发起实例）时为 null。
+     */
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Schema(description = "测试态实例ID（wf_instance.id），供渲染真实表单界面；未发起实例时为 null")
+    private Long instId;
+
     @Schema(description = "结论摘要")
     private String summary;
 

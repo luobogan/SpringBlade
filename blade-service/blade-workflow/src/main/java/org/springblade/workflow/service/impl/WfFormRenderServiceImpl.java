@@ -60,7 +60,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final IFormmodeClient formmodeClient;
 
     @Override
-    public FormRenderVO render(Long instanceId, Long taskId) {
+    public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam) {
         WfInstance inst = instanceMapper.selectById(instanceId);
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
@@ -73,6 +73,10 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
                 nodeKey = task.getNodeKey();
             }
+        }
+        // 显式指定节点（测试页直显某节点布局）优先级最高
+        if (nodeKeyParam != null && !nodeKeyParam.isEmpty()) {
+            nodeKey = nodeKeyParam;
         }
 
         FormRenderVO vo = new FormRenderVO();
