@@ -41,6 +41,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.text.SimpleDateFormat;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -49,6 +50,8 @@ import java.util.List;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -145,11 +148,78 @@ public class WfTestServiceImpl implements IWfTestService {
             String deploymentId = definitionService.deployForTest(defId);
             logLines.add(fmt.format(new Date()) + " 已将草稿流程临时部署到引擎（deploymentId=" + deploymentId + "）");
 
+            // 分支覆盖：按各分支出口条件反推变量取值，为每个分支额外真跑一个实例，合并覆盖率。
+            // 否则一组表单数据只能命中网关的一条分支，其余分支被判「未走到」（假阴性）。
+            List<Scenario> scenarios = buildScenarios(dto, links);
+            List<WfTestResultVO.TestScenarioVO> scenarioVos = new ArrayList<>();
+            Map<String, Integer> nodeTimesUnion = new LinkedHashMap<>();
+            Set<String> visitedUnion = new LinkedHashSet<>();
+            Map<String, Integer> linkTimesUnion = new LinkedHashMap<>();
+            boolean anyReachedEnd = false;
+            boolean anyAborted = false;
+            Long sampleInstId = null;
+            logLines.add(fmt.format(new Date()) + " 共 " + scenarios.size() + " 个测试场景（开启分支覆盖="
+                + Boolean.TRUE.equals(dto.getCoverBranches()) + "）");
+
+            int idx = 0;
+            for (Scenario sc : scenarios) {
+                idx++;
+                SingleRun sr = runSingle(def, deploymentId, testUserId, sc, fmt, logLines, idx);
+                sr.nodeTimes.forEach((k, v) -> nodeTimesUnion.merge(k, v, Integer::sum));
+                visitedUnion.addAll(sr.visitedNodes);
+                sr.linkTimes.forEach((k, v) -> linkTimesUnion.merge(k, v, Integer::sum));
+                if (sr.reachedEnd) {
+                    anyReachedEnd = true;
+                }
+                if (sr.aborted) {
+                    anyAborted = true;
+                }
+                if (sampleInstId == null) {
+                    sampleInstId = sr.instId;
+                }
+                scenarioVos.add(toScenarioVo(idx, sc, sr));
+                if (sr.fatal != null) {
+                    issues = new LinkedHashMap<>();
+                    issues.put(sr.fatal.getKey(), sr.fatal.getValue());
+                    break;
+                }
+            }
+
+            result = buildResult(nodeList, issues, sampleInstId, nodeTimesUnion, visitedUnion,
+                logLines, begin, anyReachedEnd, anyAborted);
+            result.setPath(buildPathFromLinkTimes(links, linkTimesUnion));
+            result.setScenarios(scenarioVos);
+            result.setScenarioCount(scenarioVos.size());
+            fillLinkCoverage(result, links, nodeList, linkTimesUnion);
+            saveTestLog(def, dto, result, logLines);
+            return result;
+        } catch (Exception e) {
+            // 部署/发起阶段异常（如 BPMN 解析、条件表达式非法等）：优雅终止，定位首个业务节点
+            String msg = "测试在部署/发起阶段中断（流程配置存在问题）：" + e.getMessage();
+            logLines.add(fmt.format(new Date()) + " " + msg);
+            issues = new LinkedHashMap<>();
+            String firstNode = nodeList.isEmpty() ? null : nodeList.get(0).getNodeKey();
+            if (firstNode != null) {
+                issues.put(firstNode, msg);
+            }
+            result = buildResult(nodeList, issues, null,
+                Collections.emptyMap(), Collections.emptySet(), logLines, begin, false, true);
+        }
+        saveTestLog(def, dto, result, logLines);
+        return result;
+    }
+
+    /** 单个场景：真实发起一个测试态实例并自动驱动到结束，返回该场景的覆盖数据 */
+    private SingleRun runSingle(WfProcessDefinition def, String deploymentId, Long testUserId,
+            Scenario sc, SimpleDateFormat fmt, List<String> logLines, int idx) {
+        SingleRun sr = new SingleRun();
+        Long defId = def.getId();
+        try {
             StartProcessDTO startDto = new StartProcessDTO();
             startDto.setDefId(defId);
             startDto.setFormId(def.getFormId());
             startDto.setStarter(testUserId);
-            startDto.setFieldValues(dto.getFormData());
+            startDto.setFieldValues(sc.formData);
             startDto.setTestFlag(true);
             startDto.setTestDeploymentId(deploymentId);
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
@@ -159,8 +229,9 @@ public class WfTestServiceImpl implements IWfTestService {
                 startDto.setDataId(IdWorker.getId());
             }
             Long instId = instanceService.start(startDto);
+            sr.instId = instId;
             WfInstance inst = instanceMapper.selectById(instId);
-            logLines.add(fmt.format(new Date()) + " 已真实发起测试实例 instId=" + instId
+            logLines.add(fmt.format(new Date()) + " [场景" + idx + "] 已真实发起测试实例 instId=" + instId
                 + "（engineInstId=" + (inst == null ? "" : inst.getEngineInstId()) + "）");
 
             int steps = 0;
@@ -188,24 +259,17 @@ public class WfTestServiceImpl implements IWfTestService {
                         // 节点配置/引擎执行异常：记入问题节点，优雅终止（不再向外抛原始异常）
                         String msg = "节点配置或引擎执行异常，已中断测试：" + e.getMessage();
                         logLines.add(fmt.format(new Date()) + " " + msg);
-                        issues = new LinkedHashMap<>();
-                        issues.put(t.getNodeKey(), msg);
-                        WfTestResultVO failed = buildResult(nodeList, issues, instId,
-                            Collections.emptyMap(), Collections.emptySet(), logLines, begin, false, true);
-                        saveTestLog(def, dto, failed, logLines);
-                        return failed;
+                        sr.fatal = new AbstractMap.SimpleEntry<>(t.getNodeKey(), msg);
+                        return sr;
                     }
                 }
                 inst = instanceMapper.selectById(instId);
             }
 
-            boolean reachedEnd = inst != null && WfInstance.STATUS_APPROVED == inst.getStatus();
-            boolean aborted = steps >= MAX_STEPS
+            sr.reachedEnd = inst != null && WfInstance.STATUS_APPROVED == inst.getStatus();
+            sr.aborted = steps >= MAX_STEPS
                 || (inst != null && WfInstance.STATUS_RUNNING == inst.getStatus());
 
-            Map<String, Integer> nodeTimes = new LinkedHashMap<>();
-            Set<String> visited = new LinkedHashSet<>();
-            List<WfTestResultVO.TestStepVO> path = new ArrayList<>();
             try {
                 String engineInstId = inst == null ? null : inst.getEngineInstId();
                 if (engineInstId != null) {
@@ -216,13 +280,13 @@ public class WfTestServiceImpl implements IWfTestService {
                         if (aid == null) {
                             continue;
                         }
-                        nodeTimes.merge(aid, 1, Integer::sum);
-                        visited.add(aid);
+                        sr.nodeTimes.merge(aid, 1, Integer::sum);
+                        sr.visitedNodes.add(aid);
+                        sr.pathNodes.add(aid);
                         if (prev != null && !prev.equals(aid)) {
-                            WfTestResultVO.TestStepVO step = new WfTestResultVO.TestStepVO();
-                            step.setFromNodeKey(prev);
-                            step.setToNodeKey(aid);
-                            path.add(step);
+                            // 相邻的两个活动即一次真实流转；网关也是活动，
+                            // 故「prev→cur」可直接对应到一条物理出口（wf_node_link）
+                            sr.linkTimes.merge(prev + "→" + aid, 1, Integer::sum);
                         }
                         prev = aid;
                     }
@@ -230,23 +294,201 @@ public class WfTestServiceImpl implements IWfTestService {
             } catch (Exception e) {
                 log.warn("[blade-workflow] 流程测试读取历史活动失败. instId={}, err={}", instId, e.getMessage());
             }
-
-            result = buildResult(nodeList, issues, instId, nodeTimes, visited, logLines, begin, reachedEnd, aborted);
-            result.setPath(path);
         } catch (Exception e) {
-            // 部署/发起阶段异常（如 BPMN 解析、条件表达式非法等）：优雅终止，定位首个业务节点
-            String msg = "测试在部署/发起阶段中断（流程配置存在问题）：" + e.getMessage();
+            String msg = "场景" + idx + "在部署/发起阶段中断（流程配置存在问题）：" + e.getMessage();
             logLines.add(fmt.format(new Date()) + " " + msg);
-            issues = new LinkedHashMap<>();
-            String firstNode = nodeList.isEmpty() ? null : nodeList.get(0).getNodeKey();
-            if (firstNode != null) {
-                issues.put(firstNode, msg);
-            }
-            result = buildResult(nodeList, issues, null,
-                Collections.emptyMap(), Collections.emptySet(), logLines, begin, false, true);
+            sr.fatal = new AbstractMap.SimpleEntry<>(null, msg);
         }
-        saveTestLog(def, dto, result, logLines);
-        return result;
+        return sr;
+    }
+
+    /**
+     * 构造测试场景：主场景（用户填写的表单值）+ 每个带条件的分支出口各一个场景。
+     *
+     * <p>分支场景的变量取值由出口条件<b>反推</b>（尽力而为），目的是让该分支真的被引擎选中，
+     * 从而把「每条线」都真实走到；无法反推的分支会被跳过，最终以「未覆盖」如实报出。</p>
+     */
+    private List<Scenario> buildScenarios(WfTestRunDTO dto, List<WfNodeLink> links) {
+        List<Scenario> list = new ArrayList<>();
+        Map<String, Object> base = dto.getFormData() == null
+            ? new LinkedHashMap<>() : new LinkedHashMap<>(dto.getFormData());
+        list.add(new Scenario("主场景（表单填写值）", base));
+        if (!Boolean.TRUE.equals(dto.getCoverBranches())) {
+            return list;
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        seen.add(JsonUtil.toJson(base));
+        for (WfNodeLink l : links) {
+            String expr = l.getConditionExpr();
+            if (expr == null || expr.isBlank()) {
+                continue;
+            }
+            Map<String, Object> derived = deriveValues(expr);
+            if (derived.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> merged = new LinkedHashMap<>(base);
+            merged.putAll(derived);
+            if (seen.add(JsonUtil.toJson(merged))) {
+                list.add(new Scenario("分支覆盖：" + abbreviate(expr), merged));
+            }
+        }
+        return list;
+    }
+
+    /** 条件表达式取值样本：从「变量 运算符 字面量」反推一组能满足该条件的变量值 */
+    private static final Pattern COND_PATTERN =
+        Pattern.compile("([A-Za-z_][\\w]*)\\s*(>=|<=|==|!=|>|<)\\s*('[^']*'|-?\\d+(?:\\.\\d+)?|true|false)");
+
+    private Map<String, Object> deriveValues(String expr) {
+        Map<String, Object> vals = new LinkedHashMap<>();
+        Matcher m = COND_PATTERN.matcher(expr);
+        while (m.find()) {
+            Object lit = parseLiteral(m.group(3));
+            Object sat = satisfy(m.group(2), lit);
+            if (sat != null) {
+                vals.put(m.group(1), sat);
+            }
+        }
+        return vals;
+    }
+
+    private Object parseLiteral(String lit) {
+        if (lit.startsWith("'")) {
+            return lit.substring(1, lit.length() - 1);
+        }
+        if ("true".equalsIgnoreCase(lit) || "false".equalsIgnoreCase(lit)) {
+            return Boolean.valueOf(lit);
+        }
+        try {
+            return lit.contains(".") ? (Object) Double.valueOf(lit) : (Object) Long.valueOf(lit);
+        } catch (Exception e) {
+            return lit;
+        }
+    }
+
+    /** 按运算符给出一个「满足条件」的取值 */
+    private Object satisfy(String op, Object v) {
+        if (v instanceof Number) {
+            double d = ((Number) v).doubleValue();
+            switch (op) {
+                case ">": return d + 1;
+                case ">=": return v;
+                case "<": return d - 1;
+                case "<=": return v;
+                case "==": return v;
+                case "!=": return d + 1;
+                default: return v;
+            }
+        }
+        if (v instanceof Boolean) {
+            return "!=".equals(op) ? Boolean.valueOf(!((Boolean) v)) : v;
+        }
+        String s = String.valueOf(v);
+        return "!=".equals(op) ? s + "_其他" : s;
+    }
+
+    private String abbreviate(String s) {
+        String t = s.replaceAll("\\s+", " ").trim();
+        return t.length() <= 40 ? t : t.substring(0, 40) + "…";
+    }
+
+    private String linkKey(WfNodeLink l) {
+        return l.getFromNodeKey() + "→" + l.getToNodeKey();
+    }
+
+    /** 由「被引擎真实走过的出口」还原流转路径 */
+    private List<WfTestResultVO.TestStepVO> buildPathFromLinkTimes(List<WfNodeLink> links,
+            Map<String, Integer> linkTimes) {
+        Map<String, WfNodeLink> byKey = new LinkedHashMap<>();
+        for (WfNodeLink l : links) {
+            byKey.putIfAbsent(linkKey(l), l);
+        }
+        List<WfTestResultVO.TestStepVO> path = new ArrayList<>();
+        for (String k : linkTimes.keySet()) {
+            int i = k.indexOf('→');
+            if (i <= 0) {
+                continue;
+            }
+            WfTestResultVO.TestStepVO step = new WfTestResultVO.TestStepVO();
+            step.setFromNodeKey(k.substring(0, i));
+            step.setToNodeKey(k.substring(i + 1));
+            WfNodeLink l = byKey.get(k);
+            if (l != null) {
+                step.setConditionCn(l.getConditionCn());
+            }
+            path.add(step);
+        }
+        return path;
+    }
+
+    /** 出口级覆盖率：逐条出口标注是否被真实走到（合并所有场景） */
+    private void fillLinkCoverage(WfTestResultVO result, List<WfNodeLink> links,
+            List<WfProcessNode> nodeList, Map<String, Integer> linkTimes) {
+        List<WfTestResultVO.TestLinkVO> vos = new ArrayList<>();
+        int passed = 0;
+        for (WfNodeLink l : links) {
+            Integer times = linkTimes.get(linkKey(l));
+            int t = times == null ? 0 : times;
+            WfTestResultVO.TestLinkVO vo = new WfTestResultVO.TestLinkVO();
+            vo.setFromNodeKey(l.getFromNodeKey());
+            vo.setToNodeKey(l.getToNodeKey());
+            vo.setFromNodeName(nodeName(nodeList, l.getFromNodeKey()));
+            vo.setToNodeName(nodeName(nodeList, l.getToNodeKey()));
+            vo.setConditionExpr(l.getConditionExpr());
+            vo.setConditionCn(l.getConditionCn());
+            vo.setPassTimes(t);
+            vo.setStatus(t > 0 ? 1 : 0);
+            if (t > 0) {
+                passed++;
+            }
+            vos.add(vo);
+        }
+        result.setLinks(vos);
+        result.setLinkTotal(vos.size());
+        result.setLinkPassed(passed);
+    }
+
+    private WfTestResultVO.TestScenarioVO toScenarioVo(int idx, Scenario sc, SingleRun sr) {
+        WfTestResultVO.TestScenarioVO vo = new WfTestResultVO.TestScenarioVO();
+        vo.setIndex(idx);
+        vo.setLabel(sc.label);
+        vo.setFormData(sc.formData);
+        vo.setReachedEnd(sr.reachedEnd);
+        vo.setPath(new ArrayList<>(sr.pathNodes));
+        if (sr.fatal != null) {
+            vo.setTestStatus(WfTestLog.TEST_ABORTED);
+            vo.setSummary(sr.fatal.getValue());
+        } else if (sr.reachedEnd) {
+            vo.setTestStatus(WfTestLog.TEST_PASSED);
+            vo.setSummary("真实走通到归档，经过 " + sr.visitedNodes.size() + " 个节点");
+        } else {
+            vo.setTestStatus(WfTestLog.TEST_FAILED);
+            vo.setSummary(sr.aborted ? "驱动中断（步数超限或实例仍运行中）" : "未走到归档节点");
+        }
+        return vo;
+    }
+
+    /** 一个测试场景（一组表单变量 + 说明） */
+    private static class Scenario {
+        final String label;
+        final Map<String, Object> formData;
+        Scenario(String label, Map<String, Object> formData) {
+            this.label = label;
+            this.formData = formData;
+        }
+    }
+
+    /** 单个场景真实跑完后的覆盖数据 */
+    private static class SingleRun {
+        Long instId;
+        boolean reachedEnd;
+        boolean aborted;
+        Map.Entry<String, String> fatal;
+        final Map<String, Integer> nodeTimes = new LinkedHashMap<>();
+        final Set<String> visitedNodes = new LinkedHashSet<>();
+        final List<String> pathNodes = new ArrayList<>();
+        final Map<String, Integer> linkTimes = new LinkedHashMap<>();
     }
 
     /**

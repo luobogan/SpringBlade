@@ -31,4 +31,14 @@ public class WfTestRunDTO {
      */
     @Schema(description = "模拟表单数据（fieldName -> value）；为空则按全量走查")
     private Map<String, Object> formData;
+
+    /**
+     * 是否开启「分支覆盖」：按排他网关各分支的条件<b>反推变量取值</b>，为每个分支额外跑一次
+     * 真实引擎实例，合并覆盖率。
+     *
+     * <p>不开启时一组表单数据只能走通网关的一条分支，其余分支节点会被判「未走到」，
+     * 属于假阴性；开启后「每条线」都有机会被真实走到。</p>
+     */
+    @Schema(description = "是否按网关分支枚举多场景以覆盖到每条出口")
+    private Boolean coverBranches;
 }

@@ -52,6 +52,21 @@ public class WfTestResultVO {
     @Schema(description = "测试日志（逐行）")
     private List<String> log;
 
+    @Schema(description = "出口（连线）总数")
+    private Integer linkTotal;
+
+    @Schema(description = "被真实走过的出口数")
+    private Integer linkPassed;
+
+    @Schema(description = "逐条出口的覆盖情况（是否真被引擎走到）")
+    private List<TestLinkVO> links;
+
+    @Schema(description = "本次实际执行的场景数（开启分支覆盖时 >1）")
+    private Integer scenarioCount;
+
+    @Schema(description = "每个场景的执行概要")
+    private List<TestScenarioVO> scenarios;
+
     @Data
     @Schema(description = "单个节点的测试结果")
     public static class TestNodeVO {
@@ -91,5 +106,45 @@ public class WfTestResultVO {
         private String toNodeKey;
         @Schema(description = "所走出口条件中文（无则为空）")
         private String conditionCn;
+    }
+
+    @Data
+    @Schema(description = "单条出口（连线）的覆盖情况")
+    public static class TestLinkVO {
+        @Schema(description = "源节点Key")
+        private String fromNodeKey;
+        @Schema(description = "目标节点Key")
+        private String toNodeKey;
+        @Schema(description = "源节点名称")
+        private String fromNodeName;
+        @Schema(description = "目标节点名称")
+        private String toNodeName;
+        @Schema(description = "出口条件表达式")
+        private String conditionExpr;
+        @Schema(description = "出口条件中文")
+        private String conditionCn;
+        @Schema(description = "被引擎真实走过的次数")
+        private Integer passTimes;
+        @Schema(description = "结果 1走过 0未走过")
+        private Integer status;
+    }
+
+    @Data
+    @Schema(description = "单个测试场景的执行概要")
+    public static class TestScenarioVO {
+        @Schema(description = "场景序号（从 1 开始）")
+        private Integer index;
+        @Schema(description = "场景说明（如「分支：金额>1000」）")
+        private String label;
+        @Schema(description = "该场景使用的表单变量")
+        private Map<String, Object> formData;
+        @Schema(description = "该场景结论 0未通过 1通过 2中断")
+        private Integer testStatus;
+        @Schema(description = "是否走到归档")
+        private Boolean reachedEnd;
+        @Schema(description = "该场景实际经过的节点序列")
+        private List<String> path;
+        @Schema(description = "摘要")
+        private String summary;
     }
 }
