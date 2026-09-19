@@ -46,6 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.text.SimpleDateFormat;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -280,11 +281,27 @@ public class WfTestServiceImpl implements IWfTestService {
             try {
                 String engineInstId = inst == null ? null : inst.getEngineInstId();
                 if (engineInstId != null) {
-                    List<HistoricActivityInstance> acts = processService.historicActivities(engineInstId);
+                    List<HistoricActivityInstance> acts =
+                        new ArrayList<>(processService.historicActivities(engineInstId));
+                    // 同一毫秒内完成的相邻活动（开始事件 / 顺序流 / 自动通过的任务）开始时间完全相同，
+                    // 只按 startTime 查询出来的相对顺序不稳定 → 用自增主键 ID_ 做二级排序，
+                    // 否则「相邻节点对」会还原成错误的流转，出口覆盖率恒为 0。
+                    if (acts.size() > 1) {
+                        Comparator<HistoricActivityInstance> byStart = Comparator.comparing(
+                            HistoricActivityInstance::getStartTime,
+                            Comparator.nullsLast(Date::compareTo));
+                        acts.sort(byStart.thenComparingLong(a -> histOrderKey(a.getId())));
+                    }
                     String prev = null;
                     for (HistoricActivityInstance a : acts) {
                         String aid = a.getActivityId();
                         if (aid == null) {
+                            continue;
+                        }
+                        // 引擎把「顺序流」也写进历史活动（ACT_TYPE_=sequenceFlow，如 Flow_1svagre）。
+                        // 它不是节点，却会插在相邻节点之间把 prev→cur 打断（开始→Flow_x→业务领导），
+                        // 使「相邻节点对」对不上任何一条物理出口 → 出口覆盖率恒为 0。这里直接跳过。
+                        if ("sequenceFlow".equals(a.getActivityType())) {
                             continue;
                         }
                         sr.nodeTimes.merge(aid, 1, Integer::sum);
@@ -398,6 +415,18 @@ public class WfTestServiceImpl implements IWfTestService {
     private String abbreviate(String s) {
         String t = s.replaceAll("\\s+", " ").trim();
         return t.length() <= 40 ? t : t.substring(0, 40) + "…";
+    }
+
+    /**
+     * 历史活动排序键：ACT_HI_ACTINST.ID_ 是自增主键，数值大小即真实发生顺序。
+     * 非数字型 ID（换用 UUID 生成器时）统一排到末尾，退化为按开始时间排序。
+     */
+    private static long histOrderKey(String id) {
+        try {
+            return Long.parseLong(id);
+        } catch (Exception ignore) {
+            return Long.MAX_VALUE;
+        }
     }
 
     private String linkKey(WfNodeLink l) {
