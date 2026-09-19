@@ -13,6 +13,7 @@ import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.dto.WfTestRunDTO;
+import org.springblade.workflow.dto.ValidateDTO;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
@@ -38,6 +39,7 @@ import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.service.IWfTestService;
+import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.vo.WfTestResultVO;
 import org.springframework.stereotype.Service;
@@ -97,6 +99,7 @@ public class WfTestServiceImpl implements IWfTestService {
     private final WfNodeLinkMapper linkMapper;
     private final WfNodeOperatorMapper operatorMapper;
     private final WfNodeFieldPermMapper fieldPermMapper;
+    private final IWfFormRenderService formRenderService;
 
     @Override
     public WfTestResultVO run(WfTestRunDTO dto) {
@@ -260,6 +263,22 @@ public class WfTestServiceImpl implements IWfTestService {
                 }
                 for (WfTask t : todos) {
                     try {
+                        // 模拟真实审批提交：节点必填矩阵校验（与 ExcelPreviewPage 提交前 validateForm 同款口径）。
+                        // 否则表单必填项未填写也能被系统自动通过推进，测试会「假通过」。
+                        ValidateDTO vdto = new ValidateDTO();
+                        vdto.setInstanceId(instId);
+                        vdto.setDefId(defId);
+                        vdto.setNodeKey(t.getNodeKey());
+                        vdto.setFormData(sc.formData);
+                        try {
+                            formRenderService.validate(vdto);
+                        } catch (ServiceException ve) {
+                            String msg = "节点【" + t.getNodeKey() + "】必填校验未通过（表单必填项未填写），已终止该场景："
+                                + ve.getMessage();
+                            logLines.add(fmt.format(new Date()) + " " + msg);
+                            sr.fatal = new AbstractMap.SimpleEntry<>(t.getNodeKey(), msg);
+                            return sr;
+                        }
                         taskService.autoApprove(t.getId(), "测试自动通过");
                         logLines.add(fmt.format(new Date()) + " 节点【" + t.getNodeKey() + "】已自动通过（办理人="
                             + t.getAssignee() + "）");
