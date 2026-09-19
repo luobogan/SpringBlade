@@ -36,4 +36,14 @@ public class WfTestStepDTO implements Serializable {
     @Schema(description = "当前节点表单值（手动测试可修改后提交；作为流程变量驱动网关）")
     private Map<String, Object> formData;
 
+    /**
+     * 本次提交的表单值**所属的流程节点 Key**（＝前端右侧表单当前所在节点）。
+     *
+     * <p>必填校验按「提交值来自哪份表单」执行，否则会出现死锁：测试者在开始节点表单填完提交，
+     * 却因首个待办节点**自己那份布局**的必填（字段不在开始节点表单里，根本填不到）而被拦住，
+     * 实例永远无法推进。传空时回退为「当前待办节点」，兼容「开始自动测试」等无表单值调用。</p>
+     */
+    @Schema(description = "本次提交表单值所属的节点 Key（为空=当前待办节点）")
+    private String formNodeKey;
+
 }

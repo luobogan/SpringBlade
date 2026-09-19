@@ -257,6 +257,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setEndTime(new Date());
             inst.setCurrentNodeKey("");
             instanceMapper.updateById(inst);
+            // 归档补一条流转意见：否则「流转意见」里只有各办理节点，看不到最终归档这一步。
+            appendArchiveLog(inst, lastNodeKey);
             // 节点信息 → 运行时消费：归档后子流程触发（settings.subflow.trigger=afterArchive）
             // 测试态：跳过附加操作/子流程副作用，避免污染真实业务数据（对齐 ecology istest）
             if (inst.getIsTest() == null || inst.getIsTest() != 1) {
@@ -474,9 +476,30 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return vo;
     }
 
+    /**
+     * 流程归档时补一条流转意见。
+     *
+     * <p>nodeKey 取归档节点（nodeType=3）；未配置归档节点时退回「最后经过的节点」。
+     * 操作人记 0（系统）、意见固定「流程归档」，与前端「流转意见」的节点名/动作标签展示对应。</p>
+     */
+    private void appendArchiveLog(WfInstance inst, String lastNodeKey) {
+        String nodeKey = (lastNodeKey == null) ? "" : lastNodeKey;
+        try {
+            WfProcessNode archive = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, inst.getDefId())
+                .eq(WfProcessNode::getNodeType, 3)
+                .last("LIMIT 1"));
+            if (archive != null && archive.getNodeKey() != null && !archive.getNodeKey().isEmpty()) {
+                nodeKey = archive.getNodeKey();
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 查询归档节点失败，流转意见退回最后经过节点. instId={}", inst.getId(), e);
+        }
+        appendLog(inst.getId(), null, nodeKey, 0L, WfApprovalLog.LOG_APPROVE, "流程归档");
+    }
+
     private void appendLog(Long instId, Long taskId, String nodeKey, Long operator,
-                           String logType, String opinion) {
-        WfApprovalLog log = new WfApprovalLog();
+                           String logType, String opinion) {        WfApprovalLog log = new WfApprovalLog();
         log.setInstId(instId);
         log.setTaskId(taskId);
         log.setNodeKey(nodeKey == null ? "" : nodeKey);

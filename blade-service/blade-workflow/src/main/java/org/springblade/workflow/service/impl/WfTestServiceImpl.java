@@ -949,13 +949,16 @@ public class WfTestServiceImpl implements IWfTestService {
             return state(instId);
         }
 
-        // 手动测试：先把当前表单值落快照（历史回溯/渲染），并作为流程变量驱动后续网关
-        Map<String, Object> variables;
-        if (dto.getFormData() != null && !dto.getFormData().isEmpty()) {
-            variables = dto.getFormData();
+        // 手动测试：流程变量 =「实例最新快照」+「本次提交值」**合并**（累加，而非覆盖），并落一份快照。
+        // ⚠️ 必须合并：测试者按节点逐个填写提交，前序节点已填的值（如申请人字段）不能丢——
+        // 历史 bug：覆盖式导致「在业务领导节点提交时开始节点必填被反复报缺失」类问题，
+        // 也会让后续排他网关取不到前面填的字段而选错分支。
+        Map<String, Object> submitted = dto.getFormData();
+        boolean hasSubmitted = submitted != null && !submitted.isEmpty();
+        Map<String, Object> variables = new LinkedHashMap<>(loadLatestFormData(instId));
+        if (hasSubmitted) {
+            variables.putAll(submitted);
             saveSnapshot(instId, inst.getCurrentNodeKey(), variables);
-        } else {
-            variables = loadLatestFormData(instId);
         }
 
         List<WfTask> todos = pendingTestTasks(instId);
@@ -971,8 +974,51 @@ public class WfTestServiceImpl implements IWfTestService {
             return r;
         }
 
+        // 当前待办所在节点：一次提交只办理「一个节点」的待办（交互式测试＝逐节点推进）
+        String curNodeKey = todos.get(0).getNodeKey();
+
+        // 「开始节点（申请人）」表单的提交：只做必填校验 + 落快照，**不推进引擎**。
+        // 原因：开始节点在 instanceService.start 时已被 advance() 自动完成、不生成待办，引擎本就停在
+        // 下一个待办节点上；若在这里顺手把那个待办办掉，测试者就再没机会办理它
+        //（现象：「开始节点提交后，任务非待办状态，不可处理」）。
+        // 返回的 currentNodeKey 会让前端面板自动切到该节点，继续办理。
+        WfProcessNode firstNode = firstNodeOf(inst.getDefId());
+        boolean fromStartNode = firstNode != null
+            && firstNode.getNodeKey().equals(dto.getFormNodeKey())
+            && todos.stream().noneMatch(x -> firstNode.getNodeKey().equals(x.getNodeKey()));
+        if (fromStartNode) {
+            ValidateDTO startVdto = new ValidateDTO();
+            startVdto.setInstanceId(instId);
+            startVdto.setDefId(inst.getDefId());
+            startVdto.setNodeKey(firstNode.getNodeKey());
+            startVdto.setFormData(variables);
+            formRenderService.validate(startVdto);
+            List<String> startMissing = new ArrayList<>();
+            collectLayoutRequired(inst.getFormId(), firstNode.getNodeKey(), variables, startMissing);
+            if (!startMissing.isEmpty()) {
+                throw new ServiceException("开始节点【" + firstNode.getNodeName()
+                    + "】表单必填未填： " + String.join("、", startMissing));
+            }
+            WfInstance afterStart = instanceMapper.selectById(instId);
+            WfTestResultVO r = state(instId);
+            r.setSummary("已提交开始节点（申请人）表单，流程停在【" + r.getCurrentNodeName() + "】等待办理。");
+            persistInteractiveLogIfFinished(afterStart, r);
+            return r;
+        }
+
         String opinion = StringUtil.isBlank(dto.getOpinion()) ? DEFAULT_TEST_OPINION : dto.getOpinion();
         for (WfTask t : todos) {
+            // 一次提交只办理「当前待办节点」的待办（多节点并存时同样逐节点推进）
+            if (!curNodeKey.equals(t.getNodeKey())) {
+                continue;
+            }
+            // 逐条重新读库：或签办结首条时会 closeSiblings 关闭同节点其余待办并推进引擎，
+            // 继续办理这些已关闭的待办会自动办理接口抛「任务非待办状态，不可处理」→
+            // 整笔事务回滚（现象：提交报错、什么也没发生）。这里直接跳过已非待办的记录。
+            WfTask fresh = taskMapper.selectById(t.getId());
+            if (fresh == null || !Integer.valueOf(WfTask.STATUS_TODO).equals(fresh.getStatus())) {
+                continue;
+            }
             // 模拟真实提交：节点必填矩阵校验（未填则抛 ServiceException，前端提示补填后再提交）
             ValidateDTO vdto = new ValidateDTO();
             vdto.setInstanceId(instId);
@@ -987,17 +1033,31 @@ public class WfTestServiceImpl implements IWfTestService {
             // ② 其余节点：仅「手动提交且携带了表单值」时校验（交互式自动测试是系统空表单走查，
             //    必填由一键测试带场景变量反推核查），避免空表单被布局必填误杀成 400。
             boolean startNode = isStartNode(inst.getDefId(), t.getNodeKey());
-            if (startNode || (dto.getFormData() != null && !dto.getFormData().isEmpty())) {
+            // 校验对象＝**本次提交值所属节点**（前端右侧表单当前所在节点，dto.formNodeKey）：
+            // 一个表单在不同节点各有一份布局、必填各不相同；若固定按「待办节点」校验，就会出现
+            // 「在开始节点表单填完提交，却被首个待办节点自己那份布局的必填拦住」的死锁
+            // （那些字段不在开始节点表单里，测试者根本填不到）。未传 formNodeKey 时回退待办节点，
+            // 兼容「开始自动测试」这类不带表单值的空表单走查。
+            String checkNodeKey = StringUtil.isNotBlank(dto.getFormNodeKey()) ? dto.getFormNodeKey() : t.getNodeKey();
+            if (startNode || hasSubmitted) {
                 List<String> layoutMissing = new ArrayList<>();
-                collectLayoutRequired(inst.getFormId(), t.getNodeKey(), variables, layoutMissing);
+                collectLayoutRequired(inst.getFormId(), checkNodeKey, variables, layoutMissing);
                 if (!layoutMissing.isEmpty()) {
-                    throw new ServiceException("以下字段为必填： " + String.join("、", layoutMissing));
+                    // 必须带「节点名」：否则用户只看到字段名，不知道是哪个节点的布局在要求必填。
+                    WfProcessNode curNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                        .eq(WfProcessNode::getDefId, inst.getDefId())
+                        .eq(WfProcessNode::getNodeKey, checkNodeKey)
+                        .last("LIMIT 1"));
+                    String curName = (curNode != null && curNode.getNodeName() != null && !curNode.getNodeName().isEmpty())
+                        ? curNode.getNodeName() : checkNodeKey;
+                    throw new ServiceException("节点【" + curName + "】以下字段为必填： "
+                        + String.join("、", layoutMissing));
                 }
             }
             // 首节点（创建/申请人）必填兜底：开始节点在 instanceService.start 时即被 advance() 自动完成、
             // 不生成待办，其表单只在本实例「首次提交」时才有机会校验——否则开始节点必填未填会被静默放过（假通过）。
             // 判据：该实例尚无「已办」任务（即当前是首次提交）；校验值用本次提交的表单值（含快照兜底）。
-            WfProcessNode firstNode = firstNodeOf(inst.getDefId());
+            // 注：firstNode 已在外层取好（同一提交内复用）。
             if (firstNode != null && !firstNode.getNodeKey().equals(t.getNodeKey())) {
                 Long doneCount = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
                     .eq(WfTask::getInstId, instId)
@@ -1159,7 +1219,15 @@ public class WfTestServiceImpl implements IWfTestService {
             } else if (root.get("cellData") != null) {
                 sheets.add(root);
             }
-            Set<String> checked = new HashSet<>();
+            // 按「字段」聚合判定，而不是按「单元格」逐个判定：
+            // 同一字段在布局里通常占两个格——标签格（cellType=label）与值格（cellType=field），
+            // 且两格都可能带必填标记；值只可能落在值格上。若按格逐个判定并用 checked 去重，
+            // 先遍历到的标签格（没有值）就会把该字段判为缺失，随后值格被去重跳过
+            // → 用户明明填了值仍报「必填未填」（历史 bug）。
+            // 正确口径：必填 = 该字段任一方格标了必填；已填 = 任一方格的单元格 key 或字段名在表单值里有值。
+            Map<String, Boolean> fieldRequired = new LinkedHashMap<>();
+            Map<String, Boolean> fieldFilled = new LinkedHashMap<>();
+            Map<String, String> fieldLabel = new LinkedHashMap<>();
             for (JsonNode sheet : sheets) {
                 String sheetId = sheetIdOf(sheet, root);
                 JsonNode cellData = sheet.get("cellData");
@@ -1185,7 +1253,15 @@ public class WfTestServiceImpl implements IWfTestService {
                             continue;
                         }
                         JsonNode cellType = fieldMeta.get("cellType");
-                        if (cellType != null && "detailTableMarker".equals(cellType.asText())) {
+                        // 只统计「输入格」：cellType 为空（老布局）或 =field；
+                        // 标签格（label）/元素格/明细表标记等只是展示，不承载值。
+                        // 与前端 ExcelPreview 的提交校验口径一致（它仅对 cellType==='field' 的格做必填判定）。
+                        if (cellType != null && !cellType.asText().isEmpty() && !"field".equals(cellType.asText())) {
+                            continue;
+                        }
+                        JsonNode fieldNameNode = fieldMeta.get("fieldName");
+                        String fieldName = fieldNameNode != null ? fieldNameNode.asText() : null;
+                        if (fieldName == null || fieldName.isEmpty()) {
                             continue;
                         }
                         boolean required = false;
@@ -1197,27 +1273,11 @@ public class WfTestServiceImpl implements IWfTestService {
                         if (requiredNode != null && requiredNode.asBoolean(false)) {
                             required = true;
                         }
-                        if (!required) {
-                            continue;
-                        }
-                        JsonNode fieldNameNode = fieldMeta.get("fieldName");
-                        String fieldName = fieldNameNode != null ? fieldNameNode.asText() : null;
-                        if (fieldName == null || fieldName.isEmpty()) {
-                            continue;
-                        }
-                        if (checked.contains(fieldName)) {
-                            continue;
-                        }
-                        checked.add(fieldName);
-                        boolean filled = false;
                         String cellKeyStr = sheetId + "__" + rowEntry.getKey() + "__" + colEntry.getKey();
-                        if (!isBlank(formData.get(cellKeyStr))) {
-                            filled = true;
-                        }
-                        if (!filled && !isBlank(formData.get(fieldName))) {
-                            filled = true;
-                        }
-                        if (!filled) {
+                        boolean filled = !isBlank(formData.get(cellKeyStr)) || !isBlank(formData.get(fieldName));
+                        fieldRequired.merge(fieldName, required, Boolean::logicalOr);
+                        fieldFilled.merge(fieldName, filled, Boolean::logicalOr);
+                        if (!fieldLabel.containsKey(fieldName)) {
                             // 提示信息优先用「字段标签(字段名)」：标签可读，字段名便于定位/程序处理
                             JsonNode labelNode = fieldMeta.get("fieldLabel");
                             if (labelNode == null || labelNode.asText().isEmpty()) {
@@ -1225,10 +1285,22 @@ public class WfTestServiceImpl implements IWfTestService {
                             }
                             String label = (labelNode != null && !labelNode.asText().isEmpty())
                                 ? labelNode.asText() : fieldName;
-                            missing.add(label.equals(fieldName) ? fieldName : (label + "(" + fieldName + ")"));
+                            fieldLabel.put(fieldName, label);
                         }
                     }
                 }
+            }
+            // 汇总缺失：必填 且 所有格都没有值
+            for (Map.Entry<String, Boolean> en : fieldRequired.entrySet()) {
+                if (!Boolean.TRUE.equals(en.getValue())) {
+                    continue;
+                }
+                String fieldName = en.getKey();
+                if (Boolean.TRUE.equals(fieldFilled.get(fieldName))) {
+                    continue;
+                }
+                String label = fieldLabel.getOrDefault(fieldName, fieldName);
+                missing.add(label.equals(fieldName) ? fieldName : (label + "(" + fieldName + ")"));
             }
         } catch (Exception e) {
             log.warn("[blade-workflow] 布局必填校验解析失败，已降级跳过. formId={}, nodeKey={}", formId, nodeKey, e);
