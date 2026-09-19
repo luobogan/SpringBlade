@@ -35,6 +35,7 @@ import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
+import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.mapper.WfNodeDetailPermMapper;
 import org.springblade.workflow.mapper.WfNodeFieldPermMapper;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
@@ -42,6 +43,7 @@ import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfWorkflowTypeMapper;
+import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfDefinitionService;
@@ -92,6 +94,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final IProcessService processService;
     /** 跨服务清理节点布局（form_layout）用 */
     private final IFormmodeClient formmodeClient;
+    /** 流程实例（删除前保护校验：参考 Weaver「有实例禁止删」） */
+    private final WfInstanceMapper instanceMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -965,6 +969,18 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         WfProcessDefinition def = defMapper.selectById(id);
         if (def == null) {
             return false;
+        }
+        // 删除前保护：参考 Weaver WFMainManager.getCheckBox —— 同一流程版本组（按 active_version_id 锚点）内
+        // 只要存在「正式（非测试）且在用（未删除）」的流程实例，就禁止删除，避免误删正在被使用的流程。
+        Long anchor = anchorOf(def);
+        List<WfProcessDefinition> group = versionGroup(anchor);
+        List<Long> groupIds = group.stream().map(WfProcessDefinition::getId).collect(Collectors.toList());
+        Long used = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .in(WfInstance::getDefId, groupIds)
+            .eq(WfInstance::getIsTest, 0)
+            .eq(WfInstance::getIsDeleted, 0));
+        if (used != null && used > 0) {
+            throw new ServiceException("该流程正在使用中（存在流程实例），无法删除");
         }
         // ① 节点列表（用于级联清理操作者 / 布局）
         List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()

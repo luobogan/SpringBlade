@@ -397,9 +397,25 @@ public class WfTaskServiceImpl implements IWfTaskService {
         }
     }
 
+    /**
+     * 富文本意见的「空」判定：编辑器里的空内容是 {@code <p><br></p>} 这类标签，
+     * 直接 trim 会判成非空，使「意见必填」形同虚设（前端同口径，见 isRichTextEmpty）。
+     */
+    private static boolean isBlankOpinion(String opinion) {
+        if (opinion == null) {
+            return true;
+        }
+        return opinion
+            .replaceAll("(?i)<br\\s*/?>", "")
+            .replace("&nbsp;", "")
+            .replaceAll("<[^>]*>", "")
+            .trim()
+            .isEmpty();
+    }
+
     /** 意见处理：必填校验 + 缺省套用「签字意见设置」的默认模板 */
     private String resolveOpinion(WfProcessNode node, String opinion) {
-        boolean blank = opinion == null || opinion.trim().isEmpty();
+        boolean blank = isBlankOpinion(opinion);
         if (blank) {
             if (WfNodeSettingsUtil.opinionRequired(node)) {
                 throw new ServiceException("该节点必须填写签字意见");
