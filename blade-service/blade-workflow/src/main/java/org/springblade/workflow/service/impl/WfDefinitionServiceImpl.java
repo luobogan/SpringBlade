@@ -112,18 +112,19 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
 
         Long defId = def.getId();
-        // 节点 / 出口 / 操作者整体覆盖：
-        // 先按「节点ID」删除操作者，再删节点。老代码误用 eq(nodeId, defId)（nodeId≠defId）导致操作者残留。
-        List<WfProcessNode> oldNodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
-            .select(WfProcessNode::getId).eq(WfProcessNode::getDefId, defId));
-        if (!oldNodes.isEmpty()) {
-            List<Long> oldNodeIds = oldNodes.stream().map(WfProcessNode::getId).collect(Collectors.toList());
-            operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery().in(WfNodeOperator::getNodeId, oldNodeIds));
-        }
-        nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
-        linkMapper.delete(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
-
+        // 节点 / 出口 / 操作者「整体覆盖」：**仅当 DTO 显式携带对应集合时才重建**。
+        // ⚠️ 历史 bug（数据丢失）：此前无条件「先删 nodes/links/operators，再按 DTO 重建」，
+        // 而「基础设置」保存只提交 { definition: {...} }（不带 nodes/links）→ 一次普通保存就把
+        // 画布上已设计好的节点/出口/操作者全部（逻辑）删除且不重建，且删除为逻辑删除（is_deleted=1）可恢复。
         if (dto.getNodes() != null) {
+            // 先按「节点ID」删除操作者，再删节点。老代码误用 eq(nodeId, defId)（nodeId≠defId）导致操作者残留。
+            List<WfProcessNode> oldNodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+                .select(WfProcessNode::getId).eq(WfProcessNode::getDefId, defId));
+            if (!oldNodes.isEmpty()) {
+                List<Long> oldNodeIds = oldNodes.stream().map(WfProcessNode::getId).collect(Collectors.toList());
+                operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery().in(WfNodeOperator::getNodeId, oldNodeIds));
+            }
+            nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
             for (WfProcessNode node : dto.getNodes()) {
                 node.setId(null);
                 node.setDefId(defId);
@@ -131,6 +132,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             }
         }
         if (dto.getLinks() != null) {
+            linkMapper.delete(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
             for (WfNodeLink link : dto.getLinks()) {
                 link.setId(null);
                 link.setDefId(defId);
@@ -138,6 +140,13 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             }
         }
         if (dto.getOperators() != null) {
+            // 操作者按 node_id 归属：清理当前（若上面刚重建则为新）节点的操作者后重建
+            List<WfProcessNode> curNodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+                .select(WfProcessNode::getId).eq(WfProcessNode::getDefId, defId));
+            if (!curNodes.isEmpty()) {
+                List<Long> curNodeIds = curNodes.stream().map(WfProcessNode::getId).collect(Collectors.toList());
+                operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery().in(WfNodeOperator::getNodeId, curNodeIds));
+            }
             for (WfNodeOperator op : dto.getOperators()) {
                 op.setId(null);
                 operatorMapper.insert(op);

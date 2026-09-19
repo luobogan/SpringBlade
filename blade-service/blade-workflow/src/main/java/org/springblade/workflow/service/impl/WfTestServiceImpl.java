@@ -1006,7 +1006,7 @@ public class WfTestServiceImpl implements IWfTestService {
                     List<String> firstMissing = new ArrayList<>();
                     collectLayoutRequired(inst.getFormId(), firstNode.getNodeKey(), variables, firstMissing);
                     if (!firstMissing.isEmpty()) {
-                        throw new ServiceException("开始节点【" + firstNode.getNodeKey()
+                        throw new ServiceException("开始节点【" + firstNode.getNodeName()
                             + "】表单必填未填： " + String.join("、", firstMissing));
                     }
                 }
@@ -1109,13 +1109,13 @@ public class WfTestServiceImpl implements IWfTestService {
             vdto.setFormData(fd);
             formRenderService.validate(vdto);
         } catch (ServiceException ve) {
-            return "开始节点【" + startNode.getNodeKey() + "】必填校验未通过（字段权限）：" + ve.getMessage();
+            return "开始节点【" + startNode.getNodeName() + "】必填校验未通过（字段权限）：" + ve.getMessage();
         }
         // ② 布局级必填（表单设计器配置的「必填」）
         List<String> layoutMissing = new ArrayList<>();
         collectLayoutRequired(def.getFormId(), startNode.getNodeKey(), fd, layoutMissing);
         if (!layoutMissing.isEmpty()) {
-            return "开始节点【" + startNode.getNodeKey() + "】必填校验未通过（布局必填）：" + String.join("、", layoutMissing);
+            return "开始节点【" + startNode.getNodeName() + "】必填校验未通过（布局必填）：" + String.join("、", layoutMissing);
         }
         return null;
     }
@@ -1218,7 +1218,14 @@ public class WfTestServiceImpl implements IWfTestService {
                             filled = true;
                         }
                         if (!filled) {
-                            missing.add(fieldName);
+                            // 提示信息优先用「字段标签(字段名)」：标签可读，字段名便于定位/程序处理
+                            JsonNode labelNode = fieldMeta.get("fieldLabel");
+                            if (labelNode == null || labelNode.asText().isEmpty()) {
+                                labelNode = fieldMeta.get("label");
+                            }
+                            String label = (labelNode != null && !labelNode.asText().isEmpty())
+                                ? labelNode.asText() : fieldName;
+                            missing.add(label.equals(fieldName) ? fieldName : (label + "(" + fieldName + ")"));
                         }
                     }
                 }
