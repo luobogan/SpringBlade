@@ -3,6 +3,9 @@ package org.springblade.workflow.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.flowable.engine.history.HistoricActivityInstance;
@@ -10,9 +13,11 @@ import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.StringUtil;
+import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.dto.WfTestRunDTO;
+import org.springblade.workflow.dto.WfTestStepDTO;
 import org.springblade.workflow.dto.ValidateDTO;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfFormSnapshot;
@@ -41,6 +46,7 @@ import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.service.IWfTestService;
 import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.vo.WfTestResultVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,6 +60,8 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -83,6 +91,10 @@ public class WfTestServiceImpl implements IWfTestService {
     private static final int MAX_STEPS = 1000;
     private static final int LIST_LIMIT = 100;
     private static final int MAX_OPERATORS = 5;
+    /** 交互式测试默认签字意见 */
+    private static final String DEFAULT_TEST_OPINION = "流程测试提交";
+    /** 解析 wf_form_snapshot.data_json 用 */
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
@@ -100,6 +112,7 @@ public class WfTestServiceImpl implements IWfTestService {
     private final WfNodeOperatorMapper operatorMapper;
     private final WfNodeFieldPermMapper fieldPermMapper;
     private final IWfFormRenderService formRenderService;
+    private final IFormmodeClient formmodeClient;
 
     @Override
     public WfTestResultVO run(WfTestRunDTO dto) {
@@ -297,46 +310,11 @@ public class WfTestServiceImpl implements IWfTestService {
             sr.aborted = steps >= MAX_STEPS
                 || (inst != null && WfInstance.STATUS_RUNNING == inst.getStatus());
 
-            try {
-                String engineInstId = inst == null ? null : inst.getEngineInstId();
-                if (engineInstId != null) {
-                    List<HistoricActivityInstance> acts =
-                        new ArrayList<>(processService.historicActivities(engineInstId));
-                    // 同一毫秒内完成的相邻活动（开始事件 / 顺序流 / 自动通过的任务）开始时间完全相同，
-                    // 只按 startTime 查询出来的相对顺序不稳定 → 用自增主键 ID_ 做二级排序，
-                    // 否则「相邻节点对」会还原成错误的流转，出口覆盖率恒为 0。
-                    if (acts.size() > 1) {
-                        Comparator<HistoricActivityInstance> byStart = Comparator.comparing(
-                            HistoricActivityInstance::getStartTime,
-                            Comparator.nullsLast(Date::compareTo));
-                        acts.sort(byStart.thenComparingLong(a -> histOrderKey(a.getId())));
-                    }
-                    String prev = null;
-                    for (HistoricActivityInstance a : acts) {
-                        String aid = a.getActivityId();
-                        if (aid == null) {
-                            continue;
-                        }
-                        // 引擎把「顺序流」也写进历史活动（ACT_TYPE_=sequenceFlow，如 Flow_1svagre）。
-                        // 它不是节点，却会插在相邻节点之间把 prev→cur 打断（开始→Flow_x→业务领导），
-                        // 使「相邻节点对」对不上任何一条物理出口 → 出口覆盖率恒为 0。这里直接跳过。
-                        if ("sequenceFlow".equals(a.getActivityType())) {
-                            continue;
-                        }
-                        sr.nodeTimes.merge(aid, 1, Integer::sum);
-                        sr.visitedNodes.add(aid);
-                        sr.pathNodes.add(aid);
-                        if (prev != null && !prev.equals(aid)) {
-                            // 相邻的两个活动即一次真实流转；网关也是活动，
-                            // 故「prev→cur」可直接对应到一条物理出口（wf_node_link）
-                            sr.linkTimes.merge(prev + "→" + aid, 1, Integer::sum);
-                        }
-                        prev = aid;
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("[blade-workflow] 流程测试读取历史活动失败. instId={}, err={}", instId, e.getMessage());
-            }
+            Coverage cov = collectCoverage(inst == null ? null : inst.getEngineInstId());
+            sr.nodeTimes.putAll(cov.nodeTimes);
+            sr.visitedNodes.addAll(cov.visitedNodes);
+            sr.pathNodes.addAll(cov.pathNodes);
+            sr.linkTimes.putAll(cov.linkTimes);
         } catch (Exception e) {
             String msg = "场景" + idx + "在部署/发起阶段中断（流程配置存在问题）：" + e.getMessage();
             logLines.add(fmt.format(new Date()) + " " + msg);
@@ -675,6 +653,16 @@ public class WfTestServiceImpl implements IWfTestService {
 
     /** 持久化测试日志（与历史逻辑一致） */
     private void saveTestLog(WfProcessDefinition def, WfTestRunDTO dto, WfTestResultVO result, List<String> logLines) {
+        saveTestLog(def, dto, result, logLines, null);
+    }
+
+    /**
+     * 持久化测试日志。
+     *
+     * @param instId 交互式测试的实例ID（一次性测试传 null）；用于「测试历史」关联与去重
+     */
+    private void saveTestLog(WfProcessDefinition def, WfTestRunDTO dto, WfTestResultVO result,
+            List<String> logLines, Long instId) {
         String testUserName = resolveName(dto.getTestUserId());
         WfTestLog entity = new WfTestLog();
         entity.setDefId(def.getId());
@@ -692,6 +680,7 @@ public class WfTestServiceImpl implements IWfTestService {
         entity.setSummary(result.getSummary());
         entity.setLogContent(String.join("\n", logLines));
         entity.setResultJson(JsonUtil.toJson(result));
+        entity.setInstId(instId);
         entity.setCreateUser(SecureUtil.getUserId());
         testLogMapper.insert(entity);
         result.setLogId(entity.getId());
@@ -762,6 +751,564 @@ public class WfTestServiceImpl implements IWfTestService {
             return false;
         }
         return testLogMapper.deleteBatchIds(ids) > 0;
+    }
+
+    // ==================================================================
+    // 交互式测试：对齐 ecology「流程测试」——
+    // 「开始测试」发起实例 → 「开始自动测试 / 暂停」逐节点驱动，或「手动提交」单步办理。
+    // ==================================================================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public WfTestResultVO start(WfTestRunDTO dto) {
+        if (dto == null || dto.getDefId() == null) {
+            throw new ServiceException("流程定义ID不能为空");
+        }
+        if (dto.getTestUserId() == null) {
+            throw new ServiceException("请选择测试发起人");
+        }
+        Long defId = dto.getDefId();
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        if (def.getStatus() != null && def.getStatus() == 2) {
+            throw new ServiceException("已停用的流程不支持测试");
+        }
+        if (def.getFormId() == null) {
+            throw new ServiceException("该流程未关联表单，无法渲染测试表单（请先给流程绑定表单）");
+        }
+
+        long begin = System.currentTimeMillis();
+        List<String> logLines = new ArrayList<>();
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        List<WfProcessNode> nodeList = nodeMapper.selectList(
+            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+        List<WfNodeLink> links = linkMapper.selectList(
+            Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
+        List<Long> nodeIds = nodeList.stream().map(WfProcessNode::getId).collect(Collectors.toList());
+        List<WfNodeOperator> operators = nodeIds.isEmpty() ? Collections.emptyList()
+            : operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+                .in(WfNodeOperator::getNodeId, nodeIds));
+
+        // 预校验：配置不完整直接拦截（与「一键测试」run 同口径）
+        Map<String, String> issues = validateBeforeRun(defId, links, nodeList, operators);
+        if (!issues.isEmpty()) {
+            logLines.add(fmt.format(new Date()) + " 预校验发现 " + issues.size()
+                + " 个节点配置问题，无法发起测试：");
+            for (Map.Entry<String, String> en : issues.entrySet()) {
+                logLines.add("    - 节点【" + nodeName(nodeList, en.getKey()) + "】" + en.getValue());
+            }
+            WfTestResultVO result = buildResult(nodeList, issues, null,
+                Collections.emptyMap(), Collections.emptySet(), logLines, begin, false, true);
+            saveTestLog(def, dto, result, logLines);
+            return result;
+        }
+
+        try {
+            String deploymentId = definitionService.deployForTest(defId);
+            StartProcessDTO startDto = new StartProcessDTO();
+            startDto.setDefId(defId);
+            startDto.setFormId(def.getFormId());
+            startDto.setStarter(dto.getTestUserId());
+            startDto.setFieldValues(dto.getFormData());
+            startDto.setTestFlag(true);
+            startDto.setTestDeploymentId(deploymentId);
+            startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
+            startDto.setDataId(IdWorker.getId());
+            Long instId = instanceService.start(startDto);
+
+            // 起始表单值落一份快照：后续「自动/手动测试」在未改表单时可据此做必填校验与网关变量
+            if (dto.getFormData() != null && !dto.getFormData().isEmpty()) {
+                saveSnapshot(instId, null, dto.getFormData());
+            }
+
+            WfTestResultVO result = state(instId);
+            result.setCostMs(System.currentTimeMillis() - begin);
+            result.setTestStatus(WfTestLog.TEST_RUNNING);
+            result.setSummary("测试已发起：当前节点【" + result.getCurrentNodeName()
+                + "】，可「开始自动测试」逐节点推进，或手动提交。");
+            List<String> lines = new ArrayList<>();
+            lines.add(fmt.format(new Date()) + " 已将草稿流程临时部署到引擎（deploymentId=" + deploymentId + "）");
+            lines.add(fmt.format(new Date()) + " 已真实发起测试实例 instId=" + instId + "，等待办理");
+            if (result.getLog() != null) {
+                lines.addAll(result.getLog());
+            }
+            result.setLog(lines);
+            return result;
+        } catch (Exception e) {
+            // 部署/发起阶段异常：优雅终止，定位首个业务节点
+            String msg = "测试在部署/发起阶段中断（流程配置存在问题）：" + e.getMessage();
+            logLines.add(fmt.format(new Date()) + " " + msg);
+            issues = new LinkedHashMap<>();
+            String firstNode = nodeList.isEmpty() ? null : nodeList.get(0).getNodeKey();
+            if (firstNode != null) {
+                issues.put(firstNode, msg);
+            }
+            WfTestResultVO result = buildResult(nodeList, issues, null,
+                Collections.emptyMap(), Collections.emptySet(), logLines, begin, false, true);
+            saveTestLog(def, dto, result, logLines);
+            return result;
+        }
+    }
+
+    @Override
+    public WfTestResultVO state(Long instId) {
+        if (instId == null) {
+            throw new ServiceException("测试实例ID不能为空");
+        }
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("测试实例不存在（可能已被清理）");
+        }
+        List<WfProcessNode> nodeList = nodeMapper.selectList(
+            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
+        List<WfNodeLink> links = linkMapper.selectList(
+            Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, inst.getDefId()));
+
+        Coverage cov = collectCoverage(inst.getEngineInstId());
+        List<WfTask> todos = pendingTestTasks(instId);
+        boolean running = inst.getStatus() == null || WfInstance.STATUS_RUNNING == inst.getStatus();
+        boolean reachedEnd = inst.getStatus() != null && WfInstance.STATUS_APPROVED == inst.getStatus();
+        // 运行中且无待办 = 引擎未同步出待办（异常）
+        boolean aborted = running && todos.isEmpty();
+
+        long begin = inst.getStartTime() == null ? System.currentTimeMillis() : inst.getStartTime().getTime();
+        List<String> logLines = buildProgressLog(inst, nodeList);
+
+        WfTestResultVO result = buildResult(nodeList, new LinkedHashMap<>(), instId,
+            cov.nodeTimes, cov.visitedNodes, logLines, begin, reachedEnd, aborted);
+        result.setInstId(instId);
+        result.setPath(buildPathFromLinkTimes(links, cov.linkTimes));
+        result.setScenarioCount(1);
+        fillLinkCoverage(result, links, nodeList, cov.linkTimes);
+        result.setInstanceStatus(inst.getStatus());
+        result.setCurrentNodeKey(inst.getCurrentNodeKey());
+        result.setCurrentNodeName(nodeName(nodeList, inst.getCurrentNodeKey()));
+        result.setHasPending(!todos.isEmpty());
+        result.setCurrentTaskId(todos.isEmpty() ? null : todos.get(0).getId());
+
+        if (running) {
+            // 运行中：结论标记为「进行中」，未走到的节点提示为「等待推进」而非配置错误
+            result.setTestStatus(WfTestLog.TEST_RUNNING);
+            result.setSummary("测试进行中：当前节点【" + result.getCurrentNodeName() + "】"
+                + (todos.isEmpty() ? "（引擎正在推进…）" : "，等待提交") + "。");
+            if (result.getNodes() != null) {
+                for (WfTestResultVO.TestNodeVO n : result.getNodes()) {
+                    if (n.getStatus() != null && n.getStatus() == 0) {
+                        n.setMessage("尚未走到（等待流程推进）");
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public WfTestResultVO step(WfTestStepDTO dto) {
+        if (dto == null || dto.getInstId() == null) {
+            throw new ServiceException("测试实例ID不能为空");
+        }
+        Long instId = dto.getInstId();
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("测试实例不存在（可能已被清理）");
+        }
+        // 已结束：原样返回当前状态（幂等）
+        if (inst.getStatus() != null && WfInstance.STATUS_RUNNING != inst.getStatus()) {
+            return state(instId);
+        }
+
+        // 手动测试：先把当前表单值落快照（历史回溯/渲染），并作为流程变量驱动后续网关
+        Map<String, Object> variables;
+        if (dto.getFormData() != null && !dto.getFormData().isEmpty()) {
+            variables = dto.getFormData();
+            saveSnapshot(instId, inst.getCurrentNodeKey(), variables);
+        } else {
+            variables = loadLatestFormData(instId);
+        }
+
+        List<WfTask> todos = pendingTestTasks(instId);
+        if (todos.isEmpty()) {
+            instanceService.advance(instId);
+            todos = pendingTestTasks(instId);
+        }
+        if (todos.isEmpty()) {
+            // 无待办可推进（多已到归档）：返回最新状态
+            WfInstance after = instanceMapper.selectById(instId);
+            WfTestResultVO r = state(instId);
+            persistInteractiveLogIfFinished(after, r);
+            return r;
+        }
+
+        String opinion = StringUtil.isBlank(dto.getOpinion()) ? DEFAULT_TEST_OPINION : dto.getOpinion();
+        for (WfTask t : todos) {
+            // 模拟真实提交：节点必填矩阵校验（未填则抛 ServiceException，前端提示补填后再提交）
+            ValidateDTO vdto = new ValidateDTO();
+            vdto.setInstanceId(instId);
+            vdto.setDefId(inst.getDefId());
+            vdto.setNodeKey(t.getNodeKey());
+            vdto.setFormData(variables);
+            formRenderService.validate(vdto);
+            // 布局级必填（权限矩阵为空时，必填定义在布局 fieldMeta；与前端 ExcelPreview 红标一致）
+            List<String> layoutMissing = new ArrayList<>();
+            collectLayoutRequired(inst.getFormId(), t.getNodeKey(), variables, layoutMissing);
+            if (!layoutMissing.isEmpty()) {
+                throw new ServiceException("以下字段为必填： " + String.join("、", layoutMissing));
+            }
+            // 系统语义推进（跳过「操作菜单」），但保留「意见必填」「字段校验」等业务规则
+            taskService.autoApprove(t.getId(), opinion, variables);
+        }
+
+        WfInstance after = instanceMapper.selectById(instId);
+        WfTestResultVO r = state(instId);
+        persistInteractiveLogIfFinished(after, r);
+        return r;
+    }
+
+    @Override
+    public List<WfTaskVO> todo(Long instId) {
+        List<WfTaskVO> vos = new ArrayList<>();
+        if (instId == null) {
+            return vos;
+        }
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            return vos;
+        }
+        List<WfProcessNode> nodeList = nodeMapper.selectList(
+            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
+        for (WfTask t : pendingTestTasks(instId)) {
+            WfTaskVO vo = new WfTaskVO();
+            vo.setId(t.getId());
+            vo.setInstId(t.getInstId());
+            vo.setNodeKey(t.getNodeKey());
+            vo.setNodeName(nodeName(nodeList, t.getNodeKey()));
+            vo.setAssignee(t.getAssignee());
+            vo.setStatus(t.getStatus());
+            vo.setReceiveTime(t.getReceiveTime());
+            vo.setDueTime(t.getDueTime());
+            vo.setTitle(inst.getTitle());
+            vo.setFormId(inst.getFormId());
+            vo.setDataId(inst.getDataId());
+            vo.setStarter(inst.getStarter());
+            vo.setStartTime(inst.getStartTime());
+            vo.setUrgency(inst.getUrgency());
+            vos.add(vo);
+        }
+        return vos;
+    }
+
+    /**
+     * 布局级必填校验：读取当前节点布局，解析每个 sheet 的 cellData，
+     * 凡 {@code fieldMeta.fieldAttr==3}（必填）或 {@code fieldMeta.required==true} 的字段，
+     * 校验 formData 是否已有值。
+     *
+     * <p>兼容两种表单值 key（与前端 ExcelPreview 对齐）：
+     * ① 单元格 key：{@code {sheetId}__{row}__{col}}（测试页手动提交使用）；
+     * ② 字段名（一键测试变量反推场景可能使用）。</p>
+     *
+     * <p>布局 JSON 兼容三种形态：{@code sheets} 对象、{@code layout[sheetName].sheets}、
+     * 顶层直接承载 {@code cellData}（老格式）。解析失败则降级跳过（不阻塞测试），仅打 warn。</p>
+     */
+    private void collectLayoutRequired(Long formId, String nodeKey, Map<String, Object> formData, List<String> missing) {
+        if (formId == null || formData == null || missing == null) {
+            return;
+        }
+        try {
+            org.springblade.core.tool.api.R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
+                formmodeClient.getFormLayout(formId, 0, nodeKey);
+            if (layoutResult == null || !layoutResult.isSuccess() || layoutResult.getData() == null) {
+                return;
+            }
+            String layoutJson = layoutResult.getData().getLayoutJson();
+            if (layoutJson == null || layoutJson.isEmpty()) {
+                return;
+            }
+            JsonNode root = OBJECT_MAPPER.readTree(layoutJson);
+            List<JsonNode> sheets = new ArrayList<>();
+            JsonNode sheetsNode = root.get("sheets");
+            if (sheetsNode != null && sheetsNode.isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> it = sheetsNode.fields();
+                while (it.hasNext()) {
+                    sheets.add(it.next().getValue());
+                }
+            } else if (sheetsNode != null && sheetsNode.isArray()) {
+                sheetsNode.forEach(sheets::add);
+            } else if (root.get("cellData") != null) {
+                sheets.add(root);
+            }
+            Set<String> checked = new HashSet<>();
+            for (JsonNode sheet : sheets) {
+                String sheetId = sheetIdOf(sheet, root);
+                JsonNode cellData = sheet.get("cellData");
+                if (cellData == null || !cellData.isObject()) {
+                    continue;
+                }
+                Iterator<Map.Entry<String, JsonNode>> rowIt = cellData.fields();
+                while (rowIt.hasNext()) {
+                    Map.Entry<String, JsonNode> rowEntry = rowIt.next();
+                    JsonNode rowObj = rowEntry.getValue();
+                    if (!rowObj.isObject()) {
+                        continue;
+                    }
+                    Iterator<Map.Entry<String, JsonNode>> colIt = rowObj.fields();
+                    while (colIt.hasNext()) {
+                        Map.Entry<String, JsonNode> colEntry = colIt.next();
+                        JsonNode cell = colEntry.getValue();
+                        if (!cell.isObject()) {
+                            continue;
+                        }
+                        JsonNode fieldMeta = cell.get("fieldMeta");
+                        if (fieldMeta == null || !fieldMeta.isObject()) {
+                            continue;
+                        }
+                        JsonNode cellType = fieldMeta.get("cellType");
+                        if (cellType != null && "detailTableMarker".equals(cellType.asText())) {
+                            continue;
+                        }
+                        boolean required = false;
+                        JsonNode fieldAttr = fieldMeta.get("fieldAttr");
+                        if (fieldAttr != null && fieldAttr.asInt(0) == 3) {
+                            required = true;
+                        }
+                        JsonNode requiredNode = fieldMeta.get("required");
+                        if (requiredNode != null && requiredNode.asBoolean(false)) {
+                            required = true;
+                        }
+                        if (!required) {
+                            continue;
+                        }
+                        JsonNode fieldNameNode = fieldMeta.get("fieldName");
+                        String fieldName = fieldNameNode != null ? fieldNameNode.asText() : null;
+                        if (fieldName == null || fieldName.isEmpty()) {
+                            continue;
+                        }
+                        if (checked.contains(fieldName)) {
+                            continue;
+                        }
+                        checked.add(fieldName);
+                        boolean filled = false;
+                        String cellKeyStr = sheetId + "__" + rowEntry.getKey() + "__" + colEntry.getKey();
+                        if (!isBlank(formData.get(cellKeyStr))) {
+                            filled = true;
+                        }
+                        if (!filled && !isBlank(formData.get(fieldName))) {
+                            filled = true;
+                        }
+                        if (!filled) {
+                            missing.add(fieldName);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 布局必填校验解析失败，已降级跳过. formId={}, nodeKey={}", formId, nodeKey, e);
+        }
+    }
+
+    private static String sheetIdOf(JsonNode sheet, JsonNode root) {
+        JsonNode id = sheet.get("id");
+        if (id != null && !id.asText().isEmpty()) {
+            return id.asText();
+        }
+        JsonNode sheetName = root.get("sheetName");
+        if (sheetName != null && !sheetName.asText().isEmpty()) {
+            return sheetName.asText();
+        }
+        return "sheet1";
+    }
+
+    private static boolean isBlank(Object value) {
+        if (value == null) {
+            return true;
+        }
+        if (value instanceof String s) {
+            return s.trim().isEmpty();
+        }
+        return false;
+    }
+
+    /** 采集引擎历史活动 → 覆盖数据（节点经过次数 / 访问集合 / 节点序列 / 相邻流转）。 */
+    private Coverage collectCoverage(String engineInstId) {
+        Coverage cov = new Coverage();
+        if (engineInstId == null) {
+            return cov;
+        }
+        try {
+            List<HistoricActivityInstance> acts =
+                new ArrayList<>(processService.historicActivities(engineInstId));
+            // 同一毫秒内完成的相邻活动（开始事件 / 顺序流 / 自动通过的任务）开始时间完全相同，
+            // 只按 startTime 查询出来的相对顺序不稳定 → 用自增主键 ID_ 做二级排序，
+            // 否则「相邻节点对」会还原成错误的流转，出口覆盖率恒为 0。
+            if (acts.size() > 1) {
+                Comparator<HistoricActivityInstance> byStart = Comparator.comparing(
+                    HistoricActivityInstance::getStartTime,
+                    Comparator.nullsLast(Date::compareTo));
+                acts.sort(byStart.thenComparingLong(a -> histOrderKey(a.getId())));
+            }
+            String prev = null;
+            for (HistoricActivityInstance a : acts) {
+                String aid = a.getActivityId();
+                if (aid == null) {
+                    continue;
+                }
+                // 引擎把「顺序流」也写进历史活动（ACT_TYPE_=sequenceFlow，如 Flow_1svagre）。
+                // 它不是节点，却会插在相邻节点之间把 prev→cur 打断（开始→Flow_x→业务领导），
+                // 使「相邻节点对」对不上任何一条物理出口 → 出口覆盖率恒为 0。这里直接跳过。
+                if ("sequenceFlow".equals(a.getActivityType())) {
+                    continue;
+                }
+                cov.nodeTimes.merge(aid, 1, Integer::sum);
+                cov.visitedNodes.add(aid);
+                cov.pathNodes.add(aid);
+                if (prev != null && !prev.equals(aid)) {
+                    // 相邻的两个活动即一次真实流转；网关也是活动，
+                    // 故「prev→cur」可直接对应到一条物理出口（wf_node_link）
+                    cov.linkTimes.merge(prev + "→" + aid, 1, Integer::sum);
+                }
+                prev = aid;
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 流程测试读取历史活动失败. engineInstId={}, err={}", engineInstId, e.getMessage());
+        }
+        return cov;
+    }
+
+    /** 由审批日志还原「测试进度日志」（交互式测试逐次提交的痕迹） */
+    private List<String> buildProgressLog(WfInstance inst, List<WfProcessNode> nodeList) {
+        List<String> lines = new ArrayList<>();
+        if (inst == null || inst.getId() == null) {
+            return lines;
+        }
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        List<WfApprovalLog> logs = approvalLogMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
+            .eq(WfApprovalLog::getInstId, inst.getId())
+            .orderByAsc(WfApprovalLog::getOperateTime)
+            .orderByAsc(WfApprovalLog::getId));
+        for (WfApprovalLog l : logs) {
+            String op = stripHtml(l.getOpinion());
+            lines.add(fmt.format(l.getOperateTime() == null ? new Date() : l.getOperateTime())
+                + " 节点【" + nodeName(nodeList, l.getNodeKey()) + "】" + logTypeCn(l.getLogType())
+                + (StringUtil.isBlank(op) ? "" : "：" + op));
+        }
+        if (inst.getStatus() != null && WfInstance.STATUS_RUNNING != inst.getStatus()) {
+            lines.add(fmt.format(inst.getEndTime() == null ? new Date() : inst.getEndTime())
+                + " 流程已结束（" + instanceStatusCn(inst.getStatus()) + "）");
+        }
+        return lines;
+    }
+
+    /**
+     * 交互式测试跑到终态时落一条测试日志（同一实例只落一条，重复调用跳过）,
+     * 使其在「测试历史」中可见。
+     */
+    private void persistInteractiveLogIfFinished(WfInstance inst, WfTestResultVO result) {
+        if (inst == null || inst.getStatus() == null || WfInstance.STATUS_RUNNING == inst.getStatus()) {
+            return;
+        }
+        try {
+            Long existed = testLogMapper.selectCount(Wrappers.<WfTestLog>lambdaQuery()
+                .eq(WfTestLog::getInstId, inst.getId()));
+            if (existed != null && existed > 0) {
+                return;
+            }
+            WfProcessDefinition def = defMapper.selectById(inst.getDefId());
+            if (def == null) {
+                return;
+            }
+            WfTestRunDTO dto = new WfTestRunDTO();
+            dto.setDefId(def.getId());
+            dto.setTestUserId(inst.getStarter());
+            saveTestLog(def, dto, result, result.getLog() == null ? new ArrayList<>() : result.getLog(), inst.getId());
+        } catch (Exception e) {
+            // 容错：wf_test_log.inst_id 未执行迁移时不影响测试推进
+            log.warn("[blade-workflow] 交互式测试日志落库失败（请确认已执行 V2026.09.19_002 迁移）. instId={}, err={}",
+                inst.getId(), e.getMessage());
+        }
+    }
+
+    /** 取实例最新一份表单快照的值（无快照时返回空 Map） */
+    private Map<String, Object> loadLatestFormData(Long instId) {
+        if (instId == null) {
+            return new LinkedHashMap<>();
+        }
+        List<WfFormSnapshot> snaps = snapshotMapper.selectList(Wrappers.<WfFormSnapshot>lambdaQuery()
+            .eq(WfFormSnapshot::getInstId, instId)
+            .orderByDesc(WfFormSnapshot::getId)
+            .last("LIMIT 1"));
+        if (snaps == null || snaps.isEmpty() || StringUtil.isBlank(snaps.get(0).getDataJson())) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            Map<String, Object> m = OBJECT_MAPPER.readValue(snaps.get(0).getDataJson(),
+                new TypeReference<LinkedHashMap<String, Object>>() { });
+            return m == null ? new LinkedHashMap<>() : m;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 流程测试解析表单快照失败. instId={}, err={}", instId, e.getMessage());
+            return new LinkedHashMap<>();
+        }
+    }
+
+    /** 落一份表单数据快照（交互式测试手动提交时留痕） */
+    private void saveSnapshot(Long instId, String nodeKey, Map<String, Object> formData) {
+        WfFormSnapshot snap = new WfFormSnapshot();
+        snap.setInstId(instId);
+        snap.setNodeKey(nodeKey);
+        snap.setDataJson(JsonUtil.toJson(formData));
+        snapshotMapper.insert(snap);
+    }
+
+    private String logTypeCn(String type) {
+        if (type == null) {
+            return "已办理";
+        }
+        switch (type) {
+            case WfApprovalLog.LOG_APPROVE: return "已批准";
+            case WfApprovalLog.LOG_SUBMIT: return "已提交";
+            case WfApprovalLog.LOG_REJECT: return "已退回";
+            case WfApprovalLog.LOG_FORWARD: return "已转发";
+            case WfApprovalLog.LOG_COMMENT: return "已批注";
+            case WfApprovalLog.LOG_TRANSFER: return "已转办";
+            case WfApprovalLog.LOG_SUPERVISE: return "已督办";
+            case WfApprovalLog.LOG_CIRCULATE: return "已抄送";
+            case WfApprovalLog.LOG_INSTRUCTION: return "已批示";
+            default: return "已办理";
+        }
+    }
+
+    private String instanceStatusCn(Integer status) {
+        if (status == null) {
+            return "未知";
+        }
+        switch (status) {
+            case WfInstance.STATUS_RUNNING: return "运行中";
+            case WfInstance.STATUS_APPROVED: return "已通过";
+            case WfInstance.STATUS_REJECTED: return "已退回";
+            case WfInstance.STATUS_CANCELED: return "已撤销";
+            case WfInstance.STATUS_SUSPENDED: return "已暂停";
+            default: return "状态" + status;
+        }
+    }
+
+    /** 去掉富文本标签，用于日志单行展示 */
+    private String stripHtml(String html) {
+        if (StringUtil.isBlank(html)) {
+            return "";
+        }
+        return html.replaceAll("<[^>]+>", "")
+            .replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+            .trim();
+    }
+
+    /** 一次测试的覆盖采集结果 */
+    private static class Coverage {
+        final Map<String, Integer> nodeTimes = new LinkedHashMap<>();
+        final Set<String> visitedNodes = new LinkedHashSet<>();
+        final List<String> pathNodes = new ArrayList<>();
+        final Map<String, Integer> linkTimes = new LinkedHashMap<>();
     }
 
     private List<WfTask> pendingTestTasks(Long instId) {

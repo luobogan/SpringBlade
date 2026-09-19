@@ -109,6 +109,15 @@ public class WfTaskServiceImpl implements IWfTaskService {
         return doApprove(taskId, dto, AUTO_OPERATOR, true);
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean autoApprove(Long taskId, String opinion, java.util.Map<String, Object> variables) {
+        ApproveDTO dto = new ApproveDTO();
+        dto.setOpinion(opinion == null ? AUTO_OPINION : opinion);
+        dto.setVariables(variables);
+        return doApprove(taskId, dto, AUTO_OPERATOR, true);
+    }
+
     /**
      * 同意处理主体。
      *

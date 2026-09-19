@@ -40,6 +40,8 @@ public class WfTestLog extends TenantEntity {
     public static final int TEST_PASSED = 1;
     /** 测试结论：异常中断（如走查步数超上限） */
     public static final int TEST_ABORTED = 2;
+    /** 测试结论：进行中（交互式测试：实例已发起，尚未跑到归档/中断） */
+    public static final int TEST_RUNNING = 3;
 
     private static final long serialVersionUID = 1L;
 
@@ -91,6 +93,15 @@ public class WfTestLog extends TenantEntity {
 
     @Schema(description = "结构化结果：节点经过次数/路径/操作者（JSON）")
     private String resultJson;
+
+    /**
+     * 交互式测试（开始测试 → 自动测试/手动提交）对应的测试态实例ID。
+     * 一次交互式测试全过程复用同一条日志（测试结束时落库/更新），便于在「测试历史」查看；
+     * 一次性测试（{@link #getTestStatus} 直接跑完）为 null。
+     */
+    @Schema(description = "测试态实例ID（wf_instance.id；交互式测试专用，一次性测试为 null）")
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long instId;
 
     /**
      * 主键以字符串形式序列化：19 位雪花 ID 在前端 JS 解析会丢精度。

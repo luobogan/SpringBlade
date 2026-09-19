@@ -76,6 +76,27 @@ public class WfTestResultVO {
     @Schema(description = "每个场景的执行概要")
     private List<TestScenarioVO> scenarios;
 
+    // ------------------------------------------------------------------
+    // 交互式测试（对齐 ecology「流程测试」：开始测试 → 自动测试/暂停 / 手动提交）
+    // ------------------------------------------------------------------
+
+    @Schema(description = "测试实例状态 0运行中 1通过 2不通过 3撤销 4暂停")
+    private Integer instanceStatus;
+
+    @Schema(description = "当前停留节点Key")
+    private String currentNodeKey;
+
+    @Schema(description = "当前停留节点名称")
+    private String currentNodeName;
+
+    @Schema(description = "当前是否存在待办（有待办即可「提交」推进一步）")
+    private Boolean hasPending;
+
+    /** 字符串序列化：19 位雪花 ID 在前端 JS 解析会丢精度 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Schema(description = "当前节点待办任务ID（测试态手动办理/退回用）")
+    private Long currentTaskId;
+
     @Data
     @Schema(description = "单个节点的测试结果")
     public static class TestNodeVO {

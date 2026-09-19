@@ -7,8 +7,10 @@ import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.WfTestRunDTO;
+import org.springblade.workflow.dto.WfTestStepDTO;
 import org.springblade.workflow.entity.WfTestLog;
 import org.springblade.workflow.service.IWfTestService;
+import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.vo.WfTestResultVO;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,6 +46,33 @@ public class WfTestController {
         description = "指定测试发起人从创建节点走查路径，逐节点解析操作者并记录日志；结果落库 wf_test_log")
     public R<WfTestResultVO> run(@RequestBody WfTestRunDTO dto) {
         return R.data(testService.run(dto), "测试完成");
+    }
+
+    @PostMapping("/start")
+    @Operation(summary = "发起交互式测试",
+        description = "临时部署草稿流程并真实发起测试态实例，但不自动推进；随后可「开始自动测试」逐节点推进或手动提交")
+    public R<WfTestResultVO> start(@RequestBody WfTestRunDTO dto) {
+        return R.data(testService.start(dto), "测试已发起");
+    }
+
+    @PostMapping("/step")
+    @Operation(summary = "交互式测试-单步推进",
+        description = "提交当前节点待办推进一步；自动测试由前端循环调用（可暂停），手动测试由用户点「提交」调用一次")
+    public R<WfTestResultVO> step(@RequestBody WfTestStepDTO dto) {
+        return R.data(testService.step(dto), "已提交");
+    }
+
+    @GetMapping("/state")
+    @Operation(summary = "交互式测试-查询状态",
+        description = "返回当前节点/待办/节点经过次数/出口覆盖/逐行日志")
+    public R<WfTestResultVO> state(@RequestParam("instId") Long instId) {
+        return R.data(testService.state(instId));
+    }
+
+    @GetMapping("/todo")
+    @Operation(summary = "交互式测试-待办列表", description = "测试态实例的待办（供手动办理定位任务ID）")
+    public R<List<WfTaskVO>> todo(@RequestParam("instId") Long instId) {
+        return R.data(testService.todo(instId));
     }
 
     @GetMapping("/list")

@@ -7,6 +7,7 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.api.R;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.dto.ValidateDTO;
@@ -28,8 +29,11 @@ import org.springblade.workflow.vo.FormRenderVO;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 审批态渲染服务实现
@@ -134,6 +138,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         }
         Long defId = dto.getDefId();
         String nodeKey = dto.getNodeKey();
+        Long formId = null;
 
         // 未指定定义/节点时，按实例推断
         if ((defId == null || nodeKey == null || nodeKey.isEmpty()) && dto.getInstanceId() != null) {
@@ -146,6 +151,9 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             }
             if (nodeKey == null || nodeKey.isEmpty()) {
                 nodeKey = inst.getCurrentNodeKey();
+            }
+            if (formId == null) {
+                formId = inst.getFormId();
             }
         }
         if (defId == null || nodeKey == null || nodeKey.isEmpty()) {
@@ -174,6 +182,11 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                     missing.add("明细表" + d.getDtIndex() + "（必须至少一条）");
                 }
             }
+        }
+
+        // 3. 布局级必填（权限矩阵为空时，必填定义在布局 fieldMeta）
+        if (formId != null) {
+            collectLayoutRequired(formId, nodeKey, dto.getFormData(), missing);
         }
 
         if (!missing.isEmpty()) {
@@ -206,4 +219,113 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         return false;
     }
 
+    /**
+     * 布局级必填校验：读取当前节点布局，解析每个 sheet 的 cellData，
+     * 凡 fieldMeta.fieldAttr==3（必填）或 fieldMeta.required==true 的字段，
+     * 校验 formData 是否已有值。
+     */
+    private void collectLayoutRequired(Long formId, String nodeKey, Map<String, Object> formData, List<String> missing) {
+        try {
+            R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
+                formmodeClient.getFormLayout(formId, 0, nodeKey);
+            if (layoutResult == null || !layoutResult.isSuccess() || layoutResult.getData() == null) {
+                return;
+            }
+            String layoutJson = layoutResult.getData().getLayoutJson();
+            if (layoutJson == null || layoutJson.isEmpty()) {
+                return;
+            }
+            JsonNode root = OBJECT_MAPPER.readTree(layoutJson);
+            List<JsonNode> sheets = new ArrayList<>();
+            JsonNode sheetsNode = root.get("sheets");
+            if (sheetsNode != null && sheetsNode.isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> it = sheetsNode.fields();
+                while (it.hasNext()) {
+                    sheets.add(it.next().getValue());
+                }
+            } else if (sheetsNode != null && sheetsNode.isArray()) {
+                sheetsNode.forEach(sheets::add);
+            } else if (root.get("cellData") != null) {
+                sheets.add(root);
+            }
+            Set<String> checked = new HashSet<>();
+            for (JsonNode sheet : sheets) {
+                String sheetId = sheetIdOf(sheet, root);
+                JsonNode cellData = sheet.get("cellData");
+                if (cellData == null || !cellData.isObject()) {
+                    continue;
+                }
+                Iterator<Map.Entry<String, JsonNode>> rowIt = cellData.fields();
+                while (rowIt.hasNext()) {
+                    Map.Entry<String, JsonNode> rowEntry = rowIt.next();
+                    JsonNode rowObj = rowEntry.getValue();
+                    if (!rowObj.isObject()) {
+                        continue;
+                    }
+                    Iterator<Map.Entry<String, JsonNode>> colIt = rowObj.fields();
+                    while (colIt.hasNext()) {
+                        Map.Entry<String, JsonNode> colEntry = colIt.next();
+                        JsonNode cell = colEntry.getValue();
+                        if (!cell.isObject()) {
+                            continue;
+                        }
+                        JsonNode fieldMeta = cell.get("fieldMeta");
+                        if (fieldMeta == null || !fieldMeta.isObject()) {
+                            continue;
+                        }
+                        JsonNode cellType = fieldMeta.get("cellType");
+                        if (cellType != null && "detailTableMarker".equals(cellType.asText())) {
+                            continue;
+                        }
+                        boolean required = false;
+                        JsonNode fieldAttr = fieldMeta.get("fieldAttr");
+                        if (fieldAttr != null && fieldAttr.asInt(0) == 3) {
+                            required = true;
+                        }
+                        JsonNode requiredNode = fieldMeta.get("required");
+                        if (requiredNode != null && requiredNode.asBoolean(false)) {
+                            required = true;
+                        }
+                        if (!required) {
+                            continue;
+                        }
+                        JsonNode fieldNameNode = fieldMeta.get("fieldName");
+                        String fieldName = fieldNameNode != null ? fieldNameNode.asText() : null;
+                        if (fieldName == null || fieldName.isEmpty()) {
+                            continue;
+                        }
+                        if (checked.contains(fieldName)) {
+                            continue;
+                        }
+                        checked.add(fieldName);
+                        boolean filled = false;
+                        String cellKeyStr = sheetId + "__" + rowEntry.getKey() + "__" + colEntry.getKey();
+                        if (!isEmpty(formData.get(cellKeyStr))) {
+                            filled = true;
+                        }
+                        if (!filled && !isEmpty(formData.get(fieldName))) {
+                            filled = true;
+                        }
+                        if (!filled) {
+                            missing.add(fieldName);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 布局必填校验解析失败，已降级跳过. formId={}, nodeKey={}", formId, nodeKey, e);
+        }
+    }
+
+    private static String sheetIdOf(JsonNode sheet, JsonNode root) {
+        JsonNode id = sheet.get("id");
+        if (id != null && !id.asText().isEmpty()) {
+            return id.asText();
+        }
+        JsonNode sheetName = root.get("sheetName");
+        if (sheetName != null && !sheetName.asText().isEmpty()) {
+            return sheetName.asText();
+        }
+        return "sheet1";
+    }
 }

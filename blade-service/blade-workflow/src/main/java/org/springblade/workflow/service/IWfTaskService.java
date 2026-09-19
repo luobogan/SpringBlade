@@ -47,6 +47,18 @@ public interface IWfTaskService {
     boolean autoApprove(Long taskId, String opinion);
 
     /**
+     * 系统自动通过（可携带流程变量）。
+     *
+     * <p>供「流程测试-手动/自动测试」调用：除传意见外，还把当前表单值作为<b>流程变量</b>下发引擎，
+     * 使后续排他网关按用户填写的真实条件选分支。跳过「操作菜单」校验，其余与 {@link #approve} 一致。</p>
+     *
+     * @param taskId    待办任务ID
+     * @param opinion   意见（为空时用默认「超时自动通过」）
+     * @param variables 附加流程变量（可为 null）
+     */
+    boolean autoApprove(Long taskId, String opinion, java.util.Map<String, Object> variables);
+
+    /**
      * 退回：回到指定节点（为空则退回上一节点）
      */
     boolean reject(Long taskId, RejectDTO dto);
