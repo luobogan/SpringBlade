@@ -132,6 +132,44 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     }
 
     @Override
+    public FormRenderVO preview(Long defId, Long formId, String nodeKey) {
+        if (defId == null && formId == null) {
+            throw new ServiceException("无法确定预览所用的流程定义或表单");
+        }
+        FormRenderVO vo = new FormRenderVO();
+        vo.setFormId(formId);
+        vo.setNodeKey(nodeKey);
+        vo.setReadonly(true);
+
+        // 节点信息（操作菜单 / 签字意见必填）：依赖定义 + 节点
+        if (defId != null && nodeKey != null && !nodeKey.isEmpty()) {
+            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+            vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
+            vo.setOpinionRequired(WfNodeSettingsUtil.opinionRequired(node));
+            vo.setFieldPerms(permService.getFieldPerm(defId, nodeKey));
+            vo.setDetailPerms(permService.getDetailPerm(defId, nodeKey));
+        }
+
+        // 布局：跨服务读取（与 render 同口径，按节点取布局：优先节点级，回退表单级）
+        if (formId != null && nodeKey != null && !nodeKey.isEmpty()) {
+            try {
+                R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
+                    formmodeClient.getFormLayout(formId, 0, nodeKey);
+                if (layoutResult != null && layoutResult.isSuccess() && layoutResult.getData() != null) {
+                    vo.setLayoutId(layoutResult.getData().getId());
+                    vo.setLayoutJson(layoutResult.getData().getLayoutJson());
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 预览读取表单布局失败. formId={}, nodeKey={}", formId, nodeKey, e);
+            }
+        }
+        return vo;
+    }
+
+    @Override
     public boolean validate(ValidateDTO dto) {
         if (dto == null || dto.getFormData() == null) {
             throw new ServiceException("待校验表单数据不能为空");
@@ -182,11 +220,6 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                     missing.add("明细表" + d.getDtIndex() + "（必须至少一条）");
                 }
             }
-        }
-
-        // 3. 布局级必填（权限矩阵为空时，必填定义在布局 fieldMeta）
-        if (formId != null) {
-            collectLayoutRequired(formId, nodeKey, dto.getFormData(), missing);
         }
 
         if (!missing.isEmpty()) {

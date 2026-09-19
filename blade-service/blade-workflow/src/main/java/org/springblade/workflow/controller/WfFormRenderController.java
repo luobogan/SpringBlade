@@ -49,6 +49,15 @@ public class WfFormRenderController {
         return R.data(formRenderService.render(instanceId, taskId, nodeKey));
     }
 
+    @GetMapping("/preview")
+    @Operation(summary = "表单预览（无需实例）", description = "按流程定义/表单/节点返回布局+字段权限+操作菜单，用于测试页/设计页预览，不创建实例")
+    public R<org.springblade.workflow.vo.FormRenderVO> preview(
+        @Parameter(description = "流程定义ID") @RequestParam(value = "defId", required = false) Long defId,
+        @Parameter(description = "表单ID") @RequestParam(value = "formId", required = false) Long formId,
+        @Parameter(description = "节点Key") @RequestParam(value = "nodeKey", required = false) String nodeKey) {
+        return R.data(formRenderService.preview(defId, formId, nodeKey));
+    }
+
     @PostMapping("/validate")
     @Operation(summary = "服务端校验", description = "按节点必填矩阵复核，必填字段缺失时返回错误信息")
     public R<Boolean> validate(@RequestBody ValidateDTO dto) {

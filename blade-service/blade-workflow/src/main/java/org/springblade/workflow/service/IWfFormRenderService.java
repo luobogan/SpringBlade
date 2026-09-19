@@ -22,6 +22,12 @@ public interface IWfFormRenderService {
     FormRenderVO render(Long instanceId, Long taskId, String nodeKey);
 
     /**
+     * 表单预览（无需实例）：按流程定义/表单/节点返回布局 + 字段权限 + 操作菜单，
+     * 用于测试页/设计页直接打开流程表单查看，不创建任何测试实例。
+     */
+    FormRenderVO preview(Long defId, Long formId, String nodeKey);
+
+    /**
      * 按节点必填矩阵做服务端校验（前端校验不可信）
      *
      * @return 校验通过返回 true；失败则抛出携带缺失字段信息的异常

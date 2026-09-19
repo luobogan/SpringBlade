@@ -252,6 +252,19 @@ public class WfTestServiceImpl implements IWfTestService {
             if (startDto.getDataId() == null) {
                 startDto.setDataId(IdWorker.getId());
             }
+            // 开始节点必填校验（发起前）：开始节点在 start 时即自动完成，不会进入待办循环，
+            // 必须在此用场景表单值校验，否则必填未填会被引擎直接放过（假通过）。
+            String startErr = startNodeRequiredError(def, sc.formData);
+            if (startErr != null) {
+                WfProcessNode sn = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                    .eq(WfProcessNode::getDefId, defId)
+                    .orderByAsc(WfProcessNode::getSortOrder)
+                    .last("LIMIT 1"));
+                String snKey = sn == null ? "start" : sn.getNodeKey();
+                logLines.add(fmt.format(new Date()) + " " + startErr);
+                sr.fatal = new AbstractMap.SimpleEntry<>(snKey, startErr);
+                return sr;
+            }
             Long instId = instanceService.start(startDto);
             sr.instId = instId;
             WfInstance inst = instanceMapper.selectById(instId);
@@ -285,6 +298,18 @@ public class WfTestServiceImpl implements IWfTestService {
                         vdto.setFormData(sc.formData);
                         try {
                             formRenderService.validate(vdto);
+                            // 布局级必填校验（表单设计器里配置的「必填」）：权限矩阵校验(formRenderService.validate)
+                            // 只覆盖「字段权限=必填」，不覆盖「布局字段必填」，必须单独读布局 JSON 核对，
+                            // 否则开始节点/审批节点表单必填未填也会被系统自动通过推进，测试「假通过」。
+                            // 开始节点强制校验；其余节点仅当场景带表单值时校验（自动测试不填后续节点表单，空表单不误杀）。
+                            boolean startNode = isStartNode(defId, t.getNodeKey());
+                            if (startNode || (sc.formData != null && !sc.formData.isEmpty())) {
+                                List<String> layoutMissing = new ArrayList<>();
+                                collectLayoutRequired(def.getFormId(), t.getNodeKey(), sc.formData, layoutMissing);
+                                if (!layoutMissing.isEmpty()) {
+                                    throw new ServiceException("以下字段为必填： " + String.join("、", layoutMissing));
+                                }
+                            }
                         } catch (ServiceException ve) {
                             String msg = "节点【" + t.getNodeKey() + "】必填校验未通过（表单必填项未填写），已终止该场景："
                                 + ve.getMessage();
@@ -816,6 +841,10 @@ public class WfTestServiceImpl implements IWfTestService {
             startDto.setTestDeploymentId(deploymentId);
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
             startDto.setDataId(IdWorker.getId());
+            // 说明：开始节点（创建/申请人）在 instanceService.start 时即被 advance() 自动完成、不生成待办。
+            // 这里**不拦截**发起，目的是让实例先建出来 → 右侧面板直接显示真实实例表单，用户可在表单里
+            // 补齐必填后手动「提交」/或点「开始自动测试」。开始节点的必填改在「本实例首次提交」时校验
+            // （见 step()），既不会假通过，也不会出现「有必填项就连实例都建不出来」的死路。
             Long instId = instanceService.start(startDto);
 
             // 起始表单值落一份快照：后续「自动/手动测试」在未改表单时可据此做必填校验与网关变量
@@ -951,11 +980,36 @@ public class WfTestServiceImpl implements IWfTestService {
             vdto.setNodeKey(t.getNodeKey());
             vdto.setFormData(variables);
             formRenderService.validate(vdto);
-            // 布局级必填（权限矩阵为空时，必填定义在布局 fieldMeta；与前端 ExcelPreview 红标一致）
-            List<String> layoutMissing = new ArrayList<>();
-            collectLayoutRequired(inst.getFormId(), t.getNodeKey(), variables, layoutMissing);
-            if (!layoutMissing.isEmpty()) {
-                throw new ServiceException("以下字段为必填： " + String.join("、", layoutMissing));
+            // 布局级必填（权限矩阵为空时，必填定义在布局 fieldMeta；与前端 ExcelPreview 红标一致）。
+            // ① 开始节点（创建/申请人，nodeType=0）：无论自动还是手动都必须校验——否则「开始自动测试」
+            //    在开始节点表单必填未填时会被引擎直接放过（假通过）。此处强制拦截，前端据此暂停并提示补填
+            //    （对齐 ecology 自动测试的「必填阻塞」：填完再点继续）。
+            // ② 其余节点：仅「手动提交且携带了表单值」时校验（交互式自动测试是系统空表单走查，
+            //    必填由一键测试带场景变量反推核查），避免空表单被布局必填误杀成 400。
+            boolean startNode = isStartNode(inst.getDefId(), t.getNodeKey());
+            if (startNode || (dto.getFormData() != null && !dto.getFormData().isEmpty())) {
+                List<String> layoutMissing = new ArrayList<>();
+                collectLayoutRequired(inst.getFormId(), t.getNodeKey(), variables, layoutMissing);
+                if (!layoutMissing.isEmpty()) {
+                    throw new ServiceException("以下字段为必填： " + String.join("、", layoutMissing));
+                }
+            }
+            // 首节点（创建/申请人）必填兜底：开始节点在 instanceService.start 时即被 advance() 自动完成、
+            // 不生成待办，其表单只在本实例「首次提交」时才有机会校验——否则开始节点必填未填会被静默放过（假通过）。
+            // 判据：该实例尚无「已办」任务（即当前是首次提交）；校验值用本次提交的表单值（含快照兜底）。
+            WfProcessNode firstNode = firstNodeOf(inst.getDefId());
+            if (firstNode != null && !firstNode.getNodeKey().equals(t.getNodeKey())) {
+                Long doneCount = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+                    .eq(WfTask::getInstId, instId)
+                    .eq(WfTask::getStatus, WfTask.STATUS_DONE));
+                if (doneCount == null || doneCount == 0) {
+                    List<String> firstMissing = new ArrayList<>();
+                    collectLayoutRequired(inst.getFormId(), firstNode.getNodeKey(), variables, firstMissing);
+                    if (!firstMissing.isEmpty()) {
+                        throw new ServiceException("开始节点【" + firstNode.getNodeKey()
+                            + "】表单必填未填： " + String.join("、", firstMissing));
+                    }
+                }
             }
             // 系统语义推进（跳过「操作菜单」），但保留「意见必填」「字段校验」等业务规则
             taskService.autoApprove(t.getId(), opinion, variables);
@@ -998,6 +1052,72 @@ public class WfTestServiceImpl implements IWfTestService {
             vos.add(vo);
         }
         return vos;
+    }
+
+    /** 是否开始节点（创建/申请人，nodeType=0）——其表单必填在自动测试中也要强制校验 */
+    private boolean isStartNode(Long defId, String nodeKey) {
+        if (defId == null || StringUtil.isBlank(nodeKey)) {
+            return false;
+        }
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+        return node != null && node.getNodeType() != null && node.getNodeType() == 0;
+    }
+
+    /**
+     * 首节点（{@code sortOrder} 最小）＝ {@code instanceService.start} 内 {@code advance()} 自动完成的
+     * 「创建/申请人」节点；其表单在发起时提交，不会生成待办，因此必填需单独在首次提交时兜底校验。
+     */
+    private WfProcessNode firstNodeOf(Long defId) {
+        if (defId == null) {
+            return null;
+        }
+        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .orderByAsc(WfProcessNode::getSortOrder)
+            .last("LIMIT 1"));
+    }
+
+    /**
+     * 开始节点（nodeType=0）必填校验：在 instanceService.start 发起之前调用。
+     * <p>关键点：开始节点在 {@code instanceService.start} 内部 {@code advance()} 时被<strong>自动完成</strong>，
+     * 不会生成待办任务，因此永远不会进入「自动测试」的待办循环或「手动提交」的 step 校验分支。
+     * 若不在发起前单独校验，开始节点表单必填未填会被引擎直接放过，测试「假通过」。</p>
+     * <p>同时覆盖两类必填：①「字段权限=必填」（权限矩阵，formRenderService.validate）；
+     * ②「布局字段必填」（formmodeClient 布局 JSON 的 fieldMeta.required / fieldAttr==3）。</p>
+     *
+     * @return 错误信息（含缺失字段）；为 null 表示校验通过
+     */
+    private String startNodeRequiredError(WfProcessDefinition def, Map<String, Object> formData) {
+        if (def == null) {
+            return null;
+        }
+        // 首节点（sortOrder 最小）＝ advance() 在发起时自动完成的那个节点，其表单（sc.formData）
+        // 正是测试提交的开始节点表单。注意：首节点未必是 nodeType=0，故按 sortOrder 取而非按 nodeType。
+        WfProcessNode startNode = firstNodeOf(def.getId());
+        if (startNode == null) {
+            return null;
+        }
+        Map<String, Object> fd = formData == null ? Collections.emptyMap() : formData;
+        // ① 权限矩阵必填（字段权限=必填）
+        try {
+            ValidateDTO vdto = new ValidateDTO();
+            vdto.setDefId(def.getId());
+            vdto.setNodeKey(startNode.getNodeKey());
+            vdto.setFormData(fd);
+            formRenderService.validate(vdto);
+        } catch (ServiceException ve) {
+            return "开始节点【" + startNode.getNodeKey() + "】必填校验未通过（字段权限）：" + ve.getMessage();
+        }
+        // ② 布局级必填（表单设计器配置的「必填」）
+        List<String> layoutMissing = new ArrayList<>();
+        collectLayoutRequired(def.getFormId(), startNode.getNodeKey(), fd, layoutMissing);
+        if (!layoutMissing.isEmpty()) {
+            return "开始节点【" + startNode.getNodeKey() + "】必填校验未通过（布局必填）：" + String.join("、", layoutMissing);
+        }
+        return null;
     }
 
     /**
