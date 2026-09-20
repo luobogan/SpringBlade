@@ -85,7 +85,8 @@ public class ApprovalTriggerServiceImpl implements IApprovalTriggerService {
         }
 
         try {
-            R<Long> result = workflowClient.startProcess(dto);
+            // 实例ID按字符串返回（19 位雪花 ID 经 JSON 数字会丢精度）
+            R<String> result = workflowClient.startProcess(dto);
             if (result == null || !result.isSuccess()) {
                 log.error("[formmode] 发起审批流程失败: modeWorkflowId={}, dataId={}, msg={}",
                     triggerSet.getWorkflowid(), dataId, result == null ? "无响应" : result.getMsg());

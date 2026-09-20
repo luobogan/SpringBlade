@@ -31,8 +31,15 @@ public class FormLayoutController extends BladeController {
 
     /**
      * 根据表单ID获取布局（支持按布局类型 / 流程节点取布局，带回退）
+     *
+     * <p><b>鉴权</b>：这是 blade-workflow 渲染包 / 预览 / 服务端校验的布局来源
+     * （{@code IFormmodeClient#getFormLayout}，Feign 透传当前用户 token）。
+     * 普通员工打开发起页、办理页时都会走到这里，故只要求「已登录」
+     * （{@link WorkflowConstant#HAS_AUTH}）—— 否则普通用户能进发起页却拿不到布局，
+     * 表现就是「流程表单带不出来（空白）」。</p>
      */
     @GetMapping("/{formId}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "获取表单布局", description = "根据表单ID获取表单布局；可按 layouttype（布局类型）与 nodeKey（流程节点）取，带回退（返回 FormLayoutVO，供跨服务 Feign 调用）")
     public R<FormLayoutVO> getByFormId(
             @Parameter(description = "表单ID") @PathVariable Long formId,

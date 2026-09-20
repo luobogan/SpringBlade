@@ -33,11 +33,14 @@ public interface IWorkflowClient {
     /**
      * 发起流程实例
      *
+     * <p>⚠️ 返回值为<b>字符串形式的实例ID</b>，与 {@code POST /instance/start} 保持一致：
+     * 19 位雪花 ID 以 JSON 数字传输会被 JS 丢弃精度。</p>
+     *
      * @param dto 发起参数（formId + dataId + 流程定义 + 表单字段值）
-     * @return 流程实例ID（wf_instance.id）
+     * @return 流程实例ID（wf_instance.id，字符串）
      */
     @PostMapping("/instance/start")
-    R<Long> startProcess(@RequestBody StartProcessDTO dto);
+    R<String> startProcess(@RequestBody StartProcessDTO dto);
 
     /**
      * 查询表单被流程绑定的情况（流程定义 + 流程实例）。

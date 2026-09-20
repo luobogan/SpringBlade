@@ -56,9 +56,14 @@ public class FormDataController extends BladeController {
      * modeinfo 模块，故对迁移过来的表单（表名与表单ID不一致）同样可用。</p>
      *
      * <p>Feign 直连路径：{@code POST /form-data/save-by-form}（不带 /api/blade-formmode 前缀）。</p>
+     *
+     * <p><b>鉴权</b>：本接口是「发起流程时创建业务数据行 + 回填 request_id」的落点，
+     * 由 blade-workflow 以<b>当前用户身份</b>（Feign 透传 token）调用。普通员工发起自己的申请时
+     * 也会走到这里，故只要求「已登录」（{@link WorkflowConstant#HAS_AUTH}）—— 否则会出现
+     * 「流程能发起，但业务表没有对应行 / request_id 没回填」（L3 自检 business_row_ready=0）。</p>
      */
     @PostMapping("/save-by-form")
-    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     public R<Long> saveByForm(@Valid @RequestBody FormDataSaveDTO dto) {
         Long dataId = formDataService.saveBusinessData(dto);
         return R.data(dataId, "业务数据保存成功");

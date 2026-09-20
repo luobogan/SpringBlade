@@ -50,8 +50,11 @@ public class WfInstanceController {
 
     @PostMapping("/start")
     @Operation(summary = "发起流程", description = "formId + dataId + 流程定义；写表单数据快照并生成首个待办")
-    public R<Long> start(@RequestBody StartProcessDTO dto) {
-        return R.data(instanceService.start(dto), "发起成功");
+    public R<String> start(@RequestBody StartProcessDTO dto) {
+        // ⚠️ 实例ID以<b>字符串</b>返回：19 位雪花 ID 超出 JS 安全整数（2^53），
+        //    以 JSON 数字返回会被前端解析时丢精度（如 ...538 → ...500），
+        //    后续拿它查实例就会「流程实例不存在」。跨服务 Feign（IWorkflowClient）同样按 String 收敛。
+        return R.data(String.valueOf(instanceService.start(dto)), "发起成功");
     }
 
     @GetMapping("/{id}")
