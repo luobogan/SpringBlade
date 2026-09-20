@@ -1,5 +1,6 @@
 package org.springblade.workflow.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -27,10 +28,20 @@ import java.util.List;
  *
  * <p>路径约定：Controller 使用<b>资源路径</b>，前端经网关以
  * {@code /api/blade-workflow/instance/...} 访问。</p>
+ *
+ * <p><b>鉴权</b>：发起 / 我的请求 / 详情 / 流转记录 / 节点操作者 / 快照 / 撤回 / 终止
+ * 都是<b>全体员工</b>走流程的必经能力，因此类上只要求「已登录」
+ * （{@link WorkflowConstant#HAS_AUTH}），不再要求 {@code workflow} 角色。
+ * 运行期控制中偏运维的两个动作（恢复 {@code /resume}、作废 {@code /cancel}）
+ * 仍保留流程管理员角色门（方法级注解覆盖类级）。</p>
+ *
+ * <p>「能不能动<b>这一条</b>」由服务层记录级校验兜底（{@code WfInstanceServiceImpl}
+ * 的 {@code requireVisible} / {@code canVisible}）：读取限发起人、参与人、管理员；
+ * 撤回与终止限发起人或管理员。</p>
  */
 @RestController
 @RequestMapping("/instance")
-@PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+@PreAuth(WorkflowConstant.HAS_AUTH)
 @RequiredArgsConstructor
 @Tag(name = "流程实例", description = "流程发起、实例查询、流转记录与运行期控制")
 public class WfInstanceController {
@@ -47,6 +58,16 @@ public class WfInstanceController {
     @Operation(summary = "实例详情", description = "含当前节点与状态")
     public R<InstanceVO> detail(@PathVariable("id") Long id) {
         return R.data(instanceService.detail(id));
+    }
+
+    @GetMapping("/mine")
+    @Operation(summary = "我的请求",
+        description = "我发起的流程实例分页（发起人=当前登录人，可按标题模糊）；「我的请求」页签数据源")
+    public R<IPage<InstanceVO>> mine(
+        @Parameter(description = "当前页，从 1 开始") @RequestParam(value = "current", required = false) Long current,
+        @Parameter(description = "每页条数，默认 20") @RequestParam(value = "pageSize", required = false) Long pageSize,
+        @Parameter(description = "流程标题，模糊匹配") @RequestParam(value = "title", required = false) String title) {
+        return R.data(instanceService.mine(current, pageSize, title));
     }
 
     @GetMapping("/by-biz")
@@ -85,19 +106,22 @@ public class WfInstanceController {
     }
 
     @PostMapping("/{id}/stop")
-    @Operation(summary = "暂停")
+    @Operation(summary = "终止/暂停",
+        description = "「我的请求」的终止按钮：发起人本人或流程管理员可操作，暂停后不再推进")
     public R<Boolean> stop(@PathVariable("id") Long id) {
         return R.data(instanceService.stop(id), "已暂停");
     }
 
     @PostMapping("/{id}/resume")
-    @Operation(summary = "恢复")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @Operation(summary = "恢复", description = "运行期运维动作：仅流程管理员")
     public R<Boolean> resume(@PathVariable("id") Long id) {
         return R.data(instanceService.resume(id), "已恢复");
     }
 
     @PostMapping("/{id}/cancel")
-    @Operation(summary = "撤销")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @Operation(summary = "撤销（作废）", description = "运行期运维动作：仅流程管理员")
     public R<Boolean> cancel(@PathVariable("id") Long id,
                              @RequestParam(value = "opinion", required = false) String opinion) {
         return R.data(instanceService.cancel(id, opinion), "已撤销");

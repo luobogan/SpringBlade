@@ -17,6 +17,7 @@ import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
@@ -30,6 +31,7 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springframework.stereotype.Service;
@@ -152,8 +154,11 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfInstance inst = instanceMapper.selectById(task.getInstId());
         WfProcessNode node = loadNode(inst.getDefId(), task.getNodeKey());
 
-        // 0. 节点信息 → 运行时消费：操作菜单校验 + 签字意见必填
+        // 0. 记录级鉴权：只有该任务办理人本人（或流程管理员）能同意。
+        //    系统自动提交 / 超时自动通过走 system=true，无人上下文，不受此限。
         if (!system) {
+            WfAuthUtil.requireOperateTask(task, "同意");
+            // 节点信息 → 运行时消费：操作菜单校验 + 签字意见必填
             requireOperate(node, MENU_SUBMIT);
         }
         String opinion = resolveOpinion(node, dto == null ? null : dto.getOpinion());
@@ -234,6 +239,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     public boolean reject(Long taskId, RejectDTO dto) {
         WfTask task = requireTodoTask(taskId);
         WfInstance inst = instanceMapper.selectById(task.getInstId());
+        // 记录级鉴权：只有该任务办理人本人（或流程管理员）能退回
+        WfAuthUtil.requireOperateTask(task, "退回");
         // 节点信息 → 运行时消费：未勾选「退回」则不允许退回
         requireOperate(loadNode(inst.getDefId(), task.getNodeKey()), MENU_REJECT);
 
@@ -260,6 +267,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     public boolean forward(Long taskId, ForwardDTO dto) {
         WfTask task = requireTodoTask(taskId);
         WfInstance inst = instanceMapper.selectById(task.getInstId());
+        // 记录级鉴权：只有该任务办理人本人（或流程管理员）能把自己的待办转出去
+        WfAuthUtil.requireOperateTask(task, "转办");
         if (dto == null || dto.getAssignee() == null) {
             throw new ServiceException("转办目标人不能为空");
         }
@@ -290,6 +299,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     public boolean addSign(Long taskId, AddSignDTO dto) {
         WfTask task = requireTodoTask(taskId);
         WfInstance inst = instanceMapper.selectById(task.getInstId());
+        // 记录级鉴权：只有该任务办理人本人（或流程管理员）能加签
+        WfAuthUtil.requireOperateTask(task, "加签");
         if (dto == null || dto.getAssignee() == null) {
             throw new ServiceException("加签人不能为空");
         }
@@ -318,6 +329,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
             throw new ServiceException("任务不存在");
         }
         WfInstance inst = instanceMapper.selectById(task.getInstId());
+        // 记录级鉴权：只有该任务办理人本人（或流程管理员）能发起抄送
+        WfAuthUtil.requireOperateTask(task, "抄送");
         if (dto == null || dto.getAssignees() == null || dto.getAssignees().isEmpty()) {
             throw new ServiceException("抄送人不能为空");
         }
@@ -344,6 +357,14 @@ public class WfTaskServiceImpl implements IWfTaskService {
             throw new ServiceException("任务不存在");
         }
         WfInstance inst = instanceMapper.selectById(task.getInstId());
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        // 记录级鉴权：催办限「发起人 / 该节点办理人 / 流程管理员」——
+        // 发起人催审批人、同节点办理人之间互相催办都是常见诉求，无关人员无权干预该单
+        if (!WfAuthUtil.isSelfOrAdmin(inst.getStarter()) && !WfAuthUtil.canOperateTask(task)) {
+            throw new WfAccessDeniedException("无权催办：只有流程发起人、当前节点办理人或流程管理员可以催办");
+        }
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_SUPERVISE, dto == null ? null : dto.getOpinion());
         return true;
@@ -359,6 +380,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (task == null) {
             return false;
         }
+        // 记录级鉴权：只有该任务办理人本人（或流程管理员）打开办理页才会写「已查看」
+        WfAuthUtil.requireOperateTask(task, "标记查看");
         // 只记首次：已看过不改时间（流程图「已查看」只关心是否打开过）
         if (task.getViewTime() != null) {
             return true;
@@ -372,11 +395,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
     @Override
     public Map<String, Long> count(Long assignee) {
         Map<String, Long> result = new HashMap<>(4);
+        // 记录级鉴权：非流程管理员只能看自己的角标数（顶栏待办红点）
+        Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
         Long todo = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getAssignee, assignee)
+            .eq(WfTask::getAssignee, target)
             .eq(WfTask::getStatus, WfTask.STATUS_TODO));
         Long done = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getAssignee, assignee)
+            .eq(WfTask::getAssignee, target)
             .ne(WfTask::getStatus, WfTask.STATUS_TODO));
         result.put("todo", todo == null ? 0L : todo);
         result.put("done", done == null ? 0L : done);
@@ -386,8 +411,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
     // ------------------------------------------------------------------ 私有方法
 
     private List<WfTaskVO> list(Long assignee, List<Integer> statuses) {
+        // 记录级鉴权：非流程管理员一律只能查自己的待办/已办，忽略传入的 assignee
+        Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
         List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getAssignee, assignee)
+            .eq(WfTask::getAssignee, target)
             .in(WfTask::getStatus, statuses)
             .orderByDesc(WfTask::getCreateTime));
         List<WfTaskVO> result = new ArrayList<>(tasks.size());

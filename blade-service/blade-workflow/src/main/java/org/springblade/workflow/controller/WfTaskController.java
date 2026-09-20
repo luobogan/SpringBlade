@@ -31,10 +31,18 @@ import java.util.List;
  *
  * <p>承载国产 OA 特有语义：同意 / 退回 / 转发 / 加签 / 抄送 / 催办。
  * 前端经网关以 {@code /api/blade-workflow/task/...} 访问。</p>
+ *
+ * <p><b>鉴权</b>：待办 / 已办 / 办理是<b>全体员工</b>都要用的能力，因此这里只要求
+ * 「已登录」（{@link WorkflowConstant#HAS_AUTH}），不再要求 {@code workflow} 角色。
+ * 「能不能动这一条任务」由服务层记录级校验兜底（
+ * {@code WfTaskServiceImpl} 内 {@code WfAuthUtil.requireOperateTask}）：
+ * 只有该任务办理人本人或流程管理员能同意/退回/转办/加签/抄送/标记已查看；
+ * 催办限发起人、该节点办理人或管理员；待办/已办查询的 {@code assignee} 入参
+ * 对非管理员一律收敛为当前登录人。</p>
  */
 @RestController
 @RequestMapping("/task")
-@PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+@PreAuth(WorkflowConstant.HAS_AUTH)
 @RequiredArgsConstructor
 @Tag(name = "流程任务", description = "待办/已办查询与审批处理")
 public class WfTaskController {

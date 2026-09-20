@@ -99,6 +99,18 @@ public interface IProcessService {
     HistoricProcessInstance historicProcess(String engineInstId);
 
     /**
+     * 查询引擎中该 procKey 的<b>最新版本</b>所属的部署ID（{@code ACT_RE_DEPLOYMENT.ID_}）。
+     *
+     * <p>用途：「流程定义 deployment_id 落库」之后的<b>精确比对</b>——把引擎 latest 与
+     * {@code wf_process_definition.deployment_id} 对比，判断是否被测试部署（或手工部署）
+     * 顶替。引擎里没有该 key 的部署时返回 null（未部署 / 已卸载）。</p>
+     *
+     * @param procKey 流程定义Key（BPMN process id）
+     * @return latest 版本的部署ID；无部署返回 null
+     */
+    String latestDeploymentId(String procKey);
+
+    /**
      * 删除引擎部署（级联清理流程定义与历史数据）。
      *
      * <p>用于「真实引擎假数据测试」的<b>测试态清理</b>：测试部署走 {@code test_<procKey>} 独立 key，

@@ -193,8 +193,14 @@ blade:
     enabled: true
     skip-url:
       - /weixin
-      - /api/blade-formmode/form/data/save
-      - /api/blade-workflow/**
+       # 富文本（TinyMCE）表单值/审批意见经 POST body 下发，不能被 XSS 过滤器清洗
+      # （XssHtmlFilter 白名单仅 a/b/em/i/img/strong，<p>/<br>/<table> 等会被剥掉）
+      # blade-formmode：表单数据 / 业务数据写入（Feign 直连，无 /api 前缀）
+      - /form-data/**
+      # blade-workflow：发起(意见+表单值) / 审批(意见+变量) / 测试提交
+      - /instance/**
+      - /task/**
+      - /test/**
   secure:
     skip-url:
       - /test/**

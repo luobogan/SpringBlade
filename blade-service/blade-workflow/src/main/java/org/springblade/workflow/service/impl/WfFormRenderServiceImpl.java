@@ -21,8 +21,11 @@ import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IWfFormRenderService;
+import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfPermService;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
 import org.springblade.workflow.vo.FormRenderVO;
@@ -62,12 +65,22 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final WfProcessNodeMapper nodeMapper;
     private final IWfPermService permService;
     private final IFormmodeClient formmodeClient;
+    /** 记录级鉴权复用实例服务的口径（发起人 / 参与人 / 管理员） */
+    private final IWfInstanceService instanceService;
 
     @Override
     public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam) {
         WfInstance inst = instanceMapper.selectById(instanceId);
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
+        }
+        // 记录级鉴权：渲染包会带出单据全部字段值与布局，只有发起人、参与人
+        // （办理人/被抄送/被传阅）或流程管理员能取。控制器已放开为「登录即可」
+        // （发起页/办理页/已办查看都要用），这一层是防「猜 instanceId 读单据」的关键。
+        if (!instanceService.canView(instanceId)) {
+            log.warn("[blade-workflow] 越权拦截：渲染包非参与人. instId={}, starter={}, current={}",
+                instanceId, inst.getStarter(), WfAuthUtil.userId());
+            throw new WfAccessDeniedException("无权查看该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以查看");
         }
 
         String nodeKey = inst.getCurrentNodeKey();
@@ -183,6 +196,12 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             WfInstance inst = instanceMapper.selectById(dto.getInstanceId());
             if (inst == null) {
                 throw new ServiceException("流程实例不存在");
+            }
+            // 记录级鉴权：按实例推断节点、必填矩阵时也要求能看到该实例
+            if (!instanceService.canView(dto.getInstanceId())) {
+                log.warn("[blade-workflow] 越权拦截：表单校验非参与人. instId={}, current={}",
+                    dto.getInstanceId(), WfAuthUtil.userId());
+                throw new WfAccessDeniedException("无权校验该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以操作");
             }
             if (defId == null) {
                 defId = inst.getDefId();

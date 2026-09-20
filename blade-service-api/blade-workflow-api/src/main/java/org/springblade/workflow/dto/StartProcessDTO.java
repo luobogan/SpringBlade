@@ -31,6 +31,14 @@ public class StartProcessDTO implements Serializable {
     private String procKey;
 
     /**
+     * 引擎启动用的流程 key（默认取定义的 procKey）。
+     *
+     * <p>测试态传 {@code procKey + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX}：测试部署使用独立 key，
+     * 避免「每次测试部署都把正式版本顶成最新」（Flowable 按 key 取最新部署）。</p>
+     */
+    private String engineKey;
+
+    /**
      * 表单ID（workflow_bill.id）
      */
     private Long formId;

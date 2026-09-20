@@ -27,6 +27,7 @@ import org.flowable.bpmn.model.TimerEventDefinition;
 import org.flowable.bpmn.model.Gateway;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.formmode.feign.IFormmodeClient;
+import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
 import org.springblade.workflow.entity.WfNodeDetailPerm;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
@@ -45,6 +46,7 @@ import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfWorkflowTypeMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.service.IProcessService;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
@@ -82,6 +84,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     /** 表单绑定提示中最多展示的流程名称数量 */
     private static final int MAX_BINDING_NAME = 10;
+
+    /** 流程定义状态：0草稿 1已发布 2停用（对齐 ecology {@code workflow_base}） */
+    private static final int DEF_STATUS_PUBLISHED = 1;
 
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
@@ -162,8 +167,13 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     @Override
     public List<WfProcessDefinition> listByForm(Long formId) {
+        // 记录级收口：非流程管理员只返回「已发布」的定义 —— 发起页（全体员工）
+        // 用的是同一个接口，草稿与停用版本属建模中间态，不该出现在员工的
+        //「新建流程」列表里（前端虽已按 status 过滤，但服务端不能依赖前端）。
+        boolean admin = WfAuthUtil.isAdmin();
         return defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
             .eq(formId != null, WfProcessDefinition::getFormId, formId)
+            .eq(!admin, WfProcessDefinition::getStatus, DEF_STATUS_PUBLISHED)
             .orderByDesc(WfProcessDefinition::getVersion));
     }
 
@@ -240,9 +250,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             if (def.getProcKey() == null || def.getProcKey().isBlank()) {
                 throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
             }
+            // 发布门禁：正式部署前的硬校验，杜绝「测试绿灯、正式跑不了」（测试态靠关校验 + 消毒才跑通）
+            validateForDeploy(def);
             // 部署前把「出口条件」注入到对应 sequenceFlow，保证 Flowable 运行时按条件流转
             String deployXml = injectLinkConditions(def.getBpmnXml(), links(defId));
-            processService.deployProcess(def.getProcKey(), deployXml);
+            // 落库 deployment_id：此前 deployProcess 的返回值被丢弃，导致无法精确比对
+            // 「引擎 latest == 正式部署」（只能靠部署时间与消毒标记间接判读，见巡检 ⑥）。
+            // 落库后：① 巡检可直接 JOIN 比对；② 发起自检可给出 engineDeploymentMatched 标志。
+            def.setDeploymentId(processService.deployProcess(def.getProcKey(), deployXml));
         } else {
             throw new ServiceException("尚无 BPMN 定义，请先在「流程画布」中设计并保存");
         }
@@ -251,8 +266,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         // 发布即激活（版本控制）：组内锚点统一切到本版本；同组其它已发布版本转停用。
         // 在途实例由 Flowable 绑定创建时的 ACT_RE_PROCDEF.ID_ 原生隔离，不受新版本影响。
         promoteActiveVersion(def);
-        log.info("[blade-workflow] 流程定义已发布并部署到引擎（并激活为当前版本）. defId={}, procKey={}, version={}",
-            defId, def.getProcKey(), def.getVersion());
+        log.info("[blade-workflow] 流程定义已发布并部署到引擎（并激活为当前版本）. "
+                + "defId={}, procKey={}, version={}, deploymentId={}",
+            defId, def.getProcKey(), def.getVersion(), def.getDeploymentId());
         return true;
     }
 
@@ -268,11 +284,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (def.getProcKey() == null || def.getProcKey().isBlank()) {
             throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
         }
-        // 测试部署：注入出口条件 + 测试态消毒（businessRuleTask 降级等），不改 status、不激活版本
+        // 测试部署：注入出口条件 + 测试态消毒（businessRuleTask 降级等），不改 status、不激活版本。
+        // ⚠️ 用独立 key（procKey + "__test"）：Flowable 的 startProcessInstanceByKey 取「该 key 最新部署」，
+        //    若测试沿用正式 procKey，每次测试都会把正式版本顶掉（未清理时正式发起跑的是「关校验+消毒」的测试 BPMN）。
+        //    发起侧必须成对使用同一 key：WfTestServiceImpl 把 StartProcessDTO.engineKey 设为下面这个值。
+        String testKey = def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX;
         String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)));
-        String deploymentId = processService.deployProcessForTest(def.getProcKey(), deployXml);
-        log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态）. defId={}, procKey={}, deploymentId={}",
-            defId, def.getProcKey(), deploymentId);
+        String deploymentId = processService.deployProcessForTest(testKey, deployXml);
+        log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态，独立 key 不顶正式版本）. "
+            + "defId={}, testKey={}, deploymentId={}", defId, testKey, deploymentId);
         return deploymentId;
     }
 
@@ -571,6 +591,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         neo.setSortOrder(old.getSortOrder());
         // 完整复制 BPMN（画布结构随版本留存；修复此前新版本画布为空的缺口）
         neo.setBpmnXml(old.getBpmnXml());
+        // 新版本是「未部署」的草稿：deployment_id 不继承（它是「本行最后一次正式部署」的产物）
+        neo.setDeploymentId(null);
         neo.setStatus(0);
         defMapper.insert(neo);
 
@@ -1250,6 +1272,86 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             }
         }
         return false;
+    }
+
+    /**
+     * 发布门禁（正式部署前）：测试态靠「关闭校验 + {@link #neutralizeForTest 消毒}」才能跑通，
+     * 正式部署保留完整校验，故必须在这里把「测试过、正式跑不了」的情况拦住。
+     *
+     * <p><b>① 元素级（硬拦）</b>：{@code businessRuleTask} 解析期需要 org.kie（Drools），
+     * 本工程未引入 → 测试被降级成 manualTask「自动通过」，正式部署必被引擎拒。指名道姓报错。</p>
+     *
+     * <p><b>② 元素级（强提示）</b>：{@code ThrowEvent}（未配置/不支持的抛出事件运行期失败）、
+     * 含 timer 的 catch/boundary 事件（正式环境会真等待）→ 记 warn，不阻断（可能是刻意设计）。</p>
+     *
+     * <p><b>③ 结构级（硬拦）</b>：BPMN 中的节点集合必须 ⊆/≡ {@code wf_process_node} 存活节点。
+     * 画布改了没保存、或节点配置被逻辑删除时，引擎按 BPMN 跑而语义层查不到节点配置
+     * （发起后无人可办、网关出口条件缺失），属于典型「测试能跑、正式跑不通」。</p>
+     */
+    private void validateForDeploy(WfProcessDefinition def) {
+        BpmnModel model;
+        try {
+            BpmnXMLConverter converter = new BpmnXMLConverter();
+            model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(def.getBpmnXml().getBytes(StandardCharsets.UTF_8)), false, false);
+        } catch (Exception e) {
+            throw new ServiceException("发布被拒绝：BPMN 解析失败（" + e.getMessage() + "）");
+        }
+        Process process = model.getMainProcess();
+
+        List<String> hardBlock = new ArrayList<>();
+        List<String> warn = new ArrayList<>();
+        List<String> bpmnNodeKeys = new ArrayList<>();
+        for (FlowElement fe : process.getFlowElements()) {
+            String label = (fe.getName() == null || fe.getName().isBlank())
+                ? fe.getId() : (fe.getName() + "(" + fe.getId() + ")");
+            if (fe instanceof BusinessRuleTask) {
+                // 与测试态降级清单一致：正式环境无 Drools，部署期即失败
+                hardBlock.add(label);
+            } else if (fe instanceof ThrowEvent) {
+                warn.add(label + " 抛出事件：正式环境未配置则运行期失败");
+            } else if (fe instanceof IntermediateCatchEvent ice) {
+                if (hasTimer(ice.getEventDefinitions())) {
+                    warn.add(label + " 定时捕获事件：正式环境将真等待");
+                }
+            } else if (fe instanceof BoundaryEvent be) {
+                if (hasTimer(be.getEventDefinitions())) {
+                    warn.add(label + " 定时边界事件：正式环境将真等待");
+                }
+            }
+            if (nodeTypeOf(fe) != null) {
+                bpmnNodeKeys.add(fe.getId());
+            }
+        }
+        if (!hardBlock.isEmpty()) {
+            throw new ServiceException("发布被拒绝：以下节点使用了正式环境不支持的元素（业务规则任务需 Drools 依赖，"
+                + "测试态被自动降级才「通过」）→ 请改为「自动处理/脚本任务」等类型并在画布重新保存："
+                + String.join("、", hardBlock));
+        }
+        if (!warn.isEmpty()) {
+            log.warn("[blade-workflow] 发布提示：正式环境可能存在运行期失败/等待的节点（不阻断发布）：{}",
+                String.join("；", warn));
+        }
+
+        // ③ 结构一致性：BPMN 节点 vs 存活节点配置
+        List<WfProcessNode> aliveNodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, def.getId()));
+        Set<String> alive = aliveNodes.stream().map(WfProcessNode::getNodeKey)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        List<String> missingConf = bpmnNodeKeys.stream().filter(k -> !alive.contains(k)).collect(Collectors.toList());
+        if (!missingConf.isEmpty()) {
+            throw new ServiceException("发布被拒绝：BPMN 中有 " + missingConf.size() + " 个节点在流程配置里不存在（"
+                + String.join("、", missingConf) + "）→ 引擎会按 BPMN 跑，但这些节点没有办理人/出口配置，"
+                + "发起后会卡住或无人可办。请先在画布「保存」以按其重建节点配置，再发布。");
+        }
+        Set<String> bpmnSet = new HashSet<>(bpmnNodeKeys);
+        List<String> ghostConf = alive.stream().filter(k -> !bpmnSet.contains(k)).collect(Collectors.toList());
+        if (!ghostConf.isEmpty()) {
+            log.warn("[blade-workflow] 发布提示：流程配置里有 {} 个节点不在 BPMN 中（多为已删除节点，不影响运行）：{}",
+                ghostConf.size(), String.join("、", ghostConf));
+        }
+        log.info("[blade-workflow] 发布门禁通过. defId={}, bpmnNodes={}, aliveNodes={}", def.getId(),
+            bpmnNodeKeys.size(), alive.size());
     }
 
     /**

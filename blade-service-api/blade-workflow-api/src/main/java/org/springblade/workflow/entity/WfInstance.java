@@ -93,6 +93,34 @@ public class WfInstance extends TenantEntity {
     @Schema(description = "测试态标记 1=测试产生的实例（可一键清理，不污染正常数据）")
     private Integer isTest;
 
+    /**
+     * L3 运行时自检：业务数据行是否就绪。
+     *
+     * <p>1 = 业务表里有对应行（单据发起时行本就存在 / 本次现场创建成功）；
+     * 0 = 创建失败，用了唯一占位 dataId（流程能跑，但业务表里查不到这张单，
+     * 见巡检 ①）。NULL = 未自检（存量实例 / 早期版本发起）。</p>
+     */
+    @Schema(description = "L3自检：业务数据行是否就绪 1=有对应行 0=仅占位 NULL=未自检")
+    private Integer businessRowReady;
+
+    /**
+     * L3 运行时自检：业务行的 {@code request_id} 是否已回写为本实例ID（流程 ↔ 单据闭环）。
+     *
+     * <p>1 = 已回填；0 = 未回填 / 回填失败（见巡检 ②）；NULL = 无需回填（单据发起，
+     * 关联关系由单据侧维护）或未自检。</p>
+     */
+    @Schema(description = "L3自检：业务行 request_id 是否已回填 1=是 0=否 NULL=无需/未自检")
+    private Integer requestIdBound;
+
+    /**
+     * L3 运行时自检：引擎中该 procKey 的最新部署 == 本定义记录的 {@code deployment_id}。
+     *
+     * <p>1 = 一致（正式版本仍占据 latest）；0 = 不一致（latest 被测试部署 / 手工部署顶替）；
+     * NULL = 未知（定义尚未落 deployment_id，或本次为测试态发起）。</p>
+     */
+    @Schema(description = "L3自检：引擎 latest 部署 == 定义 deployment_id 1=一致 0=被顶替 NULL=未知")
+    private Integer engineDeploymentMatched;
+
     @Schema(description = "测试临时部署ID（Flowable deploymentId），清理时级联卸载")
     private String testDeploymentId;
 

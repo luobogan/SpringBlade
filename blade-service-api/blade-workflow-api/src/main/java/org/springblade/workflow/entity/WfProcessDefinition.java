@@ -50,6 +50,19 @@ public class WfProcessDefinition extends TenantEntity {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long activeVersionId;
 
+    /**
+     * 最近一次「正式部署」的引擎部署ID（{@code ACT_RE_DEPLOYMENT.ID_}）。
+     *
+     * <p>由 {@code deploy()} 写入（此前 {@code deployProcess} 的返回值被丢弃，无法精确比对）。
+     * 用途：把「引擎该 procKey 的 latest 部署」与本列对比，即可判断正式版本是否仍占据
+     * latest 位（是否被测试部署 / 手工部署顶替）。测试部署走独立 key
+     * （{@code procKey + "__test"}），不写本列。</p>
+     *
+     * <p>「另存为新版本」（{@code saveAsNewVersion}）时本列置空：新版本是<b>未部署</b>的草稿。</p>
+     */
+    @Schema(description = "最近一次正式部署的引擎部署ID；NULL=尚未正式部署")
+    private String deploymentId;
+
     @Schema(description = "是否自由流程")
     private Integer isFree;
 

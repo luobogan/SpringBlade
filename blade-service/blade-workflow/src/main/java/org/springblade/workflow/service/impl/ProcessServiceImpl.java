@@ -148,6 +148,20 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public String latestDeploymentId(String procKey) {
+        if (procKey == null || procKey.isBlank()) {
+            return null;
+        }
+        // 用 var 而不是 import org.flowable.engine.repository.ProcessDefinition：
+        // 查询返回类型即 ProcessDefinition，无需额外导入（少一处改动，也避免与同包 Deployment 混用）
+        var pd = repositoryService.createProcessDefinitionQuery()
+            .processDefinitionKey(procKey)
+            .latestVersion()
+            .singleResult();
+        return pd == null ? null : pd.getDeploymentId();
+    }
+
+    @Override
     public void deleteDeployment(String deploymentId) {
         repositoryService.deleteDeployment(deploymentId, true);
         log.info("[blade-workflow] 测试部署已卸载. deploymentId={}", deploymentId);

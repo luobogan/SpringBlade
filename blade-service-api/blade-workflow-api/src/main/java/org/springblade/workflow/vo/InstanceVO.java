@@ -71,4 +71,30 @@ public class InstanceVO implements Serializable {
     @Schema(description = "紧急程度 0/1/2")
     private Integer urgency;
 
+    // ------------------------------------------------------------------ L3 运行时自检标志
+    //
+    // 目的：发起时的「自检结果」随实例一起返回前端（规范 §2-L3），
+    // 让页面上能直接提示「这张单没落到业务表 / request_id 没回填 / 引擎 latest 不是正式部署」，
+    // 而不是只在后端日志里 warn。取值一律 1=是 0=否 NULL=未知（不自检 / 存量数据）。
+
+    /**
+     * 业务数据行是否就绪：1 = 业务表中有对应行；0 = 仅占位（业务行创建失败）；NULL = 未自检。
+     */
+    @Schema(description = "L3自检：业务数据行已就绪 1=有对应行 0=仅占位 NULL=未自检")
+    private Integer businessRowReady;
+
+    /**
+     * 业务行 {@code request_id} 是否已回填为本实例ID：1 = 已回填；0 = 未回填；
+     * NULL = 无需回填（单据发起）或未自检。
+     */
+    @Schema(description = "L3自检：业务行 request_id 已回填 1=是 0=否 NULL=无需/未自检")
+    private Integer requestIdBound;
+
+    /**
+     * 引擎中该 procKey 的 latest 部署是否 == 本定义记录的 {@code deployment_id}：
+     * 1 = 一致；0 = 被测试/手工部署顶替；NULL = 未知（定义未落 deployment_id 或测试态发起）。
+     */
+    @Schema(description = "L3自检：引擎 latest == 定义 deployment_id 1=一致 0=被顶替 NULL=未知")
+    private Integer engineDeploymentMatched;
+
 }

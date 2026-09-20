@@ -40,10 +40,22 @@ import java.util.Map;
  * <p>路径约定：Controller 使用<b>资源路径</b>，网关按服务名路由
  * （{@code /blade-workflow/**} + StripPrefix=1），前端经网关以
  * {@code /api/blade-workflow/definition/...} 访问。</p>
+ *
+ * <p><b>鉴权分两层</b>：</p>
+ * <ul>
+ *   <li>类级 {@link WorkflowConstant#HAS_ROLE_WORKFLOW}：<b>建模 / 部署 / 版本 / 启停 /
+ *       删除 / 节点与出口配置 / 操作者配置 / 模拟测试 / 路径类型新增</b> 等管理动作，
+ *       只有流程管理员可调（默认行为，无需逐个标注）。</li>
+ *   <li>方法级 {@link WorkflowConstant#HAS_AUTH}：发起页与办理页要用的<b>只读</b>接口
+ *       （列表 / 详情 / BPMN / 节点 / 出口 / 浏览框选项）。普通员工没有 {@code workflow}
+ *       角色也必须能选流程、看流程图，因此只要求「已登录」。</li>
+ * </ul>
+ * <p>只读接口放开后「能看到哪些流程」由服务层收口：非管理员只返回<b>已发布</b>
+ * （{@code status=1}）的定义，草稿/停用版本不对普通用户暴露；
+ * 发起动作本身的记录级校验在实例侧（{@code WfInstanceServiceImpl}）。</p>
  */
 @RestController
 @RequestMapping("/definition")
-// 角色门禁：流程管理员（workflow），与 formmode 侧保持同一角色
 @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
 @RequiredArgsConstructor
 @Tag(name = "流程定义", description = "流程定义、节点、出口、操作者配置与版本管理")
@@ -79,7 +91,8 @@ public class WfDefinitionController {
     }
 
     @GetMapping("/{id}/bpmn")
-    @Operation(summary = "获取 BPMN XML", description = "返回画布已保存的 BPMN 2.0 定义")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "获取 BPMN XML", description = "返回画布已保存的 BPMN 2.0 定义；发起页/办理页「流程图」页签只读使用")
     public R<String> getBpmn(@PathVariable("id") Long id) {
         return R.data(definitionService.getBpmn(id));
     }
@@ -110,13 +123,16 @@ public class WfDefinitionController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "定义详情")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "定义详情", description = "发起页据此校验「已发布 + 当前激活版本」；只读，登录即可")
     public R<WfProcessDefinition> detail(@PathVariable("id") Long id) {
         return R.data(definitionService.detail(id));
     }
 
     @GetMapping("/list")
-    @Operation(summary = "按表单查定义列表")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "按表单查定义列表",
+        description = "发起页「可发起流程」卡片列表数据源：非流程管理员只返回已发布(status=1)的定义")
     public R<List<WfProcessDefinition>> list(
         @Parameter(description = "表单ID") @RequestParam(value = "formId", required = false) Long formId) {
         return R.data(definitionService.listByForm(formId));
@@ -147,13 +163,15 @@ public class WfDefinitionController {
     }
 
     @GetMapping("/{id}/nodes")
-    @Operation(summary = "节点列表")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "节点列表", description = "发起页据 nodeType=0 定位开始节点；只读，登录即可")
     public R<List<WfProcessNode>> nodes(@PathVariable("id") Long id) {
         return R.data(definitionService.nodes(id));
     }
 
     @GetMapping("/{id}/links")
-    @Operation(summary = "出口列表")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "出口列表", description = "流程图连线与条件展示；只读，登录即可")
     public R<List<WfNodeLink>> links(@PathVariable("id") Long id) {
         return R.data(definitionService.links(id));
     }
@@ -235,7 +253,8 @@ public class WfDefinitionController {
     }
 
     @GetMapping("/browser/{type}")
-    @Operation(summary = "浏览框选项列表", description = "按类型返回可选列表并支持关键字搜索（对齐 ecology BrowserBean，如 wftype=路径类型）")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "浏览框选项列表", description = "按类型返回可选列表并支持关键字搜索（对齐 ecology BrowserBean，如 wftype=路径类型）；发起页按「路径类型」分组展示，登录即可")
     public R<List<BrowserOptionVO>> browserOptions(
         @Parameter(description = "浏览框类型，如 wftype") @PathVariable("type") String type,
         @Parameter(description = "搜索关键字") @RequestParam(value = "keyword", required = false) String keyword) {
@@ -243,7 +262,8 @@ public class WfDefinitionController {
     }
 
     @GetMapping("/browser/{type}/{id}")
-    @Operation(summary = "浏览框选项详情", description = "回显已选值的标签（编辑场景）")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "浏览框选项详情", description = "回显已选值的标签（编辑与运行时展示都要用），登录即可")
     public R<BrowserOptionVO> browserOption(
         @Parameter(description = "浏览框类型") @PathVariable("type") String type,
         @Parameter(description = "已选值（主键）") @PathVariable("id") Long id) {

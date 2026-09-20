@@ -5,10 +5,10 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springblade.core.secure.annotation.PreAuth;
-import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -22,9 +22,10 @@ import java.util.Map;
  * <p>对应文档 §6.5：待办/已办计数（当前直查 DB，后续可接入 Redis 缓存，
  * 任务状态变更时失效缓存）。</p>
  *
- * <p><b>鉴权</b>：业务接口（{@code /count}）要求 {@code administrator} 角色（与其它
- * 流程控制器对齐）；{@code /health/live}、{@code /health/ready} 为基础设施探针，
- * 无用户上下文，<b>保持放行</b>，不纳入角色门禁。</p>
+ * <p><b>鉴权</b>：{@code /count} 是<b>顶栏待办角标</b>的数据源，全体员工都要用，
+ * 因此只要求「已登录」（{@code HAS_AUTH}）；{@code assignee} 入参对非管理员
+ * 一律收敛为当前登录人，避免查到别人的待办数。
+ * {@code /health/live}、{@code /health/ready} 为基础设施探针，无用户上下文，保持放行。</p>
  */
 @RestController
 @RequestMapping("/monitor")
@@ -35,12 +36,11 @@ public class WfMonitorController {
     private final IWfTaskService taskService;
 
     @GetMapping("/count")
-    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "待办/已办计数")
     public R<Map<String, Long>> count(
-        @Parameter(description = "办理人，默认当前登录人") @RequestParam(value = "assignee", required = false) Long assignee) {
-        Long userId = (assignee != null) ? assignee : SecureUtil.getUserId();
-        return R.data(taskService.count(userId));
+        @Parameter(description = "办理人，默认当前登录人；非流程管理员只能查自己") @RequestParam(value = "assignee", required = false) Long assignee) {
+        return R.data(taskService.count(WfAuthUtil.resolveSelfIfNotAdmin(assignee)));
     }
 
     @GetMapping("/health/live")

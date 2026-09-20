@@ -1,8 +1,10 @@
 package org.springblade.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.SecureUtil;
@@ -28,7 +30,9 @@ import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfOperatorResolver;
+import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IProcessService;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
@@ -47,6 +51,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -118,11 +123,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      *
      * <p>顺序上必须在实例 insert 之后（此刻才有 instId）；用带 dataId 的保存请求 → 服务端走
      * UPDATE，只更新 request_id 与修改审计列。失败仅告警，不影响已发起的流程。</p>
+     *
+     * @return 是否回填成功（false = 未回填，会记入 L3 自检标志 {@code requestIdBound=0}）
      */
-    private void bindRequestId(WfProcessDefinition def, StartProcessDTO dto, Long dataId, Long instId) {
+    private boolean bindRequestId(WfProcessDefinition def, StartProcessDTO dto, Long dataId, Long instId) {
         Long formId = resolveFormId(def, dto);
         if (formId == null || dataId == null || instId == null) {
-            return;
+            return false;
         }
         try {
             FormDataSaveDTO saveDto = new FormDataSaveDTO();
@@ -133,11 +140,42 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             if (r == null || !r.isSuccess()) {
                 log.warn("[blade-workflow] 回填 request_id 失败. formId={}, dataId={}, msg={}",
                     formId, dataId, r == null ? "null" : r.getMsg());
-            } else {
-                log.info("[blade-workflow] 已回填 request_id={} → 业务数据 dataId={}", instId, dataId);
+                return false;
             }
+            log.info("[blade-workflow] 已回填 request_id={} → 业务数据 dataId={}", instId, dataId);
+            return true;
         } catch (Exception e) {
             log.warn("[blade-workflow] 回填 request_id 异常. formId={}, dataId={}", formId, dataId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 正式发起守卫：同一 procKey 版本组内存在未清理的测试实例（{@code is_test=1}）时拒绝发起。
+     *
+     * <p>测试数据未收尾意味着引擎里可能仍残留测试部署（历史版本与正式共用同一 procKey 部署），
+     * 而 Flowable 的 {@code startProcessInstanceByKey} 取「该 key 的最新部署」→ 正式实例会跑到
+     * 「关闭校验 + 消毒过」的测试 BPMN。与其静默跑错版本，不如明确提示先清理（见
+     * 《测试流程与正式流程一致性规范》§2-L2）。</p>
+     */
+    private void assertNoPendingTestData(WfProcessDefinition def) {
+        if (def == null || def.getProcKey() == null || def.getProcKey().isBlank()) {
+            return;
+        }
+        List<WfProcessDefinition> group = defMapper.selectList(Wrappers.<WfProcessDefinition>lambdaQuery()
+            .eq(WfProcessDefinition::getProcKey, def.getProcKey()));
+        List<Long> defIds = group.stream().map(WfProcessDefinition::getId)
+            .filter(Objects::nonNull).collect(Collectors.toList());
+        if (defIds.isEmpty()) {
+            return;
+        }
+        Long cnt = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .in(WfInstance::getDefId, defIds)
+            .eq(WfInstance::getIsTest, 1)
+            .eq(WfInstance::getIsDeleted, 0));
+        if (cnt != null && cnt > 0) {
+            throw new ServiceException("存在 " + cnt + " 条未清理的流程测试数据，测试部署可能仍占用正式版本，"
+                + "请先在「流程测试」页点击「清理测试数据」后再发起正式流程");
         }
     }
 
@@ -186,7 +224,30 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
 
         Long starter = (dto.getStarter() != null) ? dto.getStarter() : SecureUtil.getUserId();
-        String engineInstId = processService.startInstance(def.getProcKey(), bizKey, vars);
+        // 引擎 key：默认用定义的 procKey；测试态由 WfTestServiceImpl 传 procKey + "__test"
+        // （测试部署独立 key，见 WfDefinitionServiceImpl#deployForTest）
+        String engineKey = (dto.getEngineKey() != null && !dto.getEngineKey().isBlank())
+            ? dto.getEngineKey() : def.getProcKey();
+        boolean test = Boolean.TRUE.equals(dto.getTestFlag());
+        // 正式发起守卫：存在未清理的测试数据时拒绝，避免带着测试残留（历史测试部署仍可能占用
+        // 正式 procKey 的「最新部署」位置）发起正式流程
+        if (!test) {
+            assertNoPendingTestData(def);
+        }
+        // L3 运行时自检①：引擎 latest 部署 == 本定义记录的 deployment_id。
+        // 只有「正式发起 + 定义已落 deployment_id」才判定；测试态走独立 key（procKey__test），
+        // latest 天然不是正式部署，故置 NULL（未知）避免误报。
+        Integer engineMatched = null;
+        if (!test && def.getDeploymentId() != null) {
+            String latest = processService.latestDeploymentId(engineKey);
+            engineMatched = def.getDeploymentId().equals(latest) ? 1 : 0;
+            if (engineMatched == 0) {
+                log.warn("[blade-workflow] 引擎 latest 部署与定义记录不一致（正式版本可能被测试/手工部署顶替）. "
+                    + "defId={}, procKey={}, def.deploymentId={}, engine.latest={}",
+                    def.getId(), def.getProcKey(), def.getDeploymentId(), latest);
+            }
+        }
+        String engineInstId = processService.startInstance(engineKey, bizKey, vars);
 
         // 首节点先算出来：实例标题模板取自首节点的「标题显示设置」
         String firstNodeKey = resolveFirstNodeKey(def.getId());
@@ -203,9 +264,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         inst.setStartTime(new Date());
         inst.setUrgency(dto.getUrgency() == null ? 0 : dto.getUrgency());
         // 测试态标记：测试产生的实例打 is_test=1，并记下临时部署ID，便于一键清理且不污染正常数据
-        boolean test = Boolean.TRUE.equals(dto.getTestFlag());
         inst.setIsTest(test ? 1 : 0);
         inst.setTestDeploymentId(dto.getTestDeploymentId());
+        // L3 运行时自检②：业务数据行是否就绪。单据发起（dataId 已给）= 行本就存在；
+        // 表单直发 = 本次现场创建成功；两者都没成 = 用了占位 dataId（业务表里查不到这张单）。
+        inst.setBusinessRowReady((ownBusinessRow || dto.getDataId() != null) ? 1 : 0);
+        inst.setEngineDeploymentMatched(engineMatched);
         inst.setStatus(WfInstance.STATUS_RUNNING);
         instanceMapper.insert(inst);
 
@@ -220,23 +284,40 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         String startOpinion = (dto.getOpinion() == null) ? "" : dto.getOpinion();
         appendLog(inst.getId(), null, firstNodeKey, starter, WfApprovalLog.LOG_SUBMIT, startOpinion);
 
-        // 业务数据回填流程实例ID（request_id，BIGINT）：仅本次现场建的业务行才写
+        // 业务数据回填流程实例ID（request_id，BIGINT）：仅本次现场建的业务行才写。
+        // L3 运行时自检③：回填结果写回实例，供前端/巡检直接判读（单据发起不回填，保持 NULL）。
         if (ownBusinessRow) {
-            bindRequestId(def, dto, dataId, inst.getId());
+            boolean bound = bindRequestId(def, dto, dataId, inst.getId());
+            WfInstance patch = new WfInstance();
+            patch.setId(inst.getId());
+            patch.setRequestIdBound(bound ? 1 : 0);
+            instanceMapper.updateById(patch);
         }
 
         advance(inst.getId());
-        log.info("[blade-workflow] 发起流程成功. instId={}, defId={}, bizKey={}", inst.getId(), def.getId(), bizKey);
+        log.info("[blade-workflow] 发起流程成功. instId={}, defId={}, bizKey={}, 自检(业务行={}, request_id={}, 引擎部署={})",
+            inst.getId(), def.getId(), bizKey,
+            inst.getBusinessRowReady(), (ownBusinessRow ? "回填结果见上" : "无需回填"), engineMatched);
         return inst.getId();
     }
 
     @Override
     public InstanceVO detail(Long id) {
-        WfInstance inst = instanceMapper.selectById(id);
-        if (inst == null) {
-            throw new ServiceException("流程实例不存在");
-        }
-        return toInstanceVO(inst);
+        // 记录级鉴权：只有发起人、参与人（办理人/抄送人）或流程管理员能看实例详情
+        return toInstanceVO(requireVisible(id, "查看流程详情"));
+    }
+
+    @Override
+    public IPage<InstanceVO> mine(Long current, Long pageSize, String title) {
+        Page<WfInstance> page = new Page<>(
+            (current == null || current < 1) ? 1 : current,
+            (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200));
+        IPage<WfInstance> result = instanceMapper.selectPage(page, Wrappers.<WfInstance>lambdaQuery()
+            // 「我的请求」= 我发起的：发起人在服务端收口为当前登录人，不接受前端传 starter
+            .eq(WfInstance::getStarter, WfAuthUtil.userId())
+            .like(title != null && !title.isBlank(), WfInstance::getTitle, title)
+            .orderByDesc(WfInstance::getStartTime));
+        return result.convert(this::toInstanceVO);
     }
 
     @Override
@@ -244,7 +325,17 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         WfInstance inst = instanceMapper.selectOne(Wrappers.<WfInstance>lambdaQuery()
             .eq(WfInstance::getBizKey, buildBizKey(formId, dataId))
             .last("LIMIT 1"));
-        return inst == null ? null : toInstanceVO(inst);
+        if (inst == null) {
+            return null;
+        }
+        // 记录级鉴权：按业务数据反查流程时，非参与人返回空而不是抛错——
+        // 既不把「这条数据有没有流程」变成探测手段，也不打断表单页展示。
+        if (!canVisible(inst)) {
+            log.warn("[blade-workflow] 忽略越权的按业务反查. instId={}, starter={}, current={}",
+                inst.getId(), inst.getStarter(), WfAuthUtil.userId());
+            return null;
+        }
+        return toInstanceVO(inst);
     }
 
     @Override
@@ -258,14 +349,20 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     @Override
+    public boolean canView(Long instId) {
+        return canVisible(instanceMapper.selectById(instId));
+    }
+
+    @Override
     public List<ApprovalLogVO> logs(Long instId) {
+        // 记录级鉴权：只有发起人、参与人（办理人/抄送人）或流程管理员能看流转记录
+        WfInstance inst = requireVisible(instId, "查看流转记录");
         List<WfApprovalLog> logs = logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
             .eq(WfApprovalLog::getInstId, instId)
             .orderByAsc(WfApprovalLog::getOperateTime));
 
         // 节点信息 → 运行时消费：按「当前节点」的「表单日志查看范围」过滤可见节点的日志。
         // null = 不限制（保持既有行为）。
-        WfInstance inst = instanceMapper.selectById(instId);
         WfProcessNode curNode = (inst == null || inst.getCurrentNodeKey() == null) ? null
             : nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
             .eq(WfProcessNode::getDefId, inst.getDefId())
@@ -348,6 +445,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
     @Override
     public String snapshot(Long instId, String nodeKey) {
+        // 记录级鉴权：快照是业务单据的完整字段值，只有参与人/管理员能取
+        requireVisible(instId, "查看表单快照");
         WfFormSnapshot snap = snapshotMapper.selectOne(Wrappers.<WfFormSnapshot>lambdaQuery()
             .eq(WfFormSnapshot::getInstId, instId)
             .eq(WfFormSnapshot::getNodeKey, nodeKey)
@@ -359,6 +458,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean withdraw(Long instId, String opinion) {
+        // 记录级鉴权：只有发起人本人（或流程管理员）能撤回自己的申请
+        WfAuthUtil.requireStarterOrAdmin(instanceMapper.selectById(instId), "撤回");
         return terminate(instId, WfInstance.STATUS_CANCELED, opinion, "撤回");
     }
 
@@ -369,6 +470,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
         }
+        // 记录级鉴权：只有发起人本人（或流程管理员）能终止自己的申请
+        WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "终止");
         inst.setStatus(WfInstance.STATUS_SUSPENDED);
         instanceMapper.updateById(inst);
         appendLog(instId, null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
@@ -563,6 +666,57 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
     // ------------------------------------------------------------------ 私有方法
 
+    /**
+     * 记录级鉴权：能否查看该实例 —— 发起人本人、该实例的参与人（本人有任务记录，
+     * 含办理人 / 被抄送 / 被传阅）或流程管理员；否则 403。
+     *
+     * <p><b>为什么必须有这一层</b>：{@code /instance/**} 的角色门已放开为「登录即可」
+     * （普通员工要能用「我的请求」看自己的申请、看流转记录与流程图），只靠
+     * {@code @PreAuth} 时任何登录用户猜个 id 就能读到别人的单据。这里把
+     * 「能不能读这一条」收口到参与人。</p>
+     *
+     * @param instId 实例ID
+     * @param action 动作名（拼进 403 提示，如「查看流程详情」）
+     * @return 实例实体，调用方可直接复用（避免重复查询）
+     */
+    private WfInstance requireVisible(Long instId, String action) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        if (canVisible(inst)) {
+            return inst;
+        }
+        log.warn("[blade-workflow] 越权拦截：{} 非参与人. instId={}, starter={}, current={}",
+            action, instId, inst.getStarter(), WfAuthUtil.userId());
+        throw new WfAccessDeniedException("无权" + action
+            + "：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以查看");
+    }
+
+    /**
+     * 当前用户能否看到该实例：发起人本人 / 参与人（本人有任务记录，含办理人、被抄送、
+     * 被传阅）/ 流程管理员。
+     *
+     * <p>拆出布尔版本是为了「按业务数据反查」这种不该抛错的场景复用：查不到或无权限
+     * 一律返回空，既不泄露也不打断页面。</p>
+     */
+    private boolean canVisible(WfInstance inst) {
+        if (inst == null) {
+            return false;
+        }
+        if (WfAuthUtil.isSelfOrAdmin(inst.getStarter())) {
+            return true;
+        }
+        Long me = WfAuthUtil.userId();
+        if (me == null) {
+            return false;
+        }
+        Long count = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, inst.getId())
+            .eq(WfTask::getAssignee, me));
+        return count != null && count > 0;
+    }
+
     private boolean terminate(Long instId, int status, String opinion, String action) {
         WfInstance inst = instanceMapper.selectById(instId);
         if (inst == null) {
@@ -648,6 +802,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         vo.setStartTime(inst.getStartTime());
         vo.setEndTime(inst.getEndTime());
         vo.setUrgency(inst.getUrgency());
+        // L3 运行时自检标志（发起时写入 wf_instance，随详情/我的请求返回前端）
+        vo.setBusinessRowReady(inst.getBusinessRowReady());
+        vo.setRequestIdBound(inst.getRequestIdBound());
+        vo.setEngineDeploymentMatched(inst.getEngineDeploymentMatched());
         WfProcessDefinition def = defMapper.selectById(inst.getDefId());
         if (def != null) {
             vo.setDefName(def.getName());
@@ -672,7 +830,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (instId == null) {
             return result;
         }
-        WfInstance inst = instanceMapper.selectById(instId);
+        // 记录级鉴权：流程图「操作者」面板会暴露办理人名单，同样只对参与人开放
+        WfInstance inst = requireVisible(instId, "查看节点操作者");
 
         // ① 待办任务：按状态归组
         List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()

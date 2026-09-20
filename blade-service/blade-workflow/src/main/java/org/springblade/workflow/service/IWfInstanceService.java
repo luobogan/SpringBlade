@@ -1,5 +1,6 @@
 package org.springblade.workflow.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceVO;
@@ -29,6 +30,18 @@ public interface IWfInstanceService {
     InstanceVO detail(Long id);
 
     /**
+     * 我的请求：我发起的流程实例分页（「我的请求」页签数据源）。
+     *
+     * <p>按「发起人 = 当前登录人」过滤，普通用户看不到别人的申请；
+     * 传入当前页与页大小，返回 MyBatis-Plus 分页对象（前端 ProTable 直接消费）。</p>
+     *
+     * @param current  当前页（从 1 开始，空则 1）
+     * @param pageSize 每页条数（空则 20，上限 200，防大页拖库）
+     * @param title    流程标题（模糊匹配，可空）
+     */
+    IPage<InstanceVO> mine(Long current, Long pageSize, String title);
+
+    /**
      * 按业务数据反查实例
      */
     InstanceVO getByBiz(Long formId, Long dataId);
@@ -40,6 +53,17 @@ public interface IWfInstanceService {
      * @return 实例数量（逻辑未删除）
      */
     int countByForm(Long formId);
+
+    /**
+     * 当前登录用户能否查看该实例（记录级鉴权的唯一口径）。
+     *
+     * <p>规则：流程管理员、发起人本人、或在该实例上有任务记录的人（办理人 / 被抄送 /
+     * 被传阅）。用于渲染包这类<b>按实例组装数据</b>的接口做越权拦截，
+     * 避免「登录即可」的接口被拿去猜 id 读别人的单据。</p>
+     *
+     * @param instId 实例ID（不存在返回 false）
+     */
+    boolean canView(Long instId);
 
     /**
      * 流转/审批记录

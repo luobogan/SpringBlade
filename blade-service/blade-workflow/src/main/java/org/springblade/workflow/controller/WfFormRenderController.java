@@ -26,14 +26,19 @@ import org.springframework.web.bind.annotation.RestController;
  *   <li>{@code POST /form/validate}：按节点必填矩阵做服务端复核（前端校验不可信）。</li>
  * </ul>
  *
- * <p><b>角色鉴权</b>：渲染包会读取表单布局（跨服务调 formmode）与节点权限，属受控能力，
- * 统一要求 {@code administrator} 角色（formmode 的 {@code FormLayoutController} 亦为同一角色）。
+ * <p><b>鉴权</b>：渲染包与校验是<b>全体员工</b>办流程时的必经接口（发起页预览、
+ * 办理页加载、提交前复核），因此只要求「已登录」
+ * （{@link WorkflowConstant#HAS_AUTH}），不要求 {@code workflow} 角色。
  * 跨服务 Feign 调用由 {@code BladeFeignRequestHeaderInterceptor} 透传当前 token，
- * 故同一角色在 workflow 与 formmode 两侧均可通过鉴权（鉴权链路打通）。</p>
+ * 故工作流侧放行的请求在 formmode 侧同样带得上身份。</p>
+ *
+ * <p>「能不能看这一单」不由本控制器把关：渲染包按 {@code taskId}/{@code instanceId}
+ * 组装数据，服务层已按「任务办理人 / 实例参与人」收敛（见 {@code WfFormRenderServiceImpl}
+ * 与 {@code WfInstanceServiceImpl} 的记录级校验）。</p>
  */
 @RestController
 @RequestMapping("/form")
-@PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+@PreAuth(WorkflowConstant.HAS_AUTH)
 @RequiredArgsConstructor
 @Tag(name = "审批态渲染", description = "渲染包与服务端校验")
 public class WfFormRenderController {

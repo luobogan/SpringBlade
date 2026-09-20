@@ -15,6 +15,7 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.system.user.feign.IUserClient;
+import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.dto.WfTestRunDTO;
 import org.springblade.workflow.dto.WfTestStepDTO;
@@ -247,6 +248,8 @@ public class WfTestServiceImpl implements IWfTestService {
             startDto.setTestFlag(true);
             startDto.setTestDeploymentId(deploymentId);
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
+            // 引擎用「测试独立 key」启动：与 deployForTest 成对，避免测试部署顶替正式版本
+            startDto.setEngineKey(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX);
             // 测试态无真实业务数据行：构造唯一 dataId，否则 data_id NOT NULL 校验失败，
             // 且 uk_biz_key(formId:dataId) 会在多次测试同一流程时重复。
             if (startDto.getDataId() == null) {
@@ -839,6 +842,8 @@ public class WfTestServiceImpl implements IWfTestService {
             startDto.setFieldValues(dto.getFormData());
             startDto.setTestFlag(true);
             startDto.setTestDeploymentId(deploymentId);
+            // 引擎用「测试独立 key」启动：与 deployForTest 成对，避免测试部署顶替正式版本
+            startDto.setEngineKey(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX);
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
             startDto.setDataId(IdWorker.getId());
             // 说明：开始节点（创建/申请人）在 instanceService.start 时即被 advance() 自动完成、不生成待办。
