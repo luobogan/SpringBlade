@@ -916,6 +916,10 @@ public class WfTestServiceImpl implements IWfTestService {
         result.setCurrentNodeName(nodeName(nodeList, inst.getCurrentNodeKey()));
         result.setHasPending(!todos.isEmpty());
         result.setCurrentTaskId(todos.isEmpty() ? null : todos.get(0).getId());
+        long curPending = todos.stream()
+            .filter(x -> inst.getCurrentNodeKey() != null && inst.getCurrentNodeKey().equals(x.getNodeKey()))
+            .count();
+        result.setCurrentNodePendingCount((int) curPending);
 
         if (running) {
             // 运行中：结论标记为「进行中」，未走到的节点提示为「等待推进」而非配置错误
@@ -1021,6 +1025,11 @@ public class WfTestServiceImpl implements IWfTestService {
         }
 
         String opinion = StringUtil.isBlank(dto.getOpinion()) ? DEFAULT_TEST_OPINION : dto.getOpinion();
+        // 交互式测试：一次「提交」只办理一个人（一个待办）。
+        // 会签节点＝同一节点有多条待办，需每个人各自点一次提交；或签＝首条办结即关闭其余并推进；
+        // 普通单人节点＝只有一条待办，一次办结。这样与 ecology「会签需逐人审批」一致，
+        // 不会「一点提交把会签所有人都办掉」。自动测试（runScenario）仍按原逻辑整节点一次走完。
+        boolean approvedOne = false;
         for (WfTask t : todos) {
             // 一次提交只办理「当前待办节点」的待办（多节点并存时同样逐节点推进）
             if (!curNodeKey.equals(t.getNodeKey())) {
@@ -1087,6 +1096,16 @@ public class WfTestServiceImpl implements IWfTestService {
             }
             // 以节点「接收人」身份审批（skip 操作菜单），但保留「意见必填」「字段校验」等业务规则
             taskService.autoApprove(t.getId(), opinion, variables, t.getAssignee());
+            approvedOne = true;
+            // 只办当前这一人：剩下同节点的待办（会签其余办理人）保持待办，等下一轮「提交」再办
+            break;
+        }
+        if (!approvedOne) {
+            // 兜底：当前节点已无可办待办（极少见，如全部被或签关闭），回退到最新状态
+            WfInstance afterFallback = instanceMapper.selectById(instId);
+            WfTestResultVO r = state(instId);
+            persistInteractiveLogIfFinished(afterFallback, r);
+            return r;
         }
 
         WfInstance after = instanceMapper.selectById(instId);

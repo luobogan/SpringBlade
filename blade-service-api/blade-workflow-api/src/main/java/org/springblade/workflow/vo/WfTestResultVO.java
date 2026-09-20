@@ -97,6 +97,9 @@ public class WfTestResultVO {
     @Schema(description = "当前节点待办任务ID（测试态手动办理/退回用）")
     private Long currentTaskId;
 
+    @Schema(description = "当前节点待办任务数量（会签/并行节点 >1，需逐人各自提交；普通节点 =1）")
+    private Integer currentNodePendingCount;
+
     @Data
     @Schema(description = "单个节点的测试结果")
     public static class TestNodeVO {

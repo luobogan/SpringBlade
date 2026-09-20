@@ -144,6 +144,7 @@
             sort,
             category,
             is_component,
+            is_open,
             tenant_id,
             source_menu_id
             FROM
@@ -171,6 +172,7 @@
             sort,
             category,
             is_component,
+            is_open,
             tenant_id,
             source_menu_id
             FROM
