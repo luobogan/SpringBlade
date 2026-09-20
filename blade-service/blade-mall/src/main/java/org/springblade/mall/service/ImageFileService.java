@@ -12,11 +12,15 @@ import java.util.Date;
 /**
  * 文件上传服务（blade-mall实现）
  * 负责将文件元数据保存到ImageFile表
+ * <p>
+ * 注意：必须显式指定 bean 名，因框架包 org.springblade.core.boot.file.ImageFileService
+ * 与本类简名相同，MallApplication 的 @ComponentScan("org.springblade") 会同时扫到两者，
+ * 默认 bean 名均为 imageFileService 会导致 ConflictingBeanDefinitionException。
  *
  * @author Blade
  */
 @Slf4j
-@Service
+@Service("mallImageFileService")
 public class ImageFileService {
 
 	private static ImageFileService instance;
