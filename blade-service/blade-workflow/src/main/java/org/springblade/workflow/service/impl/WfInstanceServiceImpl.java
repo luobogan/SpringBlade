@@ -12,12 +12,14 @@ import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
+import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
@@ -33,10 +35,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 流程实例语义服务实现
@@ -57,6 +64,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfProcessNodeMapper nodeMapper;
     private final IProcessService processService;
     private final WfOperatorResolver operatorResolver;
+    private final WfNodeLinkMapper linkMapper;
     private final NodeActionExecutor nodeActionExecutor;
 
     @Override
@@ -152,10 +160,24 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         WfInstance inst = instanceMapper.selectById(instId);
         WfProcessNode curNode = (inst == null || inst.getCurrentNodeKey() == null) ? null
             : nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, inst.getDefId())
-                .eq(WfProcessNode::getNodeKey, inst.getCurrentNodeKey())
-                .last("LIMIT 1"));
+            .eq(WfProcessNode::getDefId, inst.getDefId())
+            .eq(WfProcessNode::getNodeKey, inst.getCurrentNodeKey())
+            .last("LIMIT 1"));
         List<String> visibleNodeKeys = WfNodeSettingsUtil.formLogVisibleNodeKeys(curNode);
+
+        // 预取「出口 from→to」一次，用于算每条日志的「下一节点办理人」（接收人）。
+        // 聚合所有出口；网关多出口时合并各目标节点的办理人（近似，避免逐条走运行时网关分支）。
+        Map<String, List<String>> fromTo = new LinkedHashMap<>();
+        if (inst != null) {
+            for (WfNodeLink lk : linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
+                .eq(WfNodeLink::getDefId, inst.getDefId()))) {
+                if (lk.getFromNodeKey() == null) {
+                    continue;
+                }
+                fromTo.computeIfAbsent(lk.getFromNodeKey(), k -> new ArrayList<>()).add(lk.getToNodeKey());
+            }
+        }
+        Long starter = (inst != null) ? inst.getStarter() : null;
 
         List<ApprovalLogVO> result = new ArrayList<>(logs.size());
         for (WfApprovalLog l : logs) {
@@ -170,6 +192,28 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             vo.setLogType(l.getLogType());
             vo.setOpinion(l.getOpinion());
             vo.setOperateTime(l.getOperateTime());
+            // 「接收人」＝本节点出口指向的下一节点的操作者（聚合；网关多出口合并）。
+            // 用已有的 WfOperatorResolver 把部门/角色/人员/创建人等配置解析成具体的办理人用户ID，
+            // 交由前端用人员字典显示姓名（后端只给 ID，避免额外批量查姓名）。
+            Set<Long> handlerIds = new LinkedHashSet<>();
+            if (inst != null) {
+                List<String> tos = fromTo.get(l.getNodeKey());
+                if (tos != null) {
+                    for (String to : tos) {
+                        try {
+                            List<Long> ids = operatorResolver.resolve(
+                                inst.getDefId(), to, instId, starter, l.getOperator());
+                            if (ids != null) {
+                                handlerIds.addAll(ids);
+                            }
+                        } catch (Exception e) {
+                            log.warn("[blade-workflow] 解析下一节点办理人失败，已跳过. nodeKey={}", to, e);
+                        }
+                    }
+                }
+            }
+            vo.setNextHandlerIds(handlerIds.isEmpty() ? "" :
+                handlerIds.stream().map(String::valueOf).collect(Collectors.joining(",")));
             result.add(vo);
         }
         return result;

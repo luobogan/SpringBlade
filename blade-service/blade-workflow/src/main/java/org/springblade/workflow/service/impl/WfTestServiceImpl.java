@@ -999,6 +999,19 @@ public class WfTestServiceImpl implements IWfTestService {
                 throw new ServiceException("开始节点【" + firstNode.getNodeName()
                     + "】表单必填未填： " + String.join("、", startMissing));
             }
+            // 申请人填写的签字意见补写到发起时那条「提交」日志上（发起时记的是空意见）：
+            // 否则在开始节点填了意见，前端「流转意见」里看不到。
+            if (StringUtil.isNotBlank(dto.getOpinion())) {
+                WfApprovalLog submitLog = approvalLogMapper.selectOne(Wrappers.<WfApprovalLog>lambdaQuery()
+                    .eq(WfApprovalLog::getInstId, instId)
+                    .eq(WfApprovalLog::getLogType, WfApprovalLog.LOG_SUBMIT)
+                    .orderByDesc(WfApprovalLog::getId)
+                    .last("LIMIT 1"));
+                if (submitLog != null) {
+                    submitLog.setOpinion(dto.getOpinion());
+                    approvalLogMapper.updateById(submitLog);
+                }
+            }
             WfInstance afterStart = instanceMapper.selectById(instId);
             WfTestResultVO r = state(instId);
             r.setSummary("已提交开始节点（申请人）表单，流程停在【" + r.getCurrentNodeName() + "】等待办理。");

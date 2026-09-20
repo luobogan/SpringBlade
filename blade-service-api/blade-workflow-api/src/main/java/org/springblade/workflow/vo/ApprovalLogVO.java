@@ -41,6 +41,9 @@ public class ApprovalLogVO implements Serializable {
     @Schema(description = "审批意见")
     private String opinion;
 
+    @Schema(description = "下一节点办理人用户ID（逗号分隔；按流程出口解析，部门/角色/人员等已展开为具体用户ID）")
+    private String nextHandlerIds;
+
     @JsonFormat(pattern = DateUtil.PATTERN_DATETIME)
     @Schema(description = "操作时间")
     private Date operateTime;
