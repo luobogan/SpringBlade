@@ -9,15 +9,20 @@ import org.springblade.core.tool.api.R;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.feign.IFormmodeClient;
+import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.ValidateDTO;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
+import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
@@ -67,6 +72,8 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final IFormmodeClient formmodeClient;
     /** 记录级鉴权复用实例服务的口径（发起人 / 参与人 / 管理员） */
     private final IWfInstanceService instanceService;
+    /** 保存时按 defId 回退表单ID */
+    private final WfProcessDefinitionMapper defMapper;
 
     @Override
     public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam) {
@@ -180,6 +187,80 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             }
         }
         return vo;
+    }
+
+    @Override
+    public String save(FormSaveDTO dto) {
+        if (dto == null) {
+            throw new ServiceException("保存参数不能为空");
+        }
+        Long formId = dto.getFormId();
+        if (formId == null && dto.getDefId() != null) {
+            WfProcessDefinition def = defMapper.selectById(dto.getDefId());
+            formId = def == null ? null : def.getFormId();
+        }
+        if (formId == null) {
+            throw new ServiceException("无法确定保存所用的表单（formId 与 defId 都拿不到表单）");
+        }
+        // 办理态：记录级鉴权（与 render / validate 同口径），防止保存别人的单据
+        if (dto.getInstanceId() != null && !instanceService.canView(dto.getInstanceId())) {
+            throw new WfAccessDeniedException("无权保存该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以操作");
+        }
+
+        // ① 写业务数据行（跨服务 formmode：dataId 为空=新建，非空=更新同一行）
+        FormDataSaveDTO saveDto = new FormDataSaveDTO();
+        saveDto.setFormId(formId);
+        saveDto.setDataId(dto.getDataId());
+        saveDto.setFieldValues(dto.getFieldValues() == null ? Map.of() : dto.getFieldValues());
+        R<Long> r = formmodeClient.saveBusinessData(saveDto);
+        if (r == null || !r.isSuccess() || r.getData() == null) {
+            throw new ServiceException("保存业务数据失败：" + (r == null ? "无响应" : r.getMsg()));
+        }
+        Long dataId = r.getData();
+
+        // ② 办理态：同步当前节点快照（不改任务状态、不推进引擎）
+        if (dto.getInstanceId() != null) {
+            String nodeKey = (dto.getNodeKey() != null && !dto.getNodeKey().isEmpty())
+                ? dto.getNodeKey() : currentNodeKey(dto.getInstanceId());
+            upsertSnapshot(dto.getInstanceId(), nodeKey, dto.getFieldValues());
+        }
+        log.info("[blade-workflow] 表单已保存（未流转）. instId={}, formId={}, dataId={}",
+            dto.getInstanceId(), formId, dataId);
+        return String.valueOf(dataId);
+    }
+
+    /** 实例的当前节点Key（保存时未显式指定节点时用它定位快照） */
+    private String currentNodeKey(Long instId) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null || inst.getCurrentNodeKey() == null) {
+            return "";
+        }
+        return inst.getCurrentNodeKey();
+    }
+
+    /** 快照 upsert：与 {@code snapshot(instId,nodeKey)} 的取数口径一致（同节点取最新一条） */
+    private void upsertSnapshot(Long instId, String nodeKey, Map<String, Object> values) {
+        if (nodeKey == null || nodeKey.isEmpty()) {
+            return;
+        }
+        String json = JsonUtil.toJson(values == null ? Map.of() : values);
+        WfFormSnapshot latest = snapshotMapper.selectOne(Wrappers.<WfFormSnapshot>lambdaQuery()
+            .eq(WfFormSnapshot::getInstId, instId)
+            .eq(WfFormSnapshot::getNodeKey, nodeKey)
+            .orderByDesc(WfFormSnapshot::getCreateTime)
+            .last("LIMIT 1"));
+        if (latest != null) {
+            WfFormSnapshot patch = new WfFormSnapshot();
+            patch.setId(latest.getId());
+            patch.setDataJson(json);
+            snapshotMapper.updateById(patch);
+            return;
+        }
+        WfFormSnapshot snap = new WfFormSnapshot();
+        snap.setInstId(instId);
+        snap.setNodeKey(nodeKey);
+        snap.setDataJson(json);
+        snapshotMapper.insert(snap);
     }
 
     @Override

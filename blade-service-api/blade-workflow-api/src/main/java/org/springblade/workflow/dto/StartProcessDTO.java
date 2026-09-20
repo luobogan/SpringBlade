@@ -93,4 +93,14 @@ public class StartProcessDTO implements Serializable {
      */
     private String testDeploymentId;
 
+    /**
+     * 是否「单据发起」（由业务表单/触发表驱动发起，业务行由单据侧维护与流程的关联）。
+     *
+     * <p>为 true 时，发起成功后<b>不</b>回填 {@code request_id}（避免覆盖单据侧已维护的关联，
+     * 也避免对没有 request_id 列的存量单据表产生误报）。为 false/空 时，凡业务行由本侧创建
+     * （含「先保存草稿再提交」复用 {@code /form/save} 返回的业务行），都会回填 request_id 以保证
+     * 单据 ↔ 流程双向反查可用。</p>
+     */
+    private Boolean billInitiated;
+
 }

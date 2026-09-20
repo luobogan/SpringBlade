@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 public class IWorkflowClientFallback implements IWorkflowClient {
 
     @Override
-    public R<Long> startProcess(StartProcessDTO dto) {
+    public R<String> startProcess(StartProcessDTO dto) {
         log.error("[blade-workflow] 发起流程失败，服务不可用. formId={}, dataId={}, procKey={}",
             dto == null ? null : dto.getFormId(),
             dto == null ? null : dto.getDataId(),

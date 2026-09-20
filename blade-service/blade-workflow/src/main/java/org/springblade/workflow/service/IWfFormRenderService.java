@@ -1,5 +1,6 @@
 package org.springblade.workflow.service;
 
+import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.ValidateDTO;
 import org.springblade.workflow.vo.FormRenderVO;
 
@@ -33,5 +34,18 @@ public interface IWfFormRenderService {
      * @return 校验通过返回 true；失败则抛出携带缺失字段信息的异常
      */
     boolean validate(ValidateDTO dto);
+
+    /**
+     * 保存表单（<b>只存不流转</b>）：对齐 ecology「操作菜单 → 保存」。
+     *
+     * <p>发起态（无 instanceId）写/更新业务数据行并返回 dataId，之后发起带上该 dataId 即可复用；
+     * 办理态（有 instanceId）写业务行 + 同步当前节点快照，不改任务状态、不推进引擎。</p>
+     *
+     * <p>⚠️ 不做必填校验：保存允许表单不完整（这正是「先存后提交」的意义）。</p>
+     *
+     * @param dto 保存入参
+     * @return 业务数据ID（字符串形式，避免 19 位雪花 ID 在前端丢精度）
+     */
+    String save(FormSaveDTO dto);
 
 }

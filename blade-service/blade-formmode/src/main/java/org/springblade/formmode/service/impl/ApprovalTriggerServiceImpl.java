@@ -78,6 +78,8 @@ public class ApprovalTriggerServiceImpl implements IApprovalTriggerService {
         dto.setDataId(dataId);
         dto.setFieldValues(fieldValues);
         dto.setStarter(SecureUtil.getUserId());
+        // 单据/触发表发起：业务行由单据侧维护与流程的关联，发起后不回填 request_id
+        dto.setBillInitiated(true);
         // 触发表中的 workflowid 对应新流程定义ID（wf_process_definition.id）；
         // 存量 ecology 流程经 wf_migration_map 映射后同样落到这里。
         if (triggerSet.getWorkflowid() != null) {

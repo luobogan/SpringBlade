@@ -284,9 +284,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         String startOpinion = (dto.getOpinion() == null) ? "" : dto.getOpinion();
         appendLog(inst.getId(), null, firstNodeKey, starter, WfApprovalLog.LOG_SUBMIT, startOpinion);
 
-        // 业务数据回填流程实例ID（request_id，BIGINT）：仅本次现场建的业务行才写。
-        // L3 运行时自检③：回填结果写回实例，供前端/巡检直接判读（单据发起不回填，保持 NULL）。
-        if (ownBusinessRow) {
+        // 业务数据回填流程实例ID（request_id，BIGINT）：业务行由本侧创建（表单直发现场建行，
+        // 或「先保存草稿再提交」复用 /form/save 返回的业务行）时都需回填，保证单据 ↔ 流程双向反查可用。
+        // 单据发起（billInitiated=true，关联由单据侧维护）与测试态（业务行是占位）不回填。
+        // L3 运行时自检③：回填结果写回实例，供前端/巡检直接判读（单据发起/测试态不回填，保持 NULL）。
+        boolean needBind = formId != null && dataId != null
+            && !Boolean.TRUE.equals(dto.getTestFlag())
+            && !Boolean.TRUE.equals(dto.getBillInitiated());
+        if (needBind) {
             boolean bound = bindRequestId(def, dto, dataId, inst.getId());
             WfInstance patch = new WfInstance();
             patch.setId(inst.getId());

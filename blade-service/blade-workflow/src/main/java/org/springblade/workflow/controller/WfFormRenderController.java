@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.ValidateDTO;
 import org.springblade.workflow.service.IWfFormRenderService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -67,6 +68,14 @@ public class WfFormRenderController {
     @Operation(summary = "服务端校验", description = "按节点必填矩阵复核，必填字段缺失时返回错误信息")
     public R<Boolean> validate(@RequestBody ValidateDTO dto) {
         return R.data(formRenderService.validate(dto), "校验通过");
+    }
+
+    @PostMapping("/save")
+    @Operation(summary = "保存表单（只存不流转）",
+        description = "对齐 ecology「操作菜单 → 保存」：发起态写/更新业务行并返回 dataId（之后发起带上即可复用）；"
+            + "办理态写业务行 + 同步当前节点快照，不改任务状态、不推进引擎。不做必填校验。")
+    public R<String> save(@RequestBody FormSaveDTO dto) {
+        return R.data(formRenderService.save(dto), "已保存");
     }
 
 }
