@@ -14,10 +14,12 @@ import org.springblade.workflow.dto.RejectDTO;
 import org.springblade.workflow.dto.UrgeDTO;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfInstance;
+import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.IProcessService;
@@ -76,6 +78,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfTaskMapper taskMapper;
     private final WfInstanceMapper instanceMapper;
     private final WfProcessNodeMapper nodeMapper;
+    private final WfNodeOperatorMapper operatorMapper;
     private final WfApprovalLogMapper logMapper;
     private final IProcessService processService;
     private final IWfInstanceService instanceService;
@@ -116,6 +119,26 @@ public class WfTaskServiceImpl implements IWfTaskService {
         dto.setOpinion(opinion == null ? AUTO_OPINION : opinion);
         dto.setVariables(variables);
         return doApprove(taskId, dto, AUTO_OPERATOR, true);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean autoApprove(Long taskId, String opinion, Long operator) {
+        ApproveDTO dto = new ApproveDTO();
+        dto.setOpinion(opinion == null ? AUTO_OPINION : opinion);
+        // 流程测试：以节点「接收人」身份审批；未指定时回退系统。
+        Long op = (operator == null) ? AUTO_OPERATOR : operator;
+        return doApprove(taskId, dto, op, true);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean autoApprove(Long taskId, String opinion, java.util.Map<String, Object> variables, Long operator) {
+        ApproveDTO dto = new ApproveDTO();
+        dto.setOpinion(opinion == null ? AUTO_OPINION : opinion);
+        dto.setVariables(variables);
+        Long op = (operator == null) ? AUTO_OPERATOR : operator;
+        return doApprove(taskId, dto, op, true);
     }
 
     /**
@@ -327,6 +350,26 @@ public class WfTaskServiceImpl implements IWfTaskService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean markViewed(Long taskId) {
+        if (taskId == null) {
+            return false;
+        }
+        WfTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            return false;
+        }
+        // 只记首次：已看过不改时间（流程图「已查看」只关心是否打开过）
+        if (task.getViewTime() != null) {
+            return true;
+        }
+        WfTask patch = new WfTask();
+        patch.setId(taskId);
+        patch.setViewTime(new Date());
+        return taskMapper.updateById(patch) > 0;
+    }
+
+    @Override
     public Map<String, Long> count(Long assignee) {
         Map<String, Long> result = new HashMap<>(4);
         Long todo = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
@@ -373,7 +416,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
             vo.setStarter(inst.getStarter());
             vo.setStartTime(inst.getStartTime());
             vo.setUrgency(inst.getUrgency());
+            // ⚠️ 必须带 defId：bpmn-js 的 id（Activity_xxx 等）在不同流程间会重复，
+            //    只按 nodeKey 查会命中别的流程的节点，待办/已办列表节点名串味。
             WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, inst.getDefId())
                 .eq(WfProcessNode::getNodeKey, t.getNodeKey())
                 .last("LIMIT 1"));
             if (node != null) {
@@ -446,12 +492,42 @@ public class WfTaskServiceImpl implements IWfTaskService {
         return task;
     }
 
+    /**
+     * 解析节点的签批方式（{@link #SIGN_ANY 或签} / {@link #SIGN_ALL 会签} / {@link #SIGN_SEQUENCE 依次}）。
+     *
+     * <p>⚠️ 必须同时看「操作组级会签属性」（{@code wf_node_operator.sign_order}）：
+     * 「节点信息 → 操作者 → 添加操作组」里选的会签/依次**只写 wf_node_operator**，
+     * 而节点级「审批方式」（{@code wf_process_node.sign_order}）往往仍是默认 0（或签）。
+     * 若只读节点级，就会出现「配了会签，却一人通过即推进引擎/归档」。</p>
+     *
+     * <p>合并规则（两层取更严格者）：任一层为会签 → 会签；否则任一层为依次 → 依次；否则或签。</p>
+     */
     private int resolveSignOrder(Long defId, String nodeKey) {
-        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
-        return (node == null || node.getSignOrder() == null) ? SIGN_ANY : node.getSignOrder();
+        WfProcessNode node = loadNode(defId, nodeKey);
+        int nodeLevel = (node == null || node.getSignOrder() == null) ? SIGN_ANY : node.getSignOrder();
+        boolean all = nodeLevel == SIGN_ALL;
+        boolean sequence = nodeLevel == SIGN_SEQUENCE;
+        if (node != null && node.getId() != null) {
+            List<WfNodeOperator> ops = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+                .eq(WfNodeOperator::getNodeId, node.getId()));
+            if (ops != null) {
+                for (WfNodeOperator op : ops) {
+                    Integer so = op.getSignOrder();
+                    if (so == null) {
+                        continue;
+                    }
+                    if (so == SIGN_ALL) {
+                        all = true;
+                    } else if (so == SIGN_SEQUENCE) {
+                        sequence = true;
+                    }
+                }
+            }
+        }
+        if (all) {
+            return SIGN_ALL;
+        }
+        return sequence ? SIGN_SEQUENCE : SIGN_ANY;
     }
 
     private long countPending(Long instId, String nodeKey) {

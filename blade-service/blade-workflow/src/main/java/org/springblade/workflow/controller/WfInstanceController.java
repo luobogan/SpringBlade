@@ -11,6 +11,7 @@ import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -60,6 +61,13 @@ public class WfInstanceController {
     @Operation(summary = "流转/审批记录")
     public R<List<ApprovalLogVO>> logs(@PathVariable("id") Long id) {
         return R.data(instanceService.logs(id));
+    }
+
+    @GetMapping("/{id}/node-operators")
+    @Operation(summary = "节点操作者情况",
+        description = "流程图节点悬浮「操作者」面板数据：按节点返回已操作 / 已查看 / 未操作人员ID（姓名由前端人员字典解析）")
+    public R<java.util.Map<String, WfNodeOperatorVO>> nodeOperators(@PathVariable("id") Long id) {
+        return R.data(instanceService.nodeOperators(id));
     }
 
     @GetMapping("/{id}/snapshot/{nodeKey}")

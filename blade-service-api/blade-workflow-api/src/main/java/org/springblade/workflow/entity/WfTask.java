@@ -73,6 +73,17 @@ public class WfTask extends TenantEntity {
     @Schema(description = "处理时间")
     private Date operateTime;
 
+    /**
+     * 首次查看时间（流程轨迹「已查看」判定）。
+     *
+     * <p>办理人打开待办/办理页时写入（只记首次，不覆盖）。流程轨迹按
+     * 待办(0)+viewTime 非空 = 已查看、待办(0)+为空 = 未操作。</p>
+     */
+    @DateTimeFormat(pattern = DateUtil.PATTERN_DATETIME)
+    @JsonFormat(pattern = DateUtil.PATTERN_DATETIME)
+    @Schema(description = "首次查看时间")
+    private Date viewTime;
+
     @DateTimeFormat(pattern = DateUtil.PATTERN_DATETIME)
     @JsonFormat(pattern = DateUtil.PATTERN_DATETIME)
     @Schema(description = "截止时间")

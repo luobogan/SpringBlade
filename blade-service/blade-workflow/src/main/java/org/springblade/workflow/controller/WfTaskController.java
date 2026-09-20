@@ -91,6 +91,13 @@ public class WfTaskController {
         return R.data(taskService.urge(id, dto), "已催办");
     }
 
+    @PostMapping("/{id}/view")
+    @Operation(summary = "标记已查看",
+        description = "办理人打开待办/办理页时调用，记录首次查看时间；流程图「操作者」面板据此区分「已查看」与「未操作」")
+    public R<Boolean> view(@PathVariable("id") Long id) {
+        return R.data(taskService.markViewed(id));
+    }
+
     private static Long resolveAssignee(Long assignee) {
         return (assignee != null) ? assignee : SecureUtil.getUserId();
     }

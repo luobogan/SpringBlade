@@ -3,8 +3,10 @@ package org.springblade.workflow.service;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.WfNodeOperatorVO;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 流程实例语义服务
@@ -43,6 +45,17 @@ public interface IWfInstanceService {
      * 流转/审批记录
      */
     List<ApprovalLogVO> logs(Long instId);
+
+    /**
+     * 节点操作者情况（流程图节点悬浮「操作者」面板）。
+     *
+     * <p>按 nodeKey 返回该节点的「已操作 / 已查看 / 未操作」人员ID分组，
+     * 供流程图节点悬浮面板与节点下方「谁办了」展示。</p>
+     *
+     * @param instId 流程实例ID
+     * @return nodeKey → 分组人员ID（没有办理记录的节点不会出现在结果里）
+     */
+    Map<String, WfNodeOperatorVO> nodeOperators(Long instId);
 
     /**
      * 取指定节点的表单数据快照

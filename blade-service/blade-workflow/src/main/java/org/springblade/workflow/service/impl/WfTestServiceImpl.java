@@ -317,7 +317,7 @@ public class WfTestServiceImpl implements IWfTestService {
                             sr.fatal = new AbstractMap.SimpleEntry<>(t.getNodeKey(), msg);
                             return sr;
                         }
-                        taskService.autoApprove(t.getId(), "测试自动通过");
+                        taskService.autoApprove(t.getId(), "测试自动通过", t.getAssignee());
                         logLines.add(fmt.format(new Date()) + " 节点【" + t.getNodeKey() + "】已自动通过（办理人="
                             + t.getAssignee() + "）");
                     } catch (Exception e) {
@@ -999,8 +999,9 @@ public class WfTestServiceImpl implements IWfTestService {
                 throw new ServiceException("开始节点【" + firstNode.getNodeName()
                     + "】表单必填未填： " + String.join("、", startMissing));
             }
-            // 申请人填写的签字意见补写到发起时那条「提交」日志上（发起时记的是空意见）：
-            // 否则在开始节点填了意见，前端「流转意见」里看不到。
+            // 申请人在开始节点填的签字意见，补写到发起时那条「提交」日志上（发起时记的是空意见）。
+            // 开始节点停在自己节点时该日志不展示；流转到下一节点后，logs() 会把它作为第一条展示，
+            // 此时需要包含申请人的意见内容。
             if (StringUtil.isNotBlank(dto.getOpinion())) {
                 WfApprovalLog submitLog = approvalLogMapper.selectOne(Wrappers.<WfApprovalLog>lambdaQuery()
                     .eq(WfApprovalLog::getInstId, instId)
@@ -1084,8 +1085,8 @@ public class WfTestServiceImpl implements IWfTestService {
                     }
                 }
             }
-            // 系统语义推进（跳过「操作菜单」），但保留「意见必填」「字段校验」等业务规则
-            taskService.autoApprove(t.getId(), opinion, variables);
+            // 以节点「接收人」身份审批（skip 操作菜单），但保留「意见必填」「字段校验」等业务规则
+            taskService.autoApprove(t.getId(), opinion, variables, t.getAssignee());
         }
 
         WfInstance after = instanceMapper.selectById(instId);

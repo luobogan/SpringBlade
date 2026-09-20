@@ -59,6 +59,28 @@ public interface IWfTaskService {
     boolean autoApprove(Long taskId, String opinion, java.util.Map<String, Object> variables);
 
     /**
+     * 以指定办理人身份自动通过（用于流程测试：以节点「接收人」身份审批，而非系统）。
+     *
+     * <p>与 {@link #autoApprove(Long, String)} 的区别仅在于流转意见记录的办理人：
+     * 传 {@code operator} 时记为该办理人（流程测试的接收人），否则记为系统（{@code 0}）。</p>
+     *
+     * @param taskId   待办任务ID
+     * @param opinion  自动通过意见
+     * @param operator 实际办理人（节点接收人）；为空时回退系统
+     */
+    boolean autoApprove(Long taskId, String opinion, Long operator);
+
+    /**
+     * 以指定办理人身份自动通过（可携带流程变量）。
+     *
+     * @param taskId    待办任务ID
+     * @param opinion   自动通过意见
+     * @param variables 附加流程变量（可为 null）
+     * @param operator  实际办理人（节点接收人）；为空时回退系统
+     */
+    boolean autoApprove(Long taskId, String opinion, java.util.Map<String, Object> variables, Long operator);
+
+    /**
      * 退回：回到指定节点（为空则退回上一节点）
      */
     boolean reject(Long taskId, RejectDTO dto);
@@ -87,5 +109,16 @@ public interface IWfTaskService {
      * 待办 / 已办计数（供 /monitor/count 使用）
      */
     Map<String, Long> count(Long assignee);
+
+    /**
+     * 标记待办已查看（流程轨迹「已查看」判定）。
+     *
+     * <p>办理人打开待办/办理页时调用，只记<b>首次</b>查看时间（已存在则不覆盖）。
+     * 配合流程图悬浮「操作者」面板：待办(0) + 已查看 = 「已查看」，待办(0) + 未查看 = 「未操作」。</p>
+     *
+     * @param taskId 待办任务ID
+     * @return 是否处理成功（任务不存在返回 false）
+     */
+    boolean markViewed(Long taskId);
 
 }

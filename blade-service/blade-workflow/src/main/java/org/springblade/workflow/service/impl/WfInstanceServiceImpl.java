@@ -30,6 +30,7 @@ import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
+import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -179,15 +180,34 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         Long starter = (inst != null) ? inst.getStarter() : null;
 
+        // 开始节点（nodeType=0）的「提交」日志：仅在流程仍停在开始节点（申请人尚未提交给下一节点）时
+        // 不展示；一旦提交到下一节点，就开始展示开始节点的流转意见（作为第一条，含申请人意见）。
+        String startNodeKey = null;
+        if (inst != null) {
+            WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, inst.getDefId())
+                .eq(WfProcessNode::getNodeType, 0)
+                .last("LIMIT 1"));
+            if (startNode != null) {
+                startNodeKey = startNode.getNodeKey();
+            }
+        }
+        String curNodeKey = (inst != null) ? inst.getCurrentNodeKey() : null;
+        boolean atStartNode = startNodeKey != null && startNodeKey.equals(curNodeKey);
+
         List<ApprovalLogVO> result = new ArrayList<>(logs.size());
         for (WfApprovalLog l : logs) {
+            // 开始节点（发起/填表）在仍停在自己节点时不计入流转意见；流转到下一节点后再展示
+            if (atStartNode && startNodeKey != null && startNodeKey.equals(l.getNodeKey())) {
+                continue;
+            }
             if (visibleNodeKeys != null && !visibleNodeKeys.contains(l.getNodeKey())) {
                 continue;
             }
             ApprovalLogVO vo = new ApprovalLogVO();
             vo.setId(l.getId());
             vo.setNodeKey(l.getNodeKey());
-            vo.setNodeName(resolveNodeName(l.getNodeKey()));
+            vo.setNodeName(resolveNodeName(inst == null ? null : inst.getDefId(), l.getNodeKey()));
             vo.setOperator(l.getOperator());
             vo.setLogType(l.getLogType());
             vo.setOpinion(l.getOpinion());
@@ -488,11 +508,19 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return node == null ? "" : node.getNodeKey();
     }
 
-    private String resolveNodeName(String nodeKey) {
+    /**
+     * 节点名解析（必须带 defId）。
+     *
+     * <p>⚠️ 不能只按 nodeKey 查：bpmn-js 生成的 id（Activity_xxx / Gateway_xxx / Event_xxx）
+     * 在不同流程间会重复，同一个 nodeKey 会命中别的流程的节点，导致流转意见/实例头显示
+     * 串味节点名（例：A 流程的「业务领导」显示成 B 流程里同名 key 的节点名）。</p>
+     */
+    private String resolveNodeName(Long defId, String nodeKey) {
         if (nodeKey == null || nodeKey.isEmpty()) {
             return "";
         }
         WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(defId != null, WfProcessNode::getDefId, defId)
             .eq(WfProcessNode::getNodeKey, nodeKey)
             .last("LIMIT 1"));
         return node == null ? nodeKey : node.getNodeName();
@@ -508,7 +536,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         vo.setBizKey(inst.getBizKey());
         vo.setStatus(inst.getStatus());
         vo.setCurrentNodeKey(inst.getCurrentNodeKey());
-        vo.setCurrentNodeName(resolveNodeName(inst.getCurrentNodeKey()));
+        vo.setCurrentNodeName(resolveNodeName(inst.getDefId(), inst.getCurrentNodeKey()));
         vo.setStarter(inst.getStarter());
         vo.setStartTime(inst.getStartTime());
         vo.setEndTime(inst.getEndTime());
@@ -526,10 +554,88 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * <p>nodeKey 取归档节点（nodeType=3）；未配置归档节点时退回「最后经过的节点」。
      * 操作人记 0（系统）、意见固定「流程归档」，与前端「流转意见」的节点名/动作标签展示对应。</p>
      */
+    /**
+     * 节点操作者情况（流程图节点悬浮「操作者」面板 + 节点下方「谁办了」）。
+     *
+     * <p>口径见 {@link WfNodeOperatorVO}：已操作 / 已查看（待办打开过）/ 未操作。</p>
+     */
+    @Override
+    public Map<String, WfNodeOperatorVO> nodeOperators(Long instId) {
+        Map<String, WfNodeOperatorVO> result = new LinkedHashMap<>();
+        if (instId == null) {
+            return result;
+        }
+        WfInstance inst = instanceMapper.selectById(instId);
+
+        // ① 待办任务：按状态归组
+        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .orderByAsc(WfTask::getId));
+        for (WfTask t : tasks) {
+            if (t.getNodeKey() == null || t.getNodeKey().isEmpty() || t.getAssignee() == null) {
+                continue;
+            }
+            WfNodeOperatorVO vo = result.computeIfAbsent(t.getNodeKey(), k -> new WfNodeOperatorVO());
+            int st = (t.getStatus() == null) ? WfTask.STATUS_TODO : t.getStatus();
+            if (st == WfTask.STATUS_TODO) {
+                // 待办：打开过待办 → 已查看；从未打开 → 未操作
+                if (t.getViewTime() != null) {
+                    addOperatorId(vo.getViewed(), t.getAssignee());
+                } else {
+                    addOperatorId(vo.getTodo(), t.getAssignee());
+                }
+            } else if (st == WfTask.STATUS_DONE || st == WfTask.STATUS_FINISHED
+                || st == WfTask.STATUS_AUTO_SUBMIT || st == WfTask.STATUS_COADJUTANT) {
+                addOperatorId(vo.getHandled(), t.getAssignee());
+            }
+            // 抄送(8) / 传阅(11) 属知会性质，不计入「操作者」面板
+        }
+
+        // ② 审批日志：真实办理人（加签/转办/退回等不一定留下本人 task 行，靠日志补齐）
+        List<WfApprovalLog> logs = logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
+            .eq(WfApprovalLog::getInstId, instId)
+            .orderByAsc(WfApprovalLog::getId));
+        for (WfApprovalLog l : logs) {
+            Long op = l.getOperator();
+            // 0 = 系统（引擎自动推进/归档），不是人，不进分组
+            if (op == null || op == 0L || l.getNodeKey() == null || l.getNodeKey().isEmpty()) {
+                continue;
+            }
+            WfNodeOperatorVO vo = result.computeIfAbsent(l.getNodeKey(), k -> new WfNodeOperatorVO());
+            addOperatorId(vo.getHandled(), op);
+            // 已操作的人从「已查看 / 未操作」里摘掉（或签时其余人待办会被强制办结）
+            vo.getTodo().remove(op);
+            vo.getViewed().remove(op);
+        }
+
+        // ③ 开始节点：引擎在发起时自动完成、不生成待办，其办理人即发起人（申请人）
+        if (inst != null && inst.getStarter() != null) {
+            WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(inst.getDefId() != null, WfProcessNode::getDefId, inst.getDefId())
+                .eq(WfProcessNode::getNodeType, 0)
+                .last("LIMIT 1"));
+            if (startNode != null && startNode.getNodeKey() != null && !startNode.getNodeKey().isEmpty()) {
+                WfNodeOperatorVO vo = result.computeIfAbsent(startNode.getNodeKey(), k -> new WfNodeOperatorVO());
+                addOperatorId(vo.getHandled(), inst.getStarter());
+                vo.getTodo().remove(inst.getStarter());
+                vo.getViewed().remove(inst.getStarter());
+            }
+        }
+        return result;
+    }
+
+    /** 去重追加（保持首次出现顺序） */
+    private static void addOperatorId(List<Long> ids, Long id) {
+        if (id != null && !ids.contains(id)) {
+            ids.add(id);
+        }
+    }
+
     private void appendArchiveLog(WfInstance inst, String lastNodeKey) {
         String nodeKey = (lastNodeKey == null) ? "" : lastNodeKey;
+        WfProcessNode archive = null;
         try {
-            WfProcessNode archive = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            archive = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
                 .eq(WfProcessNode::getDefId, inst.getDefId())
                 .eq(WfProcessNode::getNodeType, 3)
                 .last("LIMIT 1"));
@@ -539,7 +645,23 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         } catch (Exception e) {
             log.warn("[blade-workflow] 查询归档节点失败，流转意见退回最后经过节点. instId={}", inst.getId(), e);
         }
-        appendLog(inst.getId(), null, nodeKey, 0L, WfApprovalLog.LOG_APPROVE, "流程归档");
+        // 归档人：按归档节点（nodeType=3）配置的「操作者」解析（典型配置为「创建人本人」→ 发起人）。
+        // ⚠️ 不能写死 0（系统）：归档节点上明明配置了办理人（上一节点的「接收人」就是解析它得到的），
+        //    若这里固定记系统，流转意见的归档那行会显示「系统」，与节点配置的归档人不一致。
+        //    解析不到（未配操作者 / 类型不可解析）才回退 0。
+        Long operator = 0L;
+        if (archive != null) {
+            try {
+                List<Long> ids = operatorResolver.resolve(
+                    inst.getDefId(), nodeKey, inst.getId(), inst.getStarter(), inst.getStarter());
+                if (ids != null && !ids.isEmpty()) {
+                    operator = ids.get(0);
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 解析归档节点办理人失败，回退系统. instId={}", inst.getId(), e);
+            }
+        }
+        appendLog(inst.getId(), null, nodeKey, operator, WfApprovalLog.LOG_APPROVE, "流程归档");
     }
 
     private void appendLog(Long instId, Long taskId, String nodeKey, Long operator,
