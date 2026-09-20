@@ -116,7 +116,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         snap.setDataJson(JsonUtil.toJson(dto.getFieldValues() == null ? Map.of() : dto.getFieldValues()));
         snapshotMapper.insert(snap);
 
-        appendLog(inst.getId(), null, firstNodeKey, starter, WfApprovalLog.LOG_SUBMIT, "");
+        // 申请人签字意见（发起页填写）写进第一条「提交」流转记录；为空则记空串
+        String startOpinion = (dto.getOpinion() == null) ? "" : dto.getOpinion();
+        appendLog(inst.getId(), null, firstNodeKey, starter, WfApprovalLog.LOG_SUBMIT, startOpinion);
 
         advance(inst.getId());
         log.info("[blade-workflow] 发起流程成功. instId={}, defId={}, bizKey={}", inst.getId(), def.getId(), bizKey);

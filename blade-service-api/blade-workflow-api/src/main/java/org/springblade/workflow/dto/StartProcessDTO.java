@@ -51,6 +51,11 @@ public class StartProcessDTO implements Serializable {
     private Long starter;
 
     /**
+     * 发起人签字意见（富文本 HTML；写入流转意见第一条「提交」记录）
+     */
+    private String opinion;
+
+    /**
      * 紧急程度 0/1/2（对齐 ecology requestlevel）
      */
     private Integer urgency;
