@@ -1,12 +1,16 @@
 package org.springblade.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
+import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.formmode.dto.FormDataSaveDTO;
+import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.action.NodeActionExecutor;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.entity.WfApprovalLog;
@@ -67,6 +71,83 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfOperatorResolver operatorResolver;
     private final WfNodeLinkMapper linkMapper;
     private final NodeActionExecutor nodeActionExecutor;
+    private final IFormmodeClient formmodeClient;
+
+    /**
+     * 表单直发（发起流程页）时创建业务数据行，返回其 id 作为 dataId。
+     *
+     * <p>跨服务调 blade-formmode 的 {@code POST /form-data/save-by-form}：表名取
+     * {@code workflow_bill.table_name}（迁移表单表名与表单ID不同，如 2064530495200337922 →
+     * {@code formtable_main_5}），字段值按字段名写入真实存在的列。</p>
+     *
+     * <p>失败返回 null（由调用方回退占位 dataId）：流程仍可正常发起/审批/归档，只是业务表里
+     * 没有对应行，异常记 warn 日志，避免表单建模服务抖动把发起流程一起拖垮。</p>
+     */
+    private Long createBusinessData(WfProcessDefinition def, StartProcessDTO dto) {
+        Long formId = resolveFormId(def, dto);
+        if (formId == null) {
+            log.warn("[blade-workflow] 发起未携带表单ID，无法创建业务数据，回退占位 dataId");
+            return null;
+        }
+        Map<String, Object> values = new LinkedHashMap<>(16);
+        if (dto.getFieldValues() != null) {
+            values.putAll(dto.getFieldValues());
+        }
+        if (dto.getVariables() != null) {
+            values.putAll(dto.getVariables());
+        }
+        try {
+            FormDataSaveDTO saveDto = new FormDataSaveDTO();
+            saveDto.setFormId(formId);
+            saveDto.setFieldValues(values);
+            R<Long> r = formmodeClient.saveBusinessData(saveDto);
+            if (r != null && r.isSuccess() && r.getData() != null) {
+                log.info("[blade-workflow] 已创建业务数据行. formId={}, dataId={}", formId, r.getData());
+                return r.getData();
+            }
+            log.warn("[blade-workflow] 创建业务数据失败，回退占位 dataId. formId={}, msg={}",
+                formId, r == null ? "null" : r.getMsg());
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 创建业务数据异常，回退占位 dataId. formId={}", formId, e);
+        }
+        return null;
+    }
+
+    /**
+     * 把流程实例ID回填到业务数据行的 {@code request_id}（列必须 BIGINT，装雪花ID）。
+     *
+     * <p>顺序上必须在实例 insert 之后（此刻才有 instId）；用带 dataId 的保存请求 → 服务端走
+     * UPDATE，只更新 request_id 与修改审计列。失败仅告警，不影响已发起的流程。</p>
+     */
+    private void bindRequestId(WfProcessDefinition def, StartProcessDTO dto, Long dataId, Long instId) {
+        Long formId = resolveFormId(def, dto);
+        if (formId == null || dataId == null || instId == null) {
+            return;
+        }
+        try {
+            FormDataSaveDTO saveDto = new FormDataSaveDTO();
+            saveDto.setFormId(formId);
+            saveDto.setDataId(dataId);
+            saveDto.setRequestId(instId);
+            R<Long> r = formmodeClient.saveBusinessData(saveDto);
+            if (r == null || !r.isSuccess()) {
+                log.warn("[blade-workflow] 回填 request_id 失败. formId={}, dataId={}, msg={}",
+                    formId, dataId, r == null ? "null" : r.getMsg());
+            } else {
+                log.info("[blade-workflow] 已回填 request_id={} → 业务数据 dataId={}", instId, dataId);
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 回填 request_id 异常. formId={}, dataId={}", formId, dataId, e);
+        }
+    }
+
+    /** 表单ID：优先调用方传入，缺失时取流程定义绑定的表单 */
+    private static Long resolveFormId(WfProcessDefinition def, StartProcessDTO dto) {
+        if (dto.getFormId() != null) {
+            return dto.getFormId();
+        }
+        return def == null ? null : def.getFormId();
+    }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -75,7 +156,26 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             throw new ServiceException("发起流程参数不能为空");
         }
         WfProcessDefinition def = resolveDefinition(dto);
-        String bizKey = buildBizKey(dto.getFormId(), dto.getDataId());
+        // 业务数据ID 语义 = 业务表 formtable_main_N 的行 id（对齐 ecology：流程与单据可互相反查）。
+        // 由「单据」发起的调用方会显式传入；「表单直发」（发起流程页）则现场建一条业务数据行。
+        // 注意 wf_instance.data_id 为 NOT NULL 且无默认值、uk_biz_key(formId:dataId) 唯一，
+        // 故必须有真实行或唯一占位，否则 insert 直接失败/第二次发起撞唯一键。
+        Long formId = resolveFormId(def, dto);
+        Long dataId = dto.getDataId();
+        // 本次是否由本方法现场建的业务行：决定要不要回填 request_id
+        // （单据发起的关联关系由单据侧维护，这里不越权改动）
+        boolean ownBusinessRow = false;
+        if (dataId == null) {
+            Long created = createBusinessData(def, dto);
+            if (created != null) {
+                dataId = created;
+                ownBusinessRow = true;
+            } else {
+                // 兜底唯一占位（业务行创建失败时仍要满足 data_id NOT NULL 与 uk_biz_key 唯一）
+                dataId = IdWorker.getId();
+            }
+        }
+        String bizKey = buildBizKey(formId, dataId);
 
         Map<String, Object> vars = new HashMap<>(16);
         if (dto.getFieldValues() != null) {
@@ -94,8 +194,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         WfInstance inst = new WfInstance();
         inst.setEngineInstId(engineInstId);
         inst.setDefId(def.getId());
-        inst.setFormId(dto.getFormId());
-        inst.setDataId(dto.getDataId());
+        inst.setFormId(formId);
+        inst.setDataId(dataId);
         inst.setTitle(resolveTitle(dto.getTitle(), def.getName(), def.getId(), firstNodeKey, starter));
         inst.setBizKey(bizKey);
         inst.setStarter(starter);
@@ -119,6 +219,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 申请人签字意见（发起页填写）写进第一条「提交」流转记录；为空则记空串
         String startOpinion = (dto.getOpinion() == null) ? "" : dto.getOpinion();
         appendLog(inst.getId(), null, firstNodeKey, starter, WfApprovalLog.LOG_SUBMIT, startOpinion);
+
+        // 业务数据回填流程实例ID（request_id，BIGINT）：仅本次现场建的业务行才写
+        if (ownBusinessRow) {
+            bindRequestId(def, dto, dataId, inst.getId());
+        }
 
         advance(inst.getId());
         log.info("[blade-workflow] 发起流程成功. instId={}, defId={}, bizKey={}", inst.getId(), def.getId(), bizKey);

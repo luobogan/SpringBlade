@@ -50,7 +50,8 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
     public boolean createMainTable(String tableName) {
         String sql = "CREATE TABLE IF NOT EXISTS `" + tableName + "` (" +
                 "`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '数据ID'," +
-                "`request_id` INT DEFAULT NULL COMMENT '关联流程ID'," +
+                // request_id 存流程实例ID（wf_instance.id，19 位雪花）→ 必须 BIGINT，INT 装不下会溢出/截断
+                "`request_id` BIGINT DEFAULT NULL COMMENT '关联流程实例ID（wf_instance.id，雪花）'," +
                 "`modedatacreator` INT DEFAULT NULL," +
                 "`modedatacreatedate` VARCHAR(10) DEFAULT NULL," +
                 "`modedatacreatetime` VARCHAR(8) DEFAULT NULL," +
@@ -315,7 +316,8 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
         if (isMainTable) {
             // 主表系统字段
             sql.append("`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '数据ID',");
-            sql.append("`request_id` INT DEFAULT NULL COMMENT '关联流程ID',");
+            // request_id 存流程实例ID（雪花）→ BIGINT
+            sql.append("`request_id` BIGINT DEFAULT NULL COMMENT '关联流程实例ID（wf_instance.id，雪花）',");
             sql.append("`modedatacreator` INT DEFAULT NULL,");
             sql.append("`modedatacreatedate` VARCHAR(10) DEFAULT NULL,");
             sql.append("`modedatacreatetime` VARCHAR(8) DEFAULT NULL,");

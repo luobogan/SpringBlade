@@ -252,7 +252,8 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
         StringBuilder sql = new StringBuilder();
         sql.append("CREATE TABLE IF NOT EXISTS `").append(tableName).append("` (");
         sql.append("`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '数据ID',");
-        sql.append("`requestId` INT DEFAULT NULL COMMENT '关联流程请求ID',");
+        // 关联流程实例ID（wf_instance.id，19 位雪花）→ 必须 BIGINT
+        sql.append("`requestId` BIGINT DEFAULT NULL COMMENT '关联流程实例ID（雪花）',");
         sql.append("`modedatacreater` INT DEFAULT NULL COMMENT '创建人',");
         sql.append("`modedatacreatedate` VARCHAR(10) DEFAULT NULL COMMENT '创建日期',");
         sql.append("`modedatacreatetime` VARCHAR(8) DEFAULT NULL COMMENT '创建时间',");

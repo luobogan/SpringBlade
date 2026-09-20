@@ -3,6 +3,7 @@ package org.springblade.formmode.feign;
 import org.springblade.core.tool.api.R;
 import org.springblade.formmode.dto.FormModeDTO;
 import org.springblade.formmode.dto.FormDataDTO;
+import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
 import org.springblade.formmode.vo.FormLayoutVO;
 import org.springblade.formmode.vo.FormModeVO;
@@ -41,6 +42,11 @@ public class IFormmodeClientFallback implements IFormmodeClient {
 
     @Override
     public R<FormLayoutVO> getFormLayout(Long formId, Integer layoutType, String nodeKey) {
+        return R.fail("表单建模服务不可用");
+    }
+
+    @Override
+    public R<Long> saveBusinessData(FormDataSaveDTO dto) {
         return R.fail("表单建模服务不可用");
     }
 

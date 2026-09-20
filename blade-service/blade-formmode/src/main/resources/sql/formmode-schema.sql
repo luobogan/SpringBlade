@@ -485,7 +485,7 @@ CREATE TABLE IF NOT EXISTS `mode_expressionbase` (
 -- 7.1 动态主数据表示例（实际运行时创建 formtable_main_{billid}）
 -- CREATE TABLE IF NOT EXISTS `formtable_main_{billid}` (
 --     `id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '数据ID',
---     `requestId`       INT          DEFAULT NULL COMMENT '关联流程请求ID',
+--     `request_id`      BIGINT       DEFAULT NULL COMMENT '关联流程实例ID（wf_instance.id，雪花）',
 --     `modedatacreater` INT          DEFAULT NULL COMMENT '创建人',
 --     `modedatacreatedate` VARCHAR(10) DEFAULT NULL COMMENT '创建日期',
 --     `modedatacreatetime` VARCHAR(8)  DEFAULT NULL COMMENT '创建时间',

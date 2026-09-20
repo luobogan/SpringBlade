@@ -3,6 +3,7 @@ package org.springblade.formmode.feign;
 import org.springblade.core.tool.api.R;
 import org.springblade.formmode.constant.FormmodeConstant;
 import org.springblade.formmode.dto.FormDataDTO;
+import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
 import org.springblade.formmode.vo.FormLayoutVO;
 import org.springblade.formmode.vo.FormModeVO;
@@ -32,6 +33,19 @@ public interface IFormmodeClient {
      */
     @PostMapping(FormmodeConstant.API_PREFIX + "/form/data/save")
     R<Long> saveFormData(@RequestBody FormDataDTO formDataDTO);
+
+    /**
+     * 按「表单ID」写入业务数据（新增一行，返回业务数据ID）。
+     *
+     * <p>供 blade-workflow 发起流程时创建业务数据行：返回的 id 即 {@code wf_instance.data_id}。
+     * 与 {@link #saveFormData} 不同，本方法按 {@code workflow_bill.table_name} 解析真实表名
+     * （不依赖 modeinfo 模块），故对迁移过来的表单同样可用。</p>
+     *
+     * <p><b>路径约定</b>：Feign 经服务发现直连、不经网关，故使用资源路径，不带
+     * {@code /api/blade-formmode} 前缀（对齐 {@link #getFormLayout}）。</p>
+     */
+    @PostMapping("/form-data/save-by-form")
+    R<Long> saveBusinessData(@RequestBody FormDataSaveDTO dto);
 
     /**
      * 查询表单数据

@@ -9,6 +9,7 @@ import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
 import org.springblade.formmode.dto.FormDataDTO;
+import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.service.IFormDataService;
 import org.springblade.formmode.service.IFormModeService;
 import org.springblade.formmode.vo.FormDataVO;
@@ -45,6 +46,22 @@ public class FormDataController extends BladeController {
     public R<Long> save(@Valid @RequestBody FormDataDTO formDataDTO) {
         Long dataId = formDataService.saveFormData(formDataDTO);
         return R.data(dataId, "数据保存成功");
+    }
+
+    /**
+     * 按「表单ID」写入业务数据（新增/更新一行，返回业务数据ID）。
+     *
+     * <p>供 blade-workflow 发起流程时创建业务数据行：返回的 id 即 {@code wf_instance.data_id}。
+     * 与 {@link #save} 不同，本接口按 {@code workflow_bill.table_name} 解析真实表名，不依赖
+     * modeinfo 模块，故对迁移过来的表单（表名与表单ID不一致）同样可用。</p>
+     *
+     * <p>Feign 直连路径：{@code POST /form-data/save-by-form}（不带 /api/blade-formmode 前缀）。</p>
+     */
+    @PostMapping("/save-by-form")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> saveByForm(@Valid @RequestBody FormDataSaveDTO dto) {
+        Long dataId = formDataService.saveBusinessData(dto);
+        return R.data(dataId, "业务数据保存成功");
     }
 
     /**

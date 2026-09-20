@@ -2,6 +2,7 @@ package org.springblade.formmode.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springblade.formmode.dto.FormDataDTO;
+import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.vo.FormDataVO;
 
 import java.util.List;
@@ -19,6 +20,15 @@ public interface IFormDataService {
      * 对应 ecology ModeDataManager.saveModeData()
      */
     Long saveFormData(FormDataDTO formDataDTO);
+
+    /**
+     * 按「表单ID」写入业务数据（不依赖 modeinfo 模块）。
+     *
+     * <p>表名取 {@code workflow_bill.table_name}（迁移表单的表名与表单ID不同，如
+     * 表单 2064530495200337922 → {@code formtable_main_5}），列名用 fieldValues 的 key
+     * （字段名），只写目标表真实存在的列。新增时返回新行的 id（即 {@code wf_instance.data_id}）。</p>
+     */
+    Long saveBusinessData(FormDataSaveDTO dto);
 
     /**
      * 获取单条数据详情
