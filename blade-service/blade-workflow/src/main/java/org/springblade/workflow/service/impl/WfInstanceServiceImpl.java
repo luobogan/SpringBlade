@@ -588,8 +588,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         Long starter = (inst != null) ? inst.getStarter() : null;
 
-        // 开始节点（nodeType=0）的「提交」日志：仅在流程仍停在开始节点（申请人尚未提交给下一节点）时
-        // 不展示；一旦提交到下一节点，就开始展示开始节点的流转意见（作为第一条，含申请人意见）。
+        // 开始节点（nodeType=0）的「提交」日志：仅当流程**确实离开过**开始节点后，才算一次「流转意见」。
+        // 判据：流程仍停在开始节点、且这条就是最新一条日志 —— 说明这是本轮「尚未提交出去的填表动作」，
+        // 不计入流转意见。
+        // ⚠️ 不能写成「只要停在开始节点，就把开始节点的日志全部隐藏」：「退回发起人」会让流程再次停在
+        //    开始节点（status 仍是运行中），那样会把历史各轮已提交的意见一起藏掉 ——
+        //    表现为「退回之后流程信息里意见都没了」（实测反馈）。
         String startNodeKey = null;
         if (inst != null) {
             WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
@@ -604,9 +608,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         boolean atStartNode = startNodeKey != null && startNodeKey.equals(curNodeKey);
 
         List<ApprovalLogVO> result = new ArrayList<>(logs.size());
-        for (WfApprovalLog l : logs) {
-            // 开始节点（发起/填表）在仍停在自己节点时不计入流转意见；流转到下一节点后再展示
-            if (atStartNode && startNodeKey != null && startNodeKey.equals(l.getNodeKey())) {
+        for (int i = 0; i < logs.size(); i++) {
+            WfApprovalLog l = logs.get(i);
+            // 仍是「停在开始节点 + 最新一条」= 本轮未提交的填表动作 → 不计入流转意见；
+            // 其余开始节点日志（历史各轮已提交的）照常展示。
+            boolean isPendingStartFill = atStartNode && startNodeKey != null
+                && startNodeKey.equals(l.getNodeKey()) && i == logs.size() - 1;
+            if (isPendingStartFill) {
                 continue;
             }
             if (visibleNodeKeys != null && !visibleNodeKeys.contains(l.getNodeKey())) {
@@ -723,6 +731,22 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             vo.setNodeActive(true);
             vo.setStale(false);
             return vo;
+        }
+
+        // ②.5 界面持有的任务已办结（提交/退回/转办后在旧页签、未刷新的列表里再次打开）：
+        //     这不是「界面太久没刷新」——刷新也回不到可办理状态，只能从「待办」打开最新任务。
+        //     提示必须与此区分，否则用户会照着「请刷新」反复操作却毫无变化。
+        if (taskId != null) {
+            WfTask uiTask = taskMapper.selectById(taskId);
+            if (uiTask != null && !Integer.valueOf(WfTask.STATUS_TODO).equals(uiTask.getStatus())) {
+                String curText = (vo.getCurrentNodeName() == null || vo.getCurrentNodeName().isEmpty())
+                    ? "" : "，流程当前节点为「" + vo.getCurrentNodeName() + "」";
+                vo.setNodeActive(false);
+                vo.setStale(true);
+                vo.setStaleReason("该任务已办结（已提交/退回/转办），本页仅可查看历史内容" + curText
+                    + "；请在「待办」中打开最新任务办理");
+                return vo;
+            }
         }
 
         // ③ 界面节点是否仍是活动节点（并行分支安全）

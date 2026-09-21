@@ -38,6 +38,14 @@ public class WfRejectManager {
     /**
      * 计算当前节点可退回的目标节点集合（不含当前节点）。
      *
+     * <p>只保留「引擎能停留的节点」：创建(0)/审批(1)/提交(2)。归档(3)/等待(5)/自动处理(6)/网关(7)
+     * 在 BPMN 里不是等待态（startEvent/endEvent/receiveTask/serviceTask/gateway），
+     * token 移过去不会停住 —— 会立刻沿出口继续流出，表现为「退回了但没动」，
+     * 落在网关上还会按条件重新选分支（可能走回原节点或跳到别的分支）。</p>
+     *
+     * <p>创建节点(0)在引擎里同样是 startEvent，但它有专门的「退回发起人」路径
+     * （见 {@code WfTaskServiceImpl#reject} → {@code rejectToStarter}），故保留为候选。</p>
+     *
      * @return 候选节点（按离当前节点由近及远排序）；无可退节点返回空列表
      */
     public List<WfProcessNode> computeRejectableNodes(Long defId, String currentNodeKey, WfProcessNode currentNode) {
@@ -102,9 +110,17 @@ public class WfRejectManager {
         List<WfProcessNode> result = new ArrayList<>();
         for (String k : order) {
             WfProcessNode n = byKey.get(k);
-            if (n != null) {
-                result.add(n);
+            if (n == null) {
+                continue;
             }
+            // 剔除「引擎停不住」的节点：归档(3)/等待(5)/自动处理(6)/网关(7)。
+            // 它们不是等待态，移 token 过去会立刻继续流出 —— 是「退回了但节点没变」的根因之一。
+            // 仅按类型剔除（不白名单化），未知/未配类型的节点保持既有行为，避免误伤。
+            Integer type = n.getNodeType();
+            if (type != null && (type == 3 || type == 5 || type == 6 || type == 7)) {
+                continue;
+            }
+            result.add(n);
         }
         return result;
     }

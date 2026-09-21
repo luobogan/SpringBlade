@@ -546,9 +546,16 @@ public final class WfNodeSettingsUtil {
 
     // ---------------- 签字意见显示设置（opinionDisplay）：屏显口径 ----------------
 
-    /** 显示全部意见：0 仅显示最后一次（默认）/ 1 显示全部 */
+    /**
+     * 显示全部意见：1 显示全部（<b>默认</b>）/ 0 仅显示最后一次。
+     *
+     * <p>默认取「显示全部」：本设置当前作用于审批页的<b>流程信息时间线</b>（历史流转意见）。
+     * 若未配置就默认「仅显示最后一次」，时间线上除最新一条外的意见块会全部消失
+     * （表现为「流程信息里意见都没了」），与全库「未配置 = 不限制」的口径也不一致。
+     * 只有节点显式配置成 0 时才收敛为「仅显示最后一次」。</p>
+     */
     public static int opinionViewTypeAll(WfProcessNode node) {
-        return fcInt(node, "opinionDisplay", "viewTypeAll", 0);
+        return fcInt(node, "opinionDisplay", "viewTypeAll", 1);
     }
 
     /** 显示方式：0 按时间倒序（默认）/ 1 按节点正序 */

@@ -39,6 +39,7 @@ import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.vo.RejectCandidateVO;
 import org.springblade.workflow.vo.RejectCandidatesVO;
+import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -219,11 +220,27 @@ public class WfTaskServiceImpl implements IWfTaskService {
             }
         }
 
-        // 3. 推进引擎并同步后续任务
+        // 2.5 提交变量（提前准备：正常提交与「退回发起人重新提交」两条路径都要用）
         Map<String, Object> vars = new HashMap<>(8);
         if (dto != null && dto.getVariables() != null) {
             vars.putAll(dto.getVariables());
         }
+
+        // 2.6 「退回发起人」后的重新提交：发起人的待办是合成任务（无引擎任务），
+        //     其提交 = 让流程重新从创建节点入流（重新生成第一个审批节点的待办），
+        //     而不是 completeTask —— 引擎此刻正停在第一个审批节点上，complete 会跳过它直接往后走。
+        if (isCreatorResubmitTask(task, node)) {
+            resubmitByCreator(inst, node, operator, vars);
+            // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（与正常提交同口径）
+            // 测试态：跳过附加操作/子流程副作用（对齐 ecology istest，避免污染真实业务数据）
+            if (inst.getIsTest() == null || inst.getIsTest() != 1) {
+                nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, operator);
+                nodeActionExecutor.triggerSubflow(inst, node, NodeActionExecutor.TRIGGER_AFTER_SUBMIT, operator);
+            }
+            return true;
+        }
+
+        // 3. 推进引擎并同步后续任务
         // 节点信息 → 运行时消费：「指定流转」。开启后由处理人手动指定下一节点（模式1 可指定操作者）；
         // 模式3（多目标）：以节点上配置的 targets 为准，提交时并行扇出到多个目标节点（仅提交时生效，退回不适用）。
         int appointMode = WfNodeSettingsUtil.appointFlowMode(node);
@@ -312,9 +329,14 @@ public class WfTaskServiceImpl implements IWfTaskService {
             throw new ServiceException("当前节点未开放退回");
         }
 
-        // 计算可退回节点集合（反向回溯 + 白名单）
+        // 计算可退回节点集合（反向回溯 + 白名单；已剔除引擎停不住的类型，见 WfRejectManager）
         List<WfProcessNode> candidates = rejectManager.computeRejectableNodes(
             inst.getDefId(), task.getNodeKey(), node);
+        if (candidates.isEmpty()) {
+            // 上游没有可停留的节点（如当前就是第一个审批节点、上游只有开始节点的情况本不该走到这里）。
+            // 明确报错，避免调用方拿到 null 目标后又「移了个寂寞」。
+            throw new ServiceException("当前节点没有可退回的节点：上游不存在可退的审批/提交节点");
+        }
         int rejectType = WfNodeSettingsUtil.rejectType(node);
 
         // 解析目标节点
@@ -343,10 +365,17 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
         // 引擎回退：把当前节点 token 移动到目标节点（保持实例运行，不终止）
         Map<String, Object> vars = new HashMap<>(4);
-        processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), targetNodeKey, vars);
-        // 同步 wf_task / 当前节点：advance 读引擎当前活动任务，为目标节点生成待办
-        // 来源标记 REJECT：退回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理设置」）
-        instanceService.advance(inst.getId(), SecureUtil.getUserId(), null, null, AdvanceSrc.REJECT);
+        WfProcessNode targetNode = loadNode(inst.getDefId(), targetNodeKey);
+        if (targetNode != null && targetNode.getNodeType() != null && targetNode.getNodeType() == 0) {
+            // 退回创建节点 = 退回发起人：创建节点在引擎里是 startEvent（非等待态），token 停不住，
+            // 走专用路径（不能让引擎停在创建节点上，也不能给创建节点生成引擎任务）
+            rejectToStarter(inst, task, targetNode, vars);
+        } else {
+            processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), targetNodeKey, vars);
+            // 同步 wf_task / 当前节点：advance 读引擎当前活动任务，为目标节点生成待办
+            // 来源标记 REJECT：退回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理设置」）
+            instanceService.advance(inst.getId(), SecureUtil.getUserId(), null, null, AdvanceSrc.REJECT);
+        }
 
         // 节点信息 → 运行时消费：节点后附加操作（退回场景，仅执行勾选「退回时触发」的条目）
         nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, SecureUtil.getUserId(), true);
@@ -638,6 +667,99 @@ public class WfTaskServiceImpl implements IWfTaskService {
             return tpl == null ? "" : tpl;
         }
         return opinion;
+    }
+
+    /**
+     * 退回发起人（退回「创建节点」）。
+     *
+     * <p><b>为什么必须单独处理</b>：创建节点在 BPMN 里是 {@code startEvent}（对齐泛微「创建节点」＝
+     * 发起人填单环节），<b>不是等待态</b> —— 直接把 token 移过去它不会停住，会立刻沿出口继续流出。
+     * 实测（instId=2102013238909661186）：退到开始节点后经 sequenceFlow 又流回原审批节点，
+     * 表现为「退回了但节点没变」。所以本路径刻意不让引擎停在创建节点上：</p>
+     * <ol>
+     *   <li>引擎侧：token 移到创建节点 → 顺其出口自然落到<b>第一个审批节点</b>并停住。
+     *       这样引擎始终有活动任务，不会被 {@code advance} 判成「无活动任务 = 流程结束」而误归档；</li>
+     *   <li>语义侧：当前节点记为创建节点，并给<b>发起人</b>生成一条合成待办
+     *       （{@code engine_task_id} 留空 —— 与草稿待办同一套「合成任务」机制）；</li>
+     *   <li>发起人改完表单提交时，{@link #doApprove} 走「退回后重新提交」分支：把 token 移回创建节点，
+     *       引擎重新入流 → 第一个审批节点重新拿到待办，即「流程从第一个审批节点重新走」。</li>
+     * </ol>
+     *
+     * <p>⚠️ 本路径<b>不能</b>调用 {@code instanceService.advance}：那会把当前节点改写成引擎落点
+     * （第一个审批节点）并给它的操作者生成待办，等于没退回。</p>
+     */
+    private void rejectToStarter(WfInstance inst, WfTask task, WfProcessNode creatorNode,
+                                 Map<String, Object> vars) {
+        // ① 引擎：移 token 到创建节点，让它自然流出并停在第一个审批节点
+        processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), creatorNode.getNodeKey(), vars);
+
+        // 并行分支下的「退回发起人」：moveActivity 只移动本分支 token，其余分支 token 仍在。
+        // 这种情形该不该作废其他分支属业务决策，此处仅告警不改动，避免误杀。
+        List<TaskVO> active = processService.currentTasks(inst.getEngineInstId());
+        if (active.size() > 1) {
+            log.warn("[blade-workflow] 退回发起人时引擎仍有多条活动分支（{} 条），仅本分支回到发起人. instId={}",
+                active.size(), inst.getId());
+        }
+
+        // ② 清掉可能残留的待办：此刻本实例已无合法待办（原节点任务已置已办/办结，发起人即将成为唯一处理人）。
+        //    只删 TODO，保留已办/办结记录（「已办」列表要能看到这次退回的操作痕迹）。
+        taskMapper.delete(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, inst.getId())
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+
+        // ③ 语义：当前节点回到创建节点 + 给发起人一条合成待办（engine_task_id 留空 = 非引擎任务）
+        WfTask creatorTask = new WfTask();
+        creatorTask.setInstId(inst.getId());
+        creatorTask.setNodeKey(creatorNode.getNodeKey());
+        creatorTask.setAssignee(inst.getStarter());
+        creatorTask.setStatus(WfTask.STATUS_TODO);
+        creatorTask.setReceiveTime(new Date());
+        taskMapper.insert(creatorTask);
+
+        WfInstance patch = new WfInstance();
+        patch.setId(inst.getId());
+        patch.setCurrentNodeKey(creatorNode.getNodeKey());
+        instanceMapper.updateById(patch);
+
+        log.info("[blade-workflow] 退回发起人. instId={}, from={}, creatorNode={}, starter={}",
+            inst.getId(), task.getNodeKey(), creatorNode.getNodeKey(), inst.getStarter());
+    }
+
+    /**
+     * 是否为「退回发起人」后发起人的合成待办。
+     *
+     * <p>判据：节点是创建节点（{@code node_type=0}）且没有引擎任务
+     * （{@code engine_task_id} 为空 —— 合成任务标记，与草稿待办同一套机制）。</p>
+     */
+    private boolean isCreatorResubmitTask(WfTask task, WfProcessNode node) {
+        if (node == null || node.getNodeType() == null || node.getNodeType() != 0) {
+            return false;
+        }
+        String engineTaskId = task.getEngineTaskId();
+        return engineTaskId == null || engineTaskId.isEmpty();
+    }
+
+    /**
+     * 「退回发起人」后的重新提交：让流程重新从创建节点入流。
+     *
+     * <p>引擎此刻停在第一个审批节点上（{@link #rejectToStarter} 让 token 从创建节点自然流出后的落点），
+     * 这里把 token 移回创建节点，引擎沿出口重新入流 → 生成第一个审批节点的新待办，
+     * 再由 {@code advance} 同步到 wf_task / 当前节点（即「流程从第一个审批节点重新走」）。</p>
+     */
+    private void resubmitByCreator(WfInstance inst, WfProcessNode creatorNode, Long operator,
+                                   Map<String, Object> vars) {
+        List<TaskVO> parked = processService.currentTasks(inst.getEngineInstId());
+        String parkedKey = parked.isEmpty() ? null : parked.get(0).getTaskDefinitionKey();
+        if (parkedKey == null) {
+            throw new ServiceException("流程引擎当前没有活动节点，无法重新提交（请确认该流程未被终止/归档）");
+        }
+        // 与退回同一机制：移回创建节点 → 引擎顺出口重新入流，停回第一个审批节点
+        if (!creatorNode.getNodeKey().equals(parkedKey)) {
+            processService.moveActivity(inst.getEngineInstId(), parkedKey, creatorNode.getNodeKey(), vars);
+        }
+        instanceService.advance(inst.getId(), operator);
+        log.info("[blade-workflow] 退回发起人后重新提交. instId={}, creatorNode={}, operator={}",
+            inst.getId(), creatorNode.getNodeKey(), operator);
     }
 
     private WfTask requireTodoTask(Long taskId) {
