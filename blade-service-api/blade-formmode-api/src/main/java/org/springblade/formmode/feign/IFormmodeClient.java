@@ -88,4 +88,14 @@ public interface IFormmodeClient {
     R<Boolean> deleteFormLayoutByNode(@PathVariable("formId") Long formId,
                                       @RequestParam("nodeKey") String nodeKey);
 
+    /**
+     * 按「表单ID」删除业务数据行（与 {@link #saveBusinessData} 对称）。
+     *
+     * @param formId 表单ID（workflow_bill.id）
+     * @param dataId 业务数据ID
+     */
+    @DeleteMapping("/form-data/by-form")
+    R<Boolean> deleteBusinessData(@RequestParam("formId") Long formId,
+                                 @RequestParam("dataId") Long dataId);
+
 }

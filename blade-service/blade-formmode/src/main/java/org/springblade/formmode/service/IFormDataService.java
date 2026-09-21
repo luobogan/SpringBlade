@@ -46,6 +46,18 @@ public interface IFormDataService {
     boolean deleteFormData(Long modeId, Long dataId);
 
     /**
+     * 按「表单ID」删除业务数据行（与 {@link #saveBusinessData} 同口径，不依赖 modeinfo）。
+     *
+     * <p>表名取 {@code workflow_bill.table_name}，按 id 删除一行。供 blade-workflow 删除草稿时
+     * 清理其独占的业务数据行（草稿未发起，业务行不纳入任何正式单据），避免孤儿行。</p>
+     *
+     * @param formId 表单定义ID（workflow_bill.id）
+     * @param dataId 业务数据ID（formtable_main_{id}.id）
+     * @return 是否删除成功（行不存在返回 false）
+     */
+    boolean deleteBusinessData(Long formId, Long dataId);
+
+    /**
      * 批量删除数据
      */
     boolean batchDeleteFormData(Long modeId, List<Long> dataIds);

@@ -35,6 +35,7 @@ import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
 import org.springblade.workflow.vo.FormRenderVO;
+import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -230,6 +231,19 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         // 办理态：记录级鉴权（与 render / validate 同口径），防止保存别人的单据
         if (dto.getInstanceId() != null && !instanceService.canView(dto.getInstanceId())) {
             throw new WfAccessDeniedException("无权保存该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以操作");
+        }
+
+        // ① 过期页面守卫（与「页面新鲜度复检」同一套规则，单一权威实现见 IWfInstanceService#fresh）：
+        //    流程被退回、被他人流转、已归档/撤回后，浏览器里未刷新的页面仍显示原节点，
+        //    若继续保存会把过期数据写回业务行，并污染「原节点」的表单快照。
+        //    故先复检：stale=true 直接拒绝，并把过期原因（已成人话）透出给前端展示。
+        if (dto.getInstanceId() != null) {
+            InstanceFreshVO fresh = instanceService.fresh(dto.getInstanceId(), dto.getNodeKey(), null);
+            if (Boolean.TRUE.equals(fresh.getStale())) {
+                log.warn("[blade-workflow] 拒绝保存：页面已过期. instId={}, uiNodeKey={}, curNodeKey={}, reason={}",
+                    dto.getInstanceId(), dto.getNodeKey(), fresh.getCurrentNodeKey(), fresh.getStaleReason());
+                throw new ServiceException("本页已过期：" + fresh.getStaleReason());
+            }
         }
 
         // ① 写业务数据行（跨服务 formmode：dataId 为空=新建，非空=更新同一行）

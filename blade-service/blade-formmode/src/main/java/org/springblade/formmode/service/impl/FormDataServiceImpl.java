@@ -294,6 +294,33 @@ public class FormDataServiceImpl implements IFormDataService {
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public boolean deleteBusinessData(Long formId, Long dataId) {
+        if (formId == null || dataId == null) {
+            return false;
+        }
+        WorkflowBill bill = workflowBillMapper.selectById(formId);
+        if (bill == null) {
+            log.warn("[formmode] 删除业务数据失败：表单不存在: {}", formId);
+            return false;
+        }
+        String tableName = StringUtil.isBlank(bill.getTableName())
+            ? TableNameUtil.getMainTableName(formId)
+            : bill.getTableName();
+        if (!SAFE_IDENT.matcher(tableName).matches()) {
+            throw new RuntimeException("表单表名不合法: " + tableName);
+        }
+        Integer cnt = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM `" + tableName + "` WHERE id = ?", Integer.class, dataId);
+        if (cnt == null || cnt == 0) {
+            return false;
+        }
+        jdbcTemplate.update("DELETE FROM `" + tableName + "` WHERE id = ?", dataId);
+        log.info("[formmode] 业务数据已删除. formId={}, table={}, dataId={}", formId, tableName, dataId);
+        return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public Long saveBusinessData(FormDataSaveDTO dto) {
         if (dto == null || dto.getFormId() == null) {
             throw new RuntimeException("表单ID不能为空");

@@ -40,6 +40,7 @@ import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
+import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
@@ -405,7 +406,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (dto.getInstanceId() != null) {
             inst = instanceMapper.selectById(dto.getInstanceId());
             if (inst == null) {
-                throw new ServiceException("草稿实例不存在");
+                // 草稿已被删除（待办/我的请求/其他列表删过）→ 不允许保存，杜绝「删了又复活」新建一条
+                throw new ServiceException("该草稿已不存在（可能已在待办或其他列表删除），无法保存");
+            }
+            if (inst.getStatus() != null && inst.getStatus() != WfInstance.STATUS_DRAFT) {
+                // 已发起/已处理/已终止等状态的实例不能再当草稿保存
+                throw new ServiceException("该流程已发起或已处理，无法再保存草稿");
             }
             inst.setDataId(dataId);
             instanceMapper.updateById(inst);
@@ -422,20 +428,22 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             instanceMapper.insert(inst);
         }
 
-        // ③ 草稿合成任务（engineTaskId 为空，区别于引擎任务）：保证草稿出现在发起人待办
+        // ③ 草稿合成任务（区别于引擎任务）：保证草稿出现在发起人待办。
+        //    幂等处理：草稿实例（status=5，尚未发起）不可能存在引擎任务，
+        //    故每次保存直接清掉本实例的全部待办再插入一条，确保同一草稿恒为 1 条待办，
+        //    避免多次保存（或后端热更新滞后）导致同一草稿在待办里出现多条。
+        //    ⚠️ 注意：合成任务的 engine_task_id 在库中实际存为空字符串 ''（非 NULL），
+        //    不能用 isNull 判定，否则去重失效、每次保存又插一条。
         String firstNodeKey = resolveFirstNodeKey(def.getId());
-        Long draftTaskCnt = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, inst.getId())
-            .isNull(WfTask::getEngineTaskId));
-        if (draftTaskCnt == null || draftTaskCnt == 0) {
-            WfTask draftTask = new WfTask();
-            draftTask.setInstId(inst.getId());
-            draftTask.setNodeKey(firstNodeKey);
-            draftTask.setAssignee(inst.getStarter());
-            draftTask.setStatus(WfTask.STATUS_TODO);
-            draftTask.setReceiveTime(new Date());
-            taskMapper.insert(draftTask);
-        }
+        taskMapper.delete(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, inst.getId()));
+        WfTask draftTask = new WfTask();
+        draftTask.setInstId(inst.getId());
+        draftTask.setNodeKey(firstNodeKey);
+        draftTask.setAssignee(inst.getStarter());
+        draftTask.setStatus(WfTask.STATUS_TODO);
+        draftTask.setReceiveTime(new Date());
+        taskMapper.insert(draftTask);
 
         // ④ 表单快照：供重新打开草稿时回填表单值（与正式快照同一张表，按 nodeKey 取）。
         //    覆盖写：同一 (instId, nodeKey) 仅保留最新一份，避免重复保存产生多份快照。
@@ -449,6 +457,52 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         snapshotMapper.insert(snap);
 
         return inst.getId();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean deleteDraft(Long id) {
+        if (id == null) {
+            return false;
+        }
+        WfInstance inst = instanceMapper.selectById(id);
+        if (inst == null) {
+            return false;
+        }
+        // 只能是草稿态：已发起的实例走撤回/终止/作废，不走此删除
+        if (inst.getStatus() != null && inst.getStatus() != WfInstance.STATUS_DRAFT) {
+            throw new ServiceException("只有草稿才能删除");
+        }
+        // 记录级鉴权：仅发起人本人（或流程管理员）可删草稿
+        WfAuthUtil.requireStarterOrAdmin(inst, "删除草稿");
+
+        Long instId = inst.getId();
+        Long formId = inst.getFormId();
+        Long dataId = inst.getDataId();
+
+        // ① 子表：合成待办（engineTaskId 为空）/ 表单快照 / 流转记录（草稿通常无，仍兜底清理）
+        taskMapper.delete(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId));
+        snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery()
+            .eq(WfFormSnapshot::getInstId, instId));
+        logMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery()
+            .eq(WfApprovalLog::getInstId, instId));
+
+        // ② 草稿实例本体
+        instanceMapper.deleteById(instId);
+
+        // ③ 草稿独占的业务数据行：草稿未发起，业务行不纳入任何正式单据，删之以免孤儿行。
+        //    失败仅告警（业务表行缺失/表单服务抖动都不应阻断草稿删除），不影响已删实例。
+        if (formId != null && dataId != null) {
+            try {
+                formmodeClient.deleteBusinessData(formId, dataId);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 删除草稿业务数据行失败（已删实例，业务行可能残留）. "
+                    + "instId={}, formId={}, dataId={}", instId, formId, dataId, e);
+            }
+        }
+        log.info("[blade-workflow] 草稿已删除. instId={}, formId={}, dataId={}", instId, formId, dataId);
+        return true;
     }
 
     @Override
@@ -603,6 +657,143 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             .orderByDesc(WfFormSnapshot::getCreateTime)
             .last("LIMIT 1"));
         return snap == null ? null : snap.getDataJson();
+    }
+
+    /**
+     * 界面新鲜度复检：识别「流程已回退 / 被他人流转 / 已归档撤回，但界面仍显示原节点」。
+     *
+     * <p>判定顺序（先粗后细）：</p>
+     * <ol>
+     *   <li>实例存在性 + 记录级鉴权（与 detail 同口径；实例已删除会抛「流程实例不存在」）；</li>
+     *   <li>实例已终结（归档 / 不通过 / 撤回撤销）→ 过期；</li>
+     *   <li>界面节点是否仍是活动节点 → 否则过期（典型：回退后当前节点已变，界面仍停在原节点）。</li>
+     * </ol>
+     *
+     * <p>⚠️ 第 3 步不能简化为「界面节点 == 实例当前节点」：并行网关分叉后
+     * {@code current_node_key} 只记其中一条分支的节点，另一条分支上的合法办理会被误判。
+     * 故叠加「该节点上仍有待办任务」兜底，保证并行 / 会签 / 依次审批不误报。</p>
+     */
+    @Override
+    public InstanceFreshVO fresh(Long instId, String nodeKey, Long taskId) {
+        InstanceFreshVO vo = new InstanceFreshVO();
+        vo.setInstanceId(instId);
+        if (instId == null) {
+            vo.setExists(false);
+            vo.setNodeActive(false);
+            vo.setStale(true);
+            vo.setStaleReason("缺少流程实例参数，无法确认流程状态，请刷新页面后重试");
+            return vo;
+        }
+        // 记录级鉴权（含存在性）：实例已删除时会抛「流程实例不存在」，前端据此判定本页失效
+        WfInstance inst = requireVisible(instId, "复检流程状态");
+
+        Integer status = inst.getStatus();
+        vo.setExists(true);
+        vo.setInstanceStatus(status);
+        vo.setCurrentNodeKey(inst.getCurrentNodeKey());
+        vo.setCurrentNodeName(nodeNameOf(inst.getDefId(), inst.getCurrentNodeKey()));
+
+        // 界面所在节点：显式入参 > 界面持有的任务所属节点 > 实例当前节点
+        String uiNodeKey = (nodeKey != null && !nodeKey.isEmpty()) ? nodeKey : null;
+        if (uiNodeKey == null && taskId != null) {
+            WfTask task = taskMapper.selectById(taskId);
+            if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
+                uiNodeKey = task.getNodeKey();
+            }
+        }
+        boolean uiNodeKnown = uiNodeKey != null && !uiNodeKey.isEmpty();
+        if (!uiNodeKnown) {
+            uiNodeKey = inst.getCurrentNodeKey();
+        }
+        vo.setNodeKey(uiNodeKey);
+        vo.setNodeName(nodeNameOf(inst.getDefId(), uiNodeKey));
+
+        // ① 实例已终结：界面无论停在哪个节点都已失效（归档页只应只读查看，不应再办理）
+        if (status != null && (status == WfInstance.STATUS_APPROVED
+            || status == WfInstance.STATUS_REJECTED || status == WfInstance.STATUS_CANCELED)) {
+            vo.setNodeActive(false);
+            vo.setStale(true);
+            vo.setStaleReason("该流程已" + terminalText(status)
+                + "，本页显示的是过期状态，请刷新页面查看最新结果");
+            return vo;
+        }
+
+        // ② 草稿态（发起页续填）：实例未进引擎，不存在「节点已流转」，仅存在性有效
+        if (status != null && status == WfInstance.STATUS_DRAFT) {
+            vo.setNodeActive(true);
+            vo.setStale(false);
+            return vo;
+        }
+
+        // ③ 界面节点是否仍是活动节点（并行分支安全）
+        boolean nodeActive = !uiNodeKnown || isNodeStillActive(inst, uiNodeKey);
+        vo.setNodeActive(nodeActive);
+        if (nodeActive) {
+            vo.setStale(false);
+            return vo;
+        }
+
+        String cur = inst.getCurrentNodeKey();
+        String curText = (cur == null || cur.isEmpty())
+            ? "" : (cur.equals(vo.getCurrentNodeName()) ? "「" + cur + "」" : "「" + vo.getCurrentNodeName() + "」");
+        vo.setStale(true);
+        vo.setStaleReason("流程已不在「" + vo.getNodeName() + "」节点"
+            + "（可能已被退回或被他人流转），"
+            + (curText.isEmpty() ? "该流程已结束" : "当前节点为" + curText)
+            + "，本页数据已过期，请刷新页面后重新操作");
+        return vo;
+    }
+
+    /**
+     * 界面节点是否仍是该实例的活动节点。
+     *
+     * <p>口径：等于实例当前节点，或该节点上仍有待办（{@code wf_task.status=0}）任务。
+     * 后一条是并行网关分叉场景的关键——否则另一条分支上的合法页面会被误判为过期。</p>
+     */
+    private boolean isNodeStillActive(WfInstance inst, String uiNodeKey) {
+        if (uiNodeKey == null || uiNodeKey.isEmpty()) {
+            return true; // 判定不出来就不误报
+        }
+        if (uiNodeKey.equals(inst.getCurrentNodeKey())) {
+            return true;
+        }
+        Long todo = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, inst.getId())
+            .eq(WfTask::getNodeKey, uiNodeKey)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+        return todo != null && todo > 0;
+    }
+
+    /** 节点Key → 节点名称（查不到或异常时回退节点Key，复检路径绝不因此抛错） */
+    private String nodeNameOf(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null || nodeKey.isEmpty()) {
+            return nodeKey;
+        }
+        try {
+            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+            return (node != null && node.getNodeName() != null && !node.getNodeName().isEmpty())
+                ? node.getNodeName() : nodeKey;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 复检取节点名称失败，回退节点Key. defId={}, nodeKey={}", defId, nodeKey, e);
+            return nodeKey;
+        }
+    }
+
+    /** 终结状态的中文表述（复检提示语用） */
+    private String terminalText(int status) {
+        switch (status) {
+            case WfInstance.STATUS_APPROVED:
+                return "归档结束";
+            case WfInstance.STATUS_REJECTED:
+                return "不通过结束";
+            case WfInstance.STATUS_CANCELED:
+                return "撤回/撤销";
+            default:
+                return "结束";
+        }
     }
 
     @Override

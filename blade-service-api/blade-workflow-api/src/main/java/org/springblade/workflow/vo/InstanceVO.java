@@ -44,7 +44,7 @@ public class InstanceVO implements Serializable {
     @Schema(description = "业务主键 formId:dataId")
     private String bizKey;
 
-    @Schema(description = "状态 0运行中 1通过 2不通过 3撤销 4暂停")
+    @Schema(description = "状态 0运行中 1通过 2不通过 3撤销 4暂停 5草稿")
     private Integer status;
 
     @Schema(description = "当前节点Key")

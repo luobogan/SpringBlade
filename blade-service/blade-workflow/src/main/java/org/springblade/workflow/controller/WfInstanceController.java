@@ -12,11 +12,13 @@ import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
+import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -65,6 +67,14 @@ public class WfInstanceController {
         return R.data(String.valueOf(instanceService.saveDraft(dto)), "已保存草稿");
     }
 
+    @DeleteMapping("/{id}/draft")
+    @Operation(summary = "删除草稿",
+        description = "仅删草稿态实例（status=5）及其合成待办/快照/流转记录与独占业务数据行；"
+            + "仅发起人本人或流程管理员可操作，已发起实例不可走此接口")
+    public R<Boolean> deleteDraft(@PathVariable("id") Long id) {
+        return R.data(instanceService.deleteDraft(id), "已删除草稿");
+    }
+
     @GetMapping("/{id}")
     @Operation(summary = "实例详情", description = "含当前节点与状态")
     public R<InstanceVO> detail(@PathVariable("id") Long id) {
@@ -107,6 +117,18 @@ public class WfInstanceController {
     public R<String> snapshot(@PathVariable("id") Long id,
                               @PathVariable("nodeKey") String nodeKey) {
         return R.data(instanceService.snapshot(id, nodeKey));
+    }
+
+    @GetMapping("/{id}/fresh")
+    @Operation(summary = "界面新鲜度复检",
+        description = "判定已打开的办理页/发起页是否已过期：流程被退回、节点被他人流转、实例已归档/撤回/删除，"
+            + "而界面仍显示原节点时为过期。前端在页面打开、每次保存/提交等写操作前、以及定时与切回标签页时调用；"
+            + "stale=true 必须拦截写操作并按 staleReason 提示用户刷新。nodeKey 传界面当前展示的节点，taskId 传界面持有的任务，二者皆可空。")
+    public R<InstanceFreshVO> fresh(
+        @PathVariable("id") Long id,
+        @Parameter(description = "界面当前展示/操作的节点Key") @RequestParam(value = "nodeKey", required = false) String nodeKey,
+        @Parameter(description = "界面持有的任务ID") @RequestParam(value = "taskId", required = false) Long taskId) {
+        return R.data(instanceService.fresh(id, nodeKey, taskId));
     }
 
     @PostMapping("/{id}/withdraw")

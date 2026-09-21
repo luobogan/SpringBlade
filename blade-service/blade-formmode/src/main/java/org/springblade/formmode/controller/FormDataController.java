@@ -104,6 +104,21 @@ public class FormDataController extends BladeController {
     }
 
     /**
+     * 按「表单ID」删除业务数据行（供 blade-workflow 删除草稿清理业务行）。
+     *
+     * <p>与 {@code /save-by-form} 对称：按 {@code workflow_bill.table_name} 解析真实表名，
+     * 不依赖 modeinfo 模块。鉴权同 {@code /save-by-form}——仅要求「已登录」
+     * （{@link WorkflowConstant#HAS_AUTH}），由 blade-workflow 以当前用户身份（Feign 透传 token）调用。</p>
+     */
+    @DeleteMapping("/by-form")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    public R<Boolean> deleteByForm(@RequestParam("formId") Long formId,
+                                   @RequestParam("dataId") Long dataId) {
+        boolean result = formDataService.deleteBusinessData(formId, dataId);
+        return result ? R.success("业务数据删除成功") : R.fail("数据不存在");
+    }
+
+    /**
      * 批量删除数据
      */
     @DeleteMapping("/batch/{modeId}")

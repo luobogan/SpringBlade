@@ -643,12 +643,60 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private WfTask requireTodoTask(Long taskId) {
         WfTask task = taskMapper.selectById(taskId);
         if (task == null) {
-            throw new ServiceException("任务不存在");
+            throw new ServiceException("任务不存在（可能该流程已被删除），请刷新页面后重试");
         }
         if (!Integer.valueOf(WfTask.STATUS_TODO).equals(task.getStatus())) {
-            throw new ServiceException("任务非待办状态，不可处理");
+            throw new ServiceException(staleTaskReason(task));
         }
         return task;
+    }
+
+    /**
+     * 任务已办结时的拒绝原因（「界面状态与实例状态不一致」规则在办理入口的口径）。
+     *
+     * <p>浏览器里已打开的办理页若未刷新，流程可能已被退回、被他人流转、被撤回或归档，
+     * 此时本节点任务已办结。这里把笼统的「任务非待办状态」翻译成用户能据以行动的原因：
+     * 说清流程现在停在哪，并提示刷新页面，避免用户看到「不可处理」后反复重试。</p>
+     */
+    private String staleTaskReason(WfTask task) {
+        WfInstance inst = instanceMapper.selectById(task.getInstId());
+        if (inst == null) {
+            return "本页已过期：该流程已不存在（可能已被删除），请刷新页面后重试";
+        }
+        Integer st = inst.getStatus();
+        if (st != null && st == WfInstance.STATUS_APPROVED) {
+            return "本页已过期：该流程已归档结束，无法再办理，请刷新页面查看最新结果";
+        }
+        if (st != null && st == WfInstance.STATUS_CANCELED) {
+            return "本页已过期：该流程已被撤回/撤销，无法再办理，请刷新页面查看最新结果";
+        }
+        if (st != null && st == WfInstance.STATUS_REJECTED) {
+            return "本页已过期：该流程已不通过结束，无法再办理，请刷新页面查看最新结果";
+        }
+        String cur = inst.getCurrentNodeKey();
+        if (cur == null || cur.isEmpty()) {
+            return "本页已过期：该任务已办结，流程已结束，请刷新页面查看最新结果";
+        }
+        return "本页已过期：该任务已办结，流程当前节点已变更为「" + nodeNameOf(inst.getDefId(), cur)
+            + "」（可能已被退回或被他人流转），请刷新页面后重新办理";
+    }
+
+    /** 节点Key → 节点名称（查不到或异常时回退节点Key，本方法只用于提示语，绝不抛错） */
+    private String nodeNameOf(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null || nodeKey.isEmpty()) {
+            return nodeKey;
+        }
+        try {
+            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+            return (node != null && node.getNodeName() != null && !node.getNodeName().isEmpty())
+                ? node.getNodeName() : nodeKey;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 取节点名称失败，回退节点Key. defId={}, nodeKey={}", defId, nodeKey, e);
+            return nodeKey;
+        }
     }
 
     /**

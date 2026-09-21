@@ -5,6 +5,7 @@ import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.vo.ApprovalLogVO;
+import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 
@@ -33,6 +34,17 @@ public interface IWfInstanceService {
      * @return 草稿实例ID（wf_instance.id）
      */
     Long saveDraft(FormSaveDTO dto);
+
+    /**
+     * 删除草稿（只删草稿）：删除草稿实例及其合成待办、表单快照、流转记录，并清理其独占的业务数据行。
+     *
+     * <p>仅<b>草稿态</b>（status=5）实例可删；仅<b>发起人本人</b>可删（草稿不进入他人待办/可见范围）。
+     * 已发起（运行中/通过/终止…）的实例不可走此接口，须用撤回/终止/作废等语义动作。</p>
+     *
+     * @param id 草稿实例ID
+     * @return 是否删除成功（实例不存在返回 false）
+     */
+    boolean deleteDraft(Long id);
 
     /**
      * 实例详情
@@ -95,6 +107,23 @@ public interface IWfInstanceService {
      * 取指定节点的表单数据快照
      */
     String snapshot(Long instId, String nodeKey);
+
+    /**
+     * 界面新鲜度复检：判定「浏览器里已打开的页面」是否仍与实例真实状态一致。
+     *
+     * <p>用于识别并拦截「流程已回退 / 被他人流转 / 已归档撤回，但界面仍显示原节点」
+     * 造成的状态不一致：前端在页面打开、每次保存/提交等写操作前、以及定时与切回标签页时
+     * 调用本方法，{@code stale=true} 时必须拦截操作并提示用户刷新。</p>
+     *
+     * <p>{@code nodeActive} 采用「并行分支安全」口径（见 {@code InstanceFreshVO} 注释），
+     * 不会把并行网关另一条分支上的合法办理误判为过期。</p>
+     *
+     * @param instId  流程实例ID
+     * @param nodeKey 界面当前展示/操作的节点Key（可为空：为空时按 taskId 或实例当前节点推定）
+     * @param taskId  界面持有的任务ID（可为空：只读查看页无任务）
+     * @return 复检结果（含 stale 与已成人话的 staleReason）
+     */
+    InstanceFreshVO fresh(Long instId, String nodeKey, Long taskId);
 
     /**
      * 撤回（发起人收回）
