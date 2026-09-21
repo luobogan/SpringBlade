@@ -1,5 +1,6 @@
 package org.springblade.workflow.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -50,5 +51,21 @@ public class WfNodeFieldPerm extends TenantEntity {
 
     @Schema(description = "0隐藏 1只读 2可编辑 3必填（对齐 ecology fieldattr）")
     private Integer perm;
+
+    // ---------------- 三维度（对齐 ecology workflow_nodeform 的 isview / iseditable / ismandatory）----------------
+    // 由 V2026.09.21_001__wf_node_field_perm_three_dims.sql 引入；perm 保留为「兼容派生列」。
+    // 三列**全为 NULL** 视为存量行 → 读取时按 perm 现推；否则以三列为准。写库时双向都写。
+
+    @Schema(description = "字段是否显示 1=显示 0=隐藏；NULL=存量行（按 perm 推导）")
+    @TableField("is_visible")
+    private Integer isVisible;
+
+    @Schema(description = "字段是否可编辑 1=可编辑 0=只读；NULL=存量行（按 perm 推导）")
+    @TableField("is_editable")
+    private Integer isEditable;
+
+    @Schema(description = "字段是否必填 1=必填 0=非必填；NULL=存量行（按 perm 推导）")
+    @TableField("is_required")
+    private Integer isRequired;
 
 }

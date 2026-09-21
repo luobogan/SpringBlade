@@ -53,4 +53,31 @@ public class WfNodeOperator extends TenantEntity {
     @Schema(description = "操作者生效条件")
     private String conditionJson;
 
+    @Schema(description = "操作组名称")
+    private String groupName;
+
+    @Schema(description = "操作组可见性 1=可见 0=不可见")
+    private Integer canView;
+
+    @Schema(description = "是否协办/征询意见人 1=是 0=否")
+    private Integer isCoadjutant;
+
+    @Schema(description = "协办签字类型")
+    private Integer signType;
+
+    @Schema(description = "是否系统协办 1=是 0=否")
+    private Integer isSysCoadjutant;
+
+    @Schema(description = "提交时是否填写协办描述 1=是 0=否")
+    private Integer isSubmitDesc;
+
+    @Schema(description = "协办是否生成待办 1=是 0=否")
+    private Integer isPending;
+
+    @Schema(description = "协办是否可修改表单 1=是 0=否")
+    private Integer isModify;
+
+    @Schema(description = "协办/征询意见人（人员id串，逗号分隔）")
+    private String coadjutants;
+
 }

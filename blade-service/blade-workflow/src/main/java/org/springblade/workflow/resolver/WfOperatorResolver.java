@@ -143,7 +143,17 @@ public class WfOperatorResolver {
         return new ArrayList<>(ids);
     }
 
-    /** 按操作者类型解析；不支持的类型返回空集合并 warn（不抛异常） */
+    /**
+     * 按操作者类型解析；不支持的类型返回空集合并 warn（不抛异常）。
+     *
+     * <p><b>bhxj 范围语义（对齐 ecology workflow_groupdetail 的 bhxj）</b>：</p>
+     * <ul>
+     *   <li>0 本部 / 1 含下级：普通解析（部门类 1 已通过 {@code containChild} 含子孙部门）；</li>
+     *   <li>2 含上级：在解析结果基础上，叠加每个办理人的<b>直接主管</b>（manager）；</li>
+     *   <li>3 逐级向上：叠加每个办理人<b>整条主管链</b>（本人→主管→主管的主管…直到无主管），
+     *       用于在部门/角色成员无人处理时向上级逐层上报（不阻塞流转主链路，仅扩充办理人）。</li>
+     * </ul>
+     */
     private List<Long> resolveByType(WfNodeOperator op, Long starter, Long currentOperator, Map<String, Object> formData) {
         Integer type = op.getOpType();
         if (type == null) {
@@ -151,39 +161,116 @@ public class WfOperatorResolver {
         }
         // bhxj=1（含下级）时部门查询包含子孙部门
         boolean containChild = Integer.valueOf(1).equals(op.getBhxj());
+        List<Long> base;
         switch (type) {
             case OP_USER:
                 // objId 可以是逗号分隔的多人
-                return parseIds(op.getObjId());
+                base = parseIds(op.getObjId());
+                break;
             case OP_CREATOR:
             case OP_SELF:
-                return single(starter);
+                base = single(starter);
+                break;
             case OP_FIELD_USER:
-                return parseIds(formData.get(op.getObjId()));
+                base = parseIds(formData.get(op.getObjId()));
+                break;
             case OP_DEPT:
-                return byDeptEach(parseIds(op.getObjId()), containChild);
+                base = byDeptEach(parseIds(op.getObjId()), containChild);
+                break;
             case OP_FIELD_DEPT:
-                return byDeptEach(parseIds(formData.get(op.getObjId())), containChild);
+                base = byDeptEach(parseIds(formData.get(op.getObjId())), containChild);
+                break;
             case OP_ROLE:
-                return byRoleEach(parseIds(op.getObjId()));
+                base = byRoleEach(parseIds(op.getObjId()));
+                break;
             case OP_FIELD_ROLE:
-                return byRoleEach(parseIds(formData.get(op.getObjId())));
+                base = byRoleEach(parseIds(formData.get(op.getObjId())));
+                break;
             case OP_POST:
-                return byPostEach(parseIds(op.getObjId()));
+                base = byPostEach(parseIds(op.getObjId()));
+                break;
             case OP_ALL:
-                return remote("查全部用户", () -> userClient.allUserIds(null));
+                base = remote("查全部用户", () -> userClient.allUserIds(null));
+                break;
             case OP_CREATOR_LEADER:
             case OP_LEADER:
-                return leaderId(starter);
+                base = leaderId(starter);
+                break;
             case OP_FIELD_USER_LEADER:
-                return leaderIdEach(parseIds(formData.get(op.getObjId())));
+                base = leaderIdEach(parseIds(formData.get(op.getObjId())));
+                break;
             case OP_DEPT_SELF:
-                return userIdsByDeptOfUser(currentOperator, containChild);
+                base = userIdsByDeptOfUser(currentOperator, containChild);
+                break;
             default:
                 log.warn("[blade-workflow] 操作者类型暂不支持解析，已跳过（待办将回退为引擎 assignee）. "
                         + "opType={}, objId={}", type, op.getObjId());
                 return List.of();
         }
+        return escalate(base, op.getBhxj());
+    }
+
+    /**
+     * 按 bhxj 范围扩充办理人集合：含上级(2) 叠直接主管，逐级向上(3) 叠整条主管链。
+     *
+     * <p>失败/无主管时静默降级（保留本人），绝不抛异常。</p>
+     */
+    private List<Long> escalate(List<Long> base, Integer bhxj) {
+        if (bhxj == null || (bhxj != 2 && bhxj != 3)) {
+            return base;
+        }
+        Set<Long> ids = new LinkedHashSet<>(base);
+        for (Long uid : base) {
+            Long m = leaderId(uid).stream().findFirst().orElse(null);
+            if (bhxj == 2) {
+                // 含上级：仅直接主管
+                if (m != null) ids.add(m);
+            } else {
+                // 逐级向上：沿主管链一路向上，最多 10 层防止异常环
+                Long cur = m;
+                for (int depth = 0; depth < 10 && cur != null && cur > 0; depth++) {
+                    if (!ids.add(cur)) {
+                        break; // 出现重复说明已回到链顶（含环保护）
+                    }
+                    cur = leaderId(cur).stream().findFirst().orElse(null);
+                }
+            }
+        }
+        return new ArrayList<>(ids);
+    }
+
+    /**
+     * 解析某节点的<b>协办/征询意见人</b>（非阻塞知会对象）。
+     *
+     * <p>对应 {@code wf_node_operator} 中 {@code is_coadjutant=1} 的行，
+     * 取 {@code coadjutants}（逗号分隔的人员 id 串）解析为办理人集合。
+     * 空 / 无协办行 / 解析失败一律返回空集合（不阻塞流转）。</p>
+     *
+     * @param defId   流程定义ID
+     * @param nodeKey 节点Key
+     * @return 协办/征询意见人用户ID集合（已去重）
+     */
+    public List<Long> resolveCoadjutants(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null) {
+            return List.of();
+        }
+        WfProcessNode node = nodeMapper.selectOne(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+        if (node == null || node.getId() == null) {
+            return List.of();
+        }
+        List<WfNodeOperator> operators = operatorMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfNodeOperator>()
+                .eq(WfNodeOperator::getNodeId, node.getId())
+                .eq(WfNodeOperator::getIsCoadjutant, 1));
+        Set<Long> ids = new LinkedHashSet<>();
+        for (WfNodeOperator op : operators) {
+            ids.addAll(parseIds(op.getCoadjutants()));
+        }
+        return new ArrayList<>(ids);
     }
 
     /** 按部门（可选含下级）查用户ID */

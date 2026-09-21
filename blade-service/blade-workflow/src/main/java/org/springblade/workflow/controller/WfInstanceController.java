@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
@@ -55,6 +56,13 @@ public class WfInstanceController {
         //    以 JSON 数字返回会被前端解析时丢精度（如 ...538 → ...500），
         //    后续拿它查实例就会「流程实例不存在」。跨服务 Feign（IWorkflowClient）同样按 String 收敛。
         return R.data(String.valueOf(instanceService.start(dto)), "发起成功");
+    }
+
+    @PostMapping("/save-draft")
+    @Operation(summary = "保存草稿", description = "只存不流转：创建/更新草稿实例与发起人待办，返回草稿实例ID（可再次保存复用）")
+    public R<String> saveDraft(@RequestBody FormSaveDTO dto) {
+        // ⚠️ 同 start：实例ID以字符串返回，避免 19 位雪花 ID 前端丢精度。
+        return R.data(String.valueOf(instanceService.saveDraft(dto)), "已保存草稿");
     }
 
     @GetMapping("/{id}")

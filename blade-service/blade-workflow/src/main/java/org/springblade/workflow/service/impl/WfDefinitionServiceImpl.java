@@ -240,6 +240,45 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public boolean syncOperatorToNodes(Long defId, String fromNodeKey, List<String> targetNodeKeys) {
+        WfProcessNode from = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, fromNodeKey)
+            .last("LIMIT 1"));
+        if (from == null) {
+            throw new ServiceException("源节点不存在: " + fromNodeKey);
+        }
+        List<WfNodeOperator> src = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+            .eq(WfNodeOperator::getNodeId, from.getId()));
+        if (targetNodeKeys == null || targetNodeKeys.isEmpty()) {
+            return true;
+        }
+        for (String tk : targetNodeKeys) {
+            if (tk == null || tk.isBlank() || tk.equals(fromNodeKey)) {
+                continue;
+            }
+            WfProcessNode target = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, tk)
+                .last("LIMIT 1"));
+            if (target == null) {
+                continue;
+            }
+            operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+                .eq(WfNodeOperator::getNodeId, target.getId()));
+            for (WfNodeOperator op : src) {
+                WfNodeOperator copy = new WfNodeOperator();
+                org.springframework.beans.BeanUtils.copyProperties(op, copy, "id");
+                copy.setId(null);
+                copy.setNodeId(target.getId());
+                operatorMapper.insert(copy);
+            }
+        }
+        return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean deploy(Long defId) {
         WfProcessDefinition def = defMapper.selectById(defId);
         if (def == null) {

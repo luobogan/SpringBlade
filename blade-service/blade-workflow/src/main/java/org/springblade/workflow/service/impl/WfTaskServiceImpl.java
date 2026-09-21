@@ -17,12 +17,15 @@ import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
+import org.springblade.workflow.mapper.WfSubflowRequestMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.entity.WfSubflowRequest;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
@@ -31,8 +34,11 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
+import org.springblade.workflow.reject.WfRejectManager;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.vo.RejectCandidateVO;
+import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,8 +46,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 流程任务语义服务实现
@@ -87,6 +96,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final NodeActionExecutor nodeActionExecutor;
     private final IUserClient userClient;
     private final WfFormSnapshotMapper snapshotMapper;
+    private final WfRejectManager rejectManager;
+    private final WfSubflowRequestMapper subflowRequestMapper;
 
     @Override
     public List<WfTaskVO> todo(Long assignee) {
@@ -197,28 +208,80 @@ public class WfTaskServiceImpl implements IWfTaskService {
             closeSiblings(inst.getId(), task.getNodeKey(), task.getId());
         }
 
+        // 节点信息 → 运行时消费：子流程「全部归档才能提交」—— 本次提交前若本节点仍有未归档子流程，拒绝提交
+        if (node != null && WfNodeSettingsUtil.subflowAllEndBeforeSubmit(node) == 1) {
+            long pending = subflowRequestMapper.selectCount(Wrappers.<WfSubflowRequest>lambdaQuery()
+                .eq(WfSubflowRequest::getMainInstId, inst.getId())
+                .eq(WfSubflowRequest::getMainNodeKey, node.getNodeKey())
+                .eq(WfSubflowRequest::getStatus, 0));
+            if (pending > 0) {
+                throw new ServiceException("该节点存在未归档的子流程（" + pending + " 条），全部归档后才能提交");
+            }
+        }
+
         // 3. 推进引擎并同步后续任务
         Map<String, Object> vars = new HashMap<>(8);
         if (dto != null && dto.getVariables() != null) {
             vars.putAll(dto.getVariables());
         }
-        // 节点信息 → 运行时消费：「指定流转」。开启后由处理人手动指定下一节点（模式1 可指定操作者）
+        // 节点信息 → 运行时消费：「指定流转」。开启后由处理人手动指定下一节点（模式1 可指定操作者）；
+        // 模式3（多目标）：以节点上配置的 targets 为准，提交时并行扇出到多个目标节点（仅提交时生效，退回不适用）。
         int appointMode = WfNodeSettingsUtil.appointFlowMode(node);
         if (!system && appointMode != 0) {
-            String nextNodeKey = dto == null ? null : dto.getNextNodeKey();
-            if (nextNodeKey == null || nextNodeKey.isBlank()) {
-                throw new ServiceException("当前节点启用了「指定流转」，请选择下一节点");
+            if (appointMode == 3) {
+                // 多目标：取节点配置的 targets（{nodeKey, operatorIds[], signType}），并行跳转
+                List<Map<String, Object>> targets = WfNodeSettingsUtil.appointFlowTargets(node);
+                if (targets == null || targets.isEmpty()) {
+                    throw new ServiceException("当前节点启用了「指定流转（多目标）」，但未配置目标节点");
+                }
+                List<String> toKeys = new ArrayList<>();
+                Map<String, Long> overrideAssignees = new LinkedHashMap<>();
+                Set<String> seen = new LinkedHashSet<>();
+                for (Map<String, Object> tg : targets) {
+                    String tk2 = tg == null ? null : String.valueOf(tg.get("nodeKey"));
+                    if (tk2 == null || tk2.isBlank()) {
+                        continue;
+                    }
+                    if (tk2.equals(task.getNodeKey())) {
+                        throw new ServiceException("指定流转的目标节点不能是当前节点：" + tk2);
+                    }
+                    if (loadNode(inst.getDefId(), tk2) == null) {
+                        throw new ServiceException("指定流转的目标节点不存在：" + tk2);
+                    }
+                    if (!seen.add(tk2)) {
+                        continue; // 去重
+                    }
+                    toKeys.add(tk2);
+                    Object ops = tg.get("operatorIds");
+                    if (ops instanceof List && !((List<?>) ops).isEmpty()) {
+                        Object first = ((List<?>) ops).get(0);
+                        Long oid = parseId(first);
+                        if (oid != null && oid > 0) {
+                            overrideAssignees.put(tk2, oid);
+                        }
+                    }
+                }
+                if (toKeys.isEmpty()) {
+                    throw new ServiceException("当前节点启用了「指定流转（多目标）」，但未配置有效目标节点");
+                }
+                processService.moveActivityToActivities(inst.getEngineInstId(), task.getNodeKey(), toKeys, vars);
+                instanceService.advance(inst.getId(), operator, overrideAssignees, AdvanceSrc.SUBMIT);
+            } else {
+                String nextNodeKey = dto == null ? null : dto.getNextNodeKey();
+                if (nextNodeKey == null || nextNodeKey.isBlank()) {
+                    throw new ServiceException("当前节点启用了「指定流转」，请选择下一节点");
+                }
+                if (nextNodeKey.equals(task.getNodeKey())) {
+                    throw new ServiceException("指定流转的目标节点不能是当前节点");
+                }
+                if (loadNode(inst.getDefId(), nextNodeKey) == null) {
+                    throw new ServiceException("指定流转的目标节点不存在：" + nextNodeKey);
+                }
+                // 模式1：用户指定操作者；模式2：忽略用户操作者，按目标节点设置解析
+                Long overrideAssignee = (appointMode == 1 && dto != null) ? dto.getNextAssignee() : null;
+                processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), nextNodeKey, vars);
+                instanceService.advance(inst.getId(), operator, nextNodeKey, overrideAssignee);
             }
-            if (nextNodeKey.equals(task.getNodeKey())) {
-                throw new ServiceException("指定流转的目标节点不能是当前节点");
-            }
-            if (loadNode(inst.getDefId(), nextNodeKey) == null) {
-                throw new ServiceException("指定流转的目标节点不存在：" + nextNodeKey);
-            }
-            // 模式1：用户指定操作者；模式2：忽略用户操作者，按目标节点设置解析
-            Long overrideAssignee = (appointMode == 1 && dto != null) ? dto.getNextAssignee() : null;
-            processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), nextNodeKey, vars);
-            instanceService.advance(inst.getId(), operator, nextNodeKey, overrideAssignee);
         } else {
             processService.completeTask(task.getEngineTaskId(), vars);
             instanceService.advance(inst.getId(), operator);
@@ -241,25 +304,92 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfInstance inst = instanceMapper.selectById(task.getInstId());
         // 记录级鉴权：只有该任务办理人本人（或流程管理员）能退回
         WfAuthUtil.requireOperateTask(task, "退回");
+        WfProcessNode node = loadNode(inst.getDefId(), task.getNodeKey());
         // 节点信息 → 运行时消费：未勾选「退回」则不允许退回
-        requireOperate(loadNode(inst.getDefId(), task.getNodeKey()), MENU_REJECT);
+        requireOperate(node, MENU_REJECT);
+        // 主开关：节点表 allow_reject=0 时关闭退回（与 operateMenu 双重保险）
+        if (node != null && node.getAllowReject() != null && node.getAllowReject() == 0) {
+            throw new ServiceException("当前节点未开放退回");
+        }
+
+        // 计算可退回节点集合（反向回溯 + 白名单）
+        List<WfProcessNode> candidates = rejectManager.computeRejectableNodes(
+            inst.getDefId(), task.getNodeKey(), node);
+        int rejectType = WfNodeSettingsUtil.rejectType(node);
+
+        // 解析目标节点
+        String targetNodeKey;
+        if (dto != null && dto.getTargetNodeKey() != null && !dto.getTargetNodeKey().isBlank()) {
+            targetNodeKey = dto.getTargetNodeKey();
+        } else {
+            // 选择退回（rejectType=2）必须显式选节点；直接退回（1）退默认/上一节点
+            if (rejectType == 2) {
+                throw new ServiceException("该节点需选择退回节点");
+            }
+            targetNodeKey = rejectManager.resolveDefaultRejectNode(
+                inst.getDefId(), task.getNodeKey(), node, candidates);
+        }
+        // 目标合法性：必须在可退回集合内（对齐 ecology DoRejectRequestCmd 的目标校验）
+        if (!rejectManager.isRejectable(candidates, targetNodeKey)) {
+            throw new ServiceException("退回目标节点不合法：" + targetNodeKey);
+        }
 
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
         taskMapper.updateById(task);
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_REJECT, dto == null ? null : dto.getOpinion());
-
-        // 说明：退回至指定节点需在 BPMN 中建模退回线（wf_node_link.is_reject），
-        // 属 P5 高级特性；当前内核阶段退回应终止实例并置为「不通过」。
-        inst.setStatus(WfInstance.STATUS_REJECTED);
-        inst.setEndTime(new Date());
-        instanceMapper.updateById(inst);
         closeSiblings(inst.getId(), task.getNodeKey(), task.getId());
+
+        // 引擎回退：把当前节点 token 移动到目标节点（保持实例运行，不终止）
+        Map<String, Object> vars = new HashMap<>(4);
+        processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), targetNodeKey, vars);
+        // 同步 wf_task / 当前节点：advance 读引擎当前活动任务，为目标节点生成待办
+        // 来源标记 REJECT：退回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理设置」）
+        instanceService.advance(inst.getId(), SecureUtil.getUserId(), null, null, AdvanceSrc.REJECT);
+
         // 节点信息 → 运行时消费：节点后附加操作（退回场景，仅执行勾选「退回时触发」的条目）
-        nodeActionExecutor.execute(inst, loadNode(inst.getDefId(), task.getNodeKey()),
-            NodeActionExecutor.PHASE_POST, SecureUtil.getUserId(), true);
+        nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, SecureUtil.getUserId(), true);
         return true;
+    }
+
+    @Override
+    public RejectCandidatesVO rejectNodes(Long taskId) {
+        WfTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            throw new ServiceException("任务不存在");
+        }
+        WfInstance inst = instanceMapper.selectById(task.getInstId());
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        // 记录级鉴权：只有该任务办理人本人（或流程管理员）能查询
+        WfAuthUtil.requireOperateTask(task, "查询退回节点");
+        WfProcessNode node = loadNode(inst.getDefId(), task.getNodeKey());
+        if (node != null && node.getAllowReject() != null && node.getAllowReject() == 0) {
+            throw new ServiceException("当前节点未开放退回");
+        }
+        List<WfProcessNode> candidates = rejectManager.computeRejectableNodes(
+            inst.getDefId(), task.getNodeKey(), node);
+        int rejectType = WfNodeSettingsUtil.rejectType(node);
+        String defaultNodeKey = rejectManager.resolveDefaultRejectNode(
+            inst.getDefId(), task.getNodeKey(), node, candidates);
+
+        RejectCandidatesVO vo = new RejectCandidatesVO();
+        vo.setType(rejectType);
+        vo.setDefaultNodeKey(defaultNodeKey);
+        vo.setRemind(WfNodeSettingsUtil.rejectRemind(node));
+        vo.setChangeNode(WfNodeSettingsUtil.rejectChangeNode(node));
+        List<RejectCandidateVO> nodes = new ArrayList<>();
+        for (WfProcessNode n : candidates) {
+            RejectCandidateVO c = new RejectCandidateVO();
+            c.setNodeKey(n.getNodeKey());
+            c.setNodeName(n.getNodeName());
+            c.setNodeType(n.getNodeType());
+            nodes.add(c);
+        }
+        vo.setNodes(nodes);
+        return vo;
     }
 
     @Override
@@ -438,11 +568,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfInstance inst = instanceMapper.selectById(t.getInstId());
         if (inst != null) {
             vo.setTitle(inst.getTitle());
+            vo.setDefId(inst.getDefId());
             vo.setFormId(inst.getFormId());
             vo.setDataId(inst.getDataId());
             vo.setStarter(inst.getStarter());
             vo.setStartTime(inst.getStartTime());
             vo.setUrgency(inst.getUrgency());
+            vo.setInstStatus(inst.getStatus());
             // ⚠️ 必须带 defId：bpmn-js 的 id（Activity_xxx 等）在不同流程间会重复，
             //    只按 nodeKey 查会命中别的流程的节点，待办/已办列表节点名串味。
             WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
@@ -685,6 +817,28 @@ public class WfTaskServiceImpl implements IWfTaskService {
             return Double.parseDouble(s.trim());
         } catch (Exception e) {
             return 0d;
+        }
+    }
+
+    /** 把对象（字符串/数字）解析为 Long ID；非法返回 null */
+    private static Long parseId(Object o) {
+        if (o == null) {
+            return null;
+        }
+        if (o instanceof Long) {
+            return (Long) o;
+        }
+        if (o instanceof Number) {
+            return ((Number) o).longValue();
+        }
+        String s = String.valueOf(o).trim();
+        if (s.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(s);
+        } catch (Exception e) {
+            return null;
         }
     }
 

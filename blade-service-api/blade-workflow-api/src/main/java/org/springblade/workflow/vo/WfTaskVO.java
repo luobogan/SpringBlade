@@ -36,6 +36,13 @@ public class WfTaskVO implements Serializable {
     @Schema(description = "流程定义名称")
     private String defName;
 
+    @Schema(description = "流程定义ID")
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long defId;
+
+    @Schema(description = "所属实例状态 0运行中 1通过 2不通过 3撤销 4暂停 5草稿")
+    private Integer instStatus;
+
     @Schema(description = "表单ID")
     @JsonSerialize(using = ToStringSerializer.class)
     private Long formId;

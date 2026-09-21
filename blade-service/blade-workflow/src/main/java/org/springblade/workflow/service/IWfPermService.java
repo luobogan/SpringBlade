@@ -1,7 +1,9 @@
 package org.springblade.workflow.service;
 
+import org.springblade.workflow.dto.DetailFilterSaveDTO;
 import org.springblade.workflow.dto.DetailPermSaveDTO;
 import org.springblade.workflow.dto.FieldPermSaveDTO;
+import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
 
@@ -35,5 +37,15 @@ public interface IWfPermService {
      * 保存节点明细表权限（整体覆盖）
      */
     boolean saveDetailPerm(Long defId, DetailPermSaveDTO dto);
+
+    /**
+     * 读取节点明细表字段筛选规则（按口径：1显示 2打印）
+     */
+    List<DetailFilterVO> getDetailFilter(Long defId, String nodeKey, Integer modeType);
+
+    /**
+     * 保存节点明细表字段筛选规则（整体覆盖某一口径）
+     */
+    boolean saveDetailFilter(Long defId, DetailFilterSaveDTO dto);
 
 }

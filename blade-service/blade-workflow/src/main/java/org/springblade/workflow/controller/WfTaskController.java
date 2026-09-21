@@ -15,6 +15,7 @@ import org.springblade.workflow.dto.ForwardDTO;
 import org.springblade.workflow.dto.RejectDTO;
 import org.springblade.workflow.dto.UrgeDTO;
 import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -70,9 +71,15 @@ public class WfTaskController {
     }
 
     @PostMapping("/{id}/reject")
-    @Operation(summary = "退回", description = "指定退回节点需在 BPMN 建模退回线（P5）；当前内核阶段退回应终止实例并置为不通过")
+    @Operation(summary = "退回", description = "将流程回退到目标节点（保持实例运行）；targetNodeKey 为空时退默认/上一节点")
     public R<Boolean> reject(@PathVariable("id") Long id, @RequestBody(required = false) RejectDTO dto) {
         return R.data(taskService.reject(id, dto), "已退回");
+    }
+
+    @GetMapping("/{id}/reject-nodes")
+    @Operation(summary = "可退回节点", description = "退回前查询当前节点可退回的目标节点及退回方式（直接/选择），对应 ecology RejectNodeSet")
+    public R<RejectCandidatesVO> rejectNodes(@PathVariable("id") Long id) {
+        return R.data(taskService.rejectNodes(id));
     }
 
     @PostMapping("/{id}/forward")

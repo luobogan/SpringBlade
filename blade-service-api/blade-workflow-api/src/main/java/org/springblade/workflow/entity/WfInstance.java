@@ -42,6 +42,8 @@ public class WfInstance extends TenantEntity {
     public static final int STATUS_CANCELED = 3;
     /** 暂停 */
     public static final int STATUS_SUSPENDED = 4;
+    /** 草稿（已保存未提交：不占引擎，关联发起人待办，提交后原地提升为运行中） */
+    public static final int STATUS_DRAFT = 5;
 
     private static final long serialVersionUID = 1L;
 

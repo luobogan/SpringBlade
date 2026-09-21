@@ -38,4 +38,13 @@ public class DetailPermVO implements Serializable {
     @Schema(description = "必须至少一条")
     private Integer required;
 
+    @Schema(description = "打印序号 1=打印 0=不打印；NULL=未配置")
+    private Integer printSerial;
+
+    @Schema(description = "打印允许滚动 1=允许 0=不允许；NULL=未配置")
+    private Integer allowScroll;
+
+    @Schema(description = "打印开启分页 1=分页 0=不分页；NULL=未配置")
+    private Integer openPaging;
+
 }

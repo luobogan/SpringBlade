@@ -89,4 +89,7 @@ public class WfTask extends TenantEntity {
     @Schema(description = "截止时间")
     private Date dueTime;
 
+    @Schema(description = "超时动作是否已执行（防重复触发）1=已执行 0=未执行")
+    private Integer timeoutHandled;
+
 }

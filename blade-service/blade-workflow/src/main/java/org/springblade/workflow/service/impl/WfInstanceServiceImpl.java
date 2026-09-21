@@ -14,7 +14,9 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.action.NodeActionExecutor;
+import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
+import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
@@ -32,6 +34,8 @@ import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IProcessService;
+import org.springblade.workflow.service.IWfSubflowService;
+import org.springblade.workflow.service.IWfTimeoutService;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfInstanceService;
@@ -39,6 +43,8 @@ import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -77,6 +83,22 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfNodeLinkMapper linkMapper;
     private final NodeActionExecutor nodeActionExecutor;
     private final IFormmodeClient formmodeClient;
+
+    /**
+     * 子流程服务：与 {@link WfSubflowServiceImpl}（亦注入本服务）存在循环依赖，
+     * 故用 {@link Lazy} 延迟注入，避免 BeanCurrentlyInCreationException。
+     */
+    @Lazy
+    @Autowired
+    private IWfSubflowService subflowService;
+
+    /**
+     * 超时规则服务（多条超时规则）：与 {@link WfTimeoutServiceImpl}（亦注入本服务）存在循环依赖，
+     * 故用 {@link Lazy} 延迟注入。
+     */
+    @Lazy
+    @Autowired
+    private IWfTimeoutService timeoutService;
 
     /**
      * 表单直发（发起流程页）时创建业务数据行，返回其 id 作为 dataId。
@@ -193,27 +215,56 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (dto == null) {
             throw new ServiceException("发起流程参数不能为空");
         }
+        // 「提交草稿」= 把草稿实例原地提升：复用 wf_instance 行与业务数据行（避免 uk_biz_key 唯一键冲突）
+        boolean promote = dto.getDraftInstId() != null;
         WfProcessDefinition def = resolveDefinition(dto);
-        // 业务数据ID 语义 = 业务表 formtable_main_N 的行 id（对齐 ecology：流程与单据可互相反查）。
-        // 由「单据」发起的调用方会显式传入；「表单直发」（发起流程页）则现场建一条业务数据行。
-        // 注意 wf_instance.data_id 为 NOT NULL 且无默认值、uk_biz_key(formId:dataId) 唯一，
-        // 故必须有真实行或唯一占位，否则 insert 直接失败/第二次发起撞唯一键。
         Long formId = resolveFormId(def, dto);
-        Long dataId = dto.getDataId();
-        // 本次是否由本方法现场建的业务行：决定要不要回填 request_id
-        // （单据发起的关联关系由单据侧维护，这里不越权改动）
+        Long dataId;
+        Long starter;
+        String bizKey;
         boolean ownBusinessRow = false;
-        if (dataId == null) {
-            Long created = createBusinessData(def, dto);
-            if (created != null) {
-                dataId = created;
-                ownBusinessRow = true;
-            } else {
-                // 兜底唯一占位（业务行创建失败时仍要满足 data_id NOT NULL 与 uk_biz_key 唯一）
-                dataId = IdWorker.getId();
+        WfInstance inst;
+
+        if (promote) {
+            // 草稿实例必须存在且仍为草稿态；草稿期合成任务（engineTaskId 为空）稍后删除、由引擎重建
+            WfInstance draft = instanceMapper.selectById(dto.getDraftInstId());
+            if (draft == null || draft.getStatus() != WfInstance.STATUS_DRAFT) {
+                throw new ServiceException("草稿实例不存在或已发起");
             }
+            formId = draft.getFormId() != null ? draft.getFormId() : formId;
+            starter = draft.getStarter();
+            dataId = draft.getDataId();
+            if (dataId == null) {
+                Long created = createBusinessData(def, dto);
+                if (created != null) {
+                    dataId = created;
+                    ownBusinessRow = true;
+                } else {
+                    dataId = IdWorker.getId();
+                }
+            }
+            bizKey = draft.getBizKey();
+            inst = draft;
+        } else {
+            // 业务数据ID 语义 = 业务表 formtable_main_N 的行 id（对齐 ecology：流程与单据可互相反查）。
+            // 由「单据」发起的调用方会显式传入；「表单直发」（发起流程页）则现场建一条业务数据行。
+            // 注意 wf_instance.data_id 为 NOT NULL 且无默认值、uk_biz_key(formId:dataId) 唯一，
+            // 故必须有真实行或唯一占位，否则 insert 直接失败/第二次发起撞唯一键。
+            dataId = dto.getDataId();
+            starter = (dto.getStarter() != null) ? dto.getStarter() : SecureUtil.getUserId();
+            if (dataId == null) {
+                Long created = createBusinessData(def, dto);
+                if (created != null) {
+                    dataId = created;
+                    ownBusinessRow = true;
+                } else {
+                    // 兜底唯一占位（业务行创建失败时仍要满足 data_id NOT NULL 与 uk_biz_key 唯一）
+                    dataId = IdWorker.getId();
+                }
+            }
+            bizKey = buildBizKey(formId, dataId);
+            inst = new WfInstance();
         }
-        String bizKey = buildBizKey(formId, dataId);
 
         Map<String, Object> vars = new HashMap<>(16);
         if (dto.getFieldValues() != null) {
@@ -223,7 +274,6 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             vars.putAll(dto.getVariables());
         }
 
-        Long starter = (dto.getStarter() != null) ? dto.getStarter() : SecureUtil.getUserId();
         // 引擎 key：默认用定义的 procKey；测试态由 WfTestServiceImpl 传 procKey + "__test"
         // （测试部署独立 key，见 WfDefinitionServiceImpl#deployForTest）
         String engineKey = (dto.getEngineKey() != null && !dto.getEngineKey().isBlank())
@@ -252,26 +302,39 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 首节点先算出来：实例标题模板取自首节点的「标题显示设置」
         String firstNodeKey = resolveFirstNodeKey(def.getId());
 
-        WfInstance inst = new WfInstance();
-        inst.setEngineInstId(engineInstId);
-        inst.setDefId(def.getId());
-        inst.setFormId(formId);
-        inst.setDataId(dataId);
-        inst.setTitle(resolveTitle(dto.getTitle(), def.getName(), def.getId(), firstNodeKey, starter));
-        inst.setBizKey(bizKey);
-        inst.setStarter(starter);
-        inst.setParentId(dto.getParentId());
-        inst.setStartTime(new Date());
-        inst.setUrgency(dto.getUrgency() == null ? 0 : dto.getUrgency());
-        // 测试态标记：测试产生的实例打 is_test=1，并记下临时部署ID，便于一键清理且不污染正常数据
-        inst.setIsTest(test ? 1 : 0);
-        inst.setTestDeploymentId(dto.getTestDeploymentId());
-        // L3 运行时自检②：业务数据行是否就绪。单据发起（dataId 已给）= 行本就存在；
-        // 表单直发 = 本次现场创建成功；两者都没成 = 用了占位 dataId（业务表里查不到这张单）。
-        inst.setBusinessRowReady((ownBusinessRow || dto.getDataId() != null) ? 1 : 0);
-        inst.setEngineDeploymentMatched(engineMatched);
-        inst.setStatus(WfInstance.STATUS_RUNNING);
-        instanceMapper.insert(inst);
+        if (promote) {
+            // 草稿提升：复用草稿实例行，仅更新运行期字段；草稿合成任务（engineTaskId 为空）删除后由引擎重建
+            inst.setEngineInstId(engineInstId);
+            inst.setStatus(WfInstance.STATUS_RUNNING);
+            inst.setStartTime(new Date());
+            // L3 运行时自检②：草稿业务行已存在（dataId 非空），置 1
+            inst.setBusinessRowReady((ownBusinessRow || dataId != null) ? 1 : 0);
+            inst.setEngineDeploymentMatched(engineMatched);
+            instanceMapper.updateById(inst);
+            taskMapper.delete(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, inst.getId())
+                .isNull(WfTask::getEngineTaskId));
+        } else {
+            inst.setEngineInstId(engineInstId);
+            inst.setDefId(def.getId());
+            inst.setFormId(formId);
+            inst.setDataId(dataId);
+            inst.setTitle(resolveTitle(dto.getTitle(), def.getName(), def.getId(), firstNodeKey, starter));
+            inst.setBizKey(bizKey);
+            inst.setStarter(starter);
+            inst.setParentId(dto.getParentId());
+            inst.setStartTime(new Date());
+            inst.setUrgency(dto.getUrgency() == null ? 0 : dto.getUrgency());
+            // 测试态标记：测试产生的实例打 is_test=1，并记下临时部署ID，便于一键清理且不污染正常数据
+            inst.setIsTest(test ? 1 : 0);
+            inst.setTestDeploymentId(dto.getTestDeploymentId());
+            // L3 运行时自检②：业务数据行是否就绪。单据发起（dataId 已给）= 行本就存在；
+            // 表单直发 = 本次现场创建成功；两者都没成 = 用了占位 dataId（业务表里查不到这张单）。
+            inst.setBusinessRowReady((ownBusinessRow || dto.getDataId() != null) ? 1 : 0);
+            inst.setEngineDeploymentMatched(engineMatched);
+            inst.setStatus(WfInstance.STATUS_RUNNING);
+            instanceMapper.insert(inst);
+        }
 
         // 表单数据快照（决策 3：数据与布局解耦）
         WfFormSnapshot snap = new WfFormSnapshot();
@@ -303,6 +366,88 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         log.info("[blade-workflow] 发起流程成功. instId={}, defId={}, bizKey={}, 自检(业务行={}, request_id={}, 引擎部署={})",
             inst.getId(), def.getId(), bizKey,
             inst.getBusinessRowReady(), (ownBusinessRow ? "回填结果见上" : "无需回填"), engineMatched);
+        return inst.getId();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Long saveDraft(FormSaveDTO dto) {
+        if (dto == null) {
+            throw new ServiceException("保存草稿参数不能为空");
+        }
+        WfProcessDefinition def = (dto.getDefId() != null) ? defMapper.selectById(dto.getDefId()) : null;
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        Long formId = dto.getFormId() != null ? dto.getFormId() : def.getFormId();
+        Map<String, Object> values = dto.getFieldValues() != null ? dto.getFieldValues() : Map.of();
+
+        // ① 写/更新业务数据行（与正式发起同一落点，返回 dataId 以复用同一行）
+        FormDataSaveDTO saveDto = new FormDataSaveDTO();
+        saveDto.setFormId(formId);
+        saveDto.setDataId(dto.getDataId());
+        saveDto.setFieldValues(values);
+        Long dataId;
+        try {
+            R<Long> r = formmodeClient.saveBusinessData(saveDto);
+            if (r == null || !r.isSuccess() || r.getData() == null) {
+                throw new ServiceException(r == null ? "表单服务无响应" : r.getMsg());
+            }
+            dataId = r.getData();
+        } catch (ServiceException se) {
+            throw se;
+        } catch (Exception e) {
+            throw new ServiceException("保存草稿业务数据失败：" + e.getMessage());
+        }
+
+        // ② 草稿实例：再次保存则复用、否则新建；无论哪种都保持 status=草稿
+        WfInstance inst;
+        if (dto.getInstanceId() != null) {
+            inst = instanceMapper.selectById(dto.getInstanceId());
+            if (inst == null) {
+                throw new ServiceException("草稿实例不存在");
+            }
+            inst.setDataId(dataId);
+            instanceMapper.updateById(inst);
+        } else {
+            inst = new WfInstance();
+            inst.setDefId(def.getId());
+            inst.setFormId(formId);
+            inst.setDataId(dataId);
+            inst.setTitle(def.getName());
+            inst.setBizKey(buildBizKey(formId, dataId));
+            inst.setStarter(SecureUtil.getUserId());
+            inst.setStartTime(new Date());
+            inst.setStatus(WfInstance.STATUS_DRAFT);
+            instanceMapper.insert(inst);
+        }
+
+        // ③ 草稿合成任务（engineTaskId 为空，区别于引擎任务）：保证草稿出现在发起人待办
+        String firstNodeKey = resolveFirstNodeKey(def.getId());
+        Long draftTaskCnt = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, inst.getId())
+            .isNull(WfTask::getEngineTaskId));
+        if (draftTaskCnt == null || draftTaskCnt == 0) {
+            WfTask draftTask = new WfTask();
+            draftTask.setInstId(inst.getId());
+            draftTask.setNodeKey(firstNodeKey);
+            draftTask.setAssignee(inst.getStarter());
+            draftTask.setStatus(WfTask.STATUS_TODO);
+            draftTask.setReceiveTime(new Date());
+            taskMapper.insert(draftTask);
+        }
+
+        // ④ 表单快照：供重新打开草稿时回填表单值（与正式快照同一张表，按 nodeKey 取）。
+        //    覆盖写：同一 (instId, nodeKey) 仅保留最新一份，避免重复保存产生多份快照。
+        snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery()
+            .eq(WfFormSnapshot::getInstId, inst.getId())
+            .eq(WfFormSnapshot::getNodeKey, firstNodeKey));
+        WfFormSnapshot snap = new WfFormSnapshot();
+        snap.setInstId(inst.getId());
+        snap.setNodeKey(firstNodeKey);
+        snap.setDataJson(JsonUtil.toJson(values));
+        snapshotMapper.insert(snap);
+
         return inst.getId();
     }
 
@@ -511,18 +656,48 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (inst == null) {
             return;
         }
-        advance(instId, inst.getStarter());
+        advance(instId, inst.getStarter(), null, null, AdvanceSrc.START);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void advance(Long instId, Long currentOperator) {
-        advance(instId, currentOperator, null, null);
+        advance(instId, currentOperator, null, null, AdvanceSrc.SUBMIT);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee) {
+        advance(instId, currentOperator, overrideNodeKey, overrideAssignee, AdvanceSrc.SUBMIT);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee, AdvanceSrc src) {
+        advanceInternal(instId, currentOperator, overrideNodeKey, overrideAssignee, null,
+            AdvanceSrc.of(src), new LinkedHashSet<>());
+    }
+
+    /**
+     * 推进实例主体（多目标指定流转专用：按节点 Key 分别指定操作者）。
+     *
+     * @param overrideAssignees 节点Key → 指定操作者ID（仅对该节点的待办生效；未列出的节点按自身设置解析）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void advance(Long instId, Long currentOperator, Map<String, Long> overrideAssignees, AdvanceSrc src) {
+        advanceInternal(instId, currentOperator, null, null, overrideAssignees,
+            AdvanceSrc.of(src), new LinkedHashSet<>());
+    }
+
+    /**
+     * 推进实例主体。
+     *
+     * <p>{@code fallbackVisited} 记录「因异常兜底被自动跳过」的节点 Key，用于防止
+     * 多个节点连续无操作者时无限递归：同一节点只兜底一次，二次命中直接回退原有行为。</p>
+     */
+    private void advanceInternal(Long instId, Long currentOperator, String overrideNodeKey,
+                                 Long overrideAssignee, Map<String, Long> overrideAssignees,
+                                 AdvanceSrc src, Set<String> fallbackVisited) {
         WfInstance inst = instanceMapper.selectById(instId);
         if (inst == null) {
             return;
@@ -532,6 +707,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 引擎无活动任务 → 流程结束
         if (engineTasks.isEmpty()) {
             String lastNodeKey = inst.getCurrentNodeKey();
+            // 子流程：全部归档才能提交 —— 主流程若仍有未归档子流程，暂缓归档（保持进行中）
+            if (subflowService.holdForSubflow(instId)) {
+                log.info("[blade-workflow] 主流程因「全部归档才能提交」暂缓归档，等待子流程. instId={}", instId);
+                return;
+            }
             inst.setStatus(WfInstance.STATUS_APPROVED);
             inst.setEndTime(new Date());
             inst.setCurrentNodeKey("");
@@ -546,16 +726,27 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                         NodeActionExecutor.TRIGGER_AFTER_ARCHIVE, inst.getStarter());
                 }
             }
+            // 子流程归档回调：本实例为子流程时，回写关系并推进主流程
+            if (inst.getParentId() != null) {
+                subflowService.onSubflowArchived(inst.getId());
+            }
             return;
         }
 
         String nodeKey = engineTasks.get(0).getTaskDefinitionKey();
-        boolean nodeChanged = !nodeKey.equals(inst.getCurrentNodeKey());
+        String oldNodeKey = inst.getCurrentNodeKey();
+        boolean nodeChanged = !nodeKey.equals(oldNodeKey);
         if (nodeChanged) {
             inst.setCurrentNodeKey(nodeKey);
         }
         instanceMapper.updateById(inst);
         if (nodeChanged && (inst.getIsTest() == null || inst.getIsTest() != 1)) {
+            // 离开旧节点 → 关闭其上残留的协办/征询待办（非阻塞，随节点推进一并清掉）
+            if (oldNodeKey != null && !oldNodeKey.isEmpty()) {
+                closeCoadjutantTasks(instId, oldNodeKey);
+                // 出口级附加操作：离开 oldNode → 进入 nodeKey 时执行（对齐 E9 连线附加操作）
+                nodeActionExecutor.executeLink(inst, inst.getDefId(), oldNodeKey, nodeKey, inst.getStarter());
+            }
             // 新节点激活 → 执行「节点前附加操作」（受「流程异常处理」策略保护）
             // 测试态：跳过附加操作副作用
             nodeActionExecutor.execute(inst, loadNode(inst.getDefId(), nodeKey),
@@ -564,22 +755,42 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
         for (TaskVO t : engineTasks) {
             String tk = t.getTaskDefinitionKey();
-            // ① 优先按「节点操作者」展开：一个节点可生成多条待办（或签/会签/依次由 WfTaskServiceImpl 推进门禁控制）
-            // ⓪ 「指定流转」：用户手工指定的下一节点，其操作者以用户选择为准（模式1）
-            if (overrideNodeKey != null && overrideNodeKey.equals(tk) && overrideAssignee != null) {
-                if (!existsTask(instId, t.getTaskId(), overrideAssignee)) {
-                    insertTask(inst, t, overrideAssignee, tk);
+            // ⓪ 「指定流转」：用户手工指定的下一节点，其操作者以用户选择为准（模式1）；
+            //    多目标模式（模式3）下按节点Key指定操作者（overrideAssignees）。
+            Long override = overrideAssignee;
+            if (override == null && overrideAssignees != null) {
+                override = overrideAssignees.get(tk);
+            }
+            if (overrideNodeKey != null && overrideNodeKey.equals(tk) && override != null) {
+                if (!existsTask(instId, t.getTaskId(), override)) {
+                    insertTask(inst, t, override, tk);
+                }
+                continue;
+            }
+            if (override != null) {
+                // 多目标：该节点被显式指定了操作者，直接生成该待办并跳过常规解析
+                if (!existsTask(instId, t.getTaskId(), override)) {
+                    insertTask(inst, t, override, tk);
                 }
                 continue;
             }
             // ① 优先按「节点操作者」展开：一个节点可生成多条待办（或签/会签/依次由 WfTaskServiceImpl 推进门禁控制）
             List<Long> assignees = operatorResolver.resolve(inst.getDefId(), tk, instId, inst.getStarter(), currentOperator);
+            Long engineAssignee = parseAssignee(t.getAssignee());
+            boolean engineHasAssignee = engineAssignee != null && engineAssignee != 0L;
+            // ①.5 解析不到操作者、且引擎也没给办理人 → 按「流程异常处理」兜底（仅提交链路）
+            if (assignees.isEmpty() && !engineHasAssignee
+                && applyExceptionFallback(inst, tk, src, fallbackVisited)) {
+                // 兜底已把引擎 token 移到别处 → 重新读引擎活动任务并同步（visited 防环，深度有限）
+                advanceInternal(instId, currentOperator, null, null, null, AdvanceSrc.SUBMIT, fallbackVisited);
+                return;
+            }
             if (assignees.isEmpty()) {
                 // ② 未配置操作者或类型无法解析 → 回退原有行为（沿用引擎 assignee 单条待办）
                 if (existsTask(instId, t.getTaskId(), null)) {
                     continue;
                 }
-                insertTask(inst, t, parseAssignee(t.getAssignee()), tk);
+                insertTask(inst, t, engineAssignee, tk);
                 continue;
             }
             for (Long uid : assignees) {
@@ -589,16 +800,142 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 }
                 insertTask(inst, t, uid, tk);
             }
+            // ③ 协办/征询意见人：本节点解析到办理人时，非阻塞地给协办人生成「协办」待办（知会，不门禁流转）
+            createCoadjutantTasks(inst, t, tk);
         }
+    }
+
+    /** 给本节点的协办/征询意见人生成「协办」待办（status=7，非阻塞；测试态跳过） */
+    private void createCoadjutantTasks(WfInstance inst, TaskVO t, String nodeKey) {
+        if (inst.getIsTest() != null && inst.getIsTest() == 1) {
+            return;
+        }
+        List<Long> coadjutants = operatorResolver.resolveCoadjutants(inst.getDefId(), nodeKey);
+        for (Long uid : coadjutants) {
+            if (uid == null || uid <= 0) {
+                continue;
+            }
+            if (existsTask(inst.getId(), t.getTaskId(), uid, WfTask.STATUS_COADJUTANT)) {
+                continue;
+            }
+            WfTask task = new WfTask();
+            task.setInstId(inst.getId());
+            task.setEngineTaskId(t.getTaskId());
+            task.setNodeKey(nodeKey);
+            task.setAssignee(uid);
+            task.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
+            task.setStatus(WfTask.STATUS_COADJUTANT);
+            task.setReceiveTime(new Date());
+            taskMapper.insert(task);
+        }
+    }
+
+    /** 关闭某节点残留的协办/征询待办（节点推进/归档时调用，避免孤儿待办） */
+    private void closeCoadjutantTasks(Long instId, String nodeKey) {
+        List<WfTask> pending = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .eq(WfTask::getNodeKey, nodeKey)
+            .eq(WfTask::getStatus, WfTask.STATUS_COADJUTANT));
+        for (WfTask tk : pending) {
+            tk.setStatus(WfTask.STATUS_DONE);
+            tk.setOperateTime(new Date());
+            taskMapper.updateById(tk);
+        }
+    }
+
+    /**
+     * 「流程异常处理」兜底：当前节点解析不到操作者（且引擎也未给办理人）时，按节点配置把流程自动推进到别处。
+     *
+     * <p>对齐 ecology {@code useExceptionHandle / exceptionHandleWay}：</p>
+     * <ul>
+     *   <li>way=1 自动流转至下一节点：按 {@code wf_node_link} 的首个下游节点跳转；</li>
+     *   <li>way=2 提交至指定节点：跳到配置的 {@code exceptionHandle.targetNodeKey}；</li>
+     *   <li>way=3 由用户指定操作者：本端无法自动决定 → 不兜底，保持既有行为（引擎 assignee / 0 占位）。</li>
+     * </ul>
+     *
+     * <p>门禁与安全：退回链路不生效；创建/归档/网关与分叉合并类节点不适用（见
+     * {@code WfNodeSettingsUtil#exceptionFallbackApplicable}）；同一节点只兜底一次（{@code visited} 防环）；
+     * 目标节点缺失或不合法时不兜底，一律回退原有行为，绝不让兜底本身成为新的故障源。</p>
+     *
+     * @return true 表示兜底成功且已移动引擎 token（调用方需重新读取活动任务并同步）
+     */
+    private boolean applyExceptionFallback(WfInstance inst, String nodeKey, AdvanceSrc src, Set<String> visited) {
+        if (src.isReject()) {
+            // 退回链路：目标节点由退回逻辑决定，异常兜底不参与（对齐 ecology）
+            return false;
+        }
+        WfProcessNode node = loadNode(inst.getDefId(), nodeKey);
+        int way = WfNodeSettingsUtil.exceptionFallbackWay(node);
+        if (way == WfNodeSettingsUtil.FALLBACK_NONE) {
+            return false;
+        }
+        if (!visited.add(nodeKey)) {
+            log.warn("[blade-workflow] 异常兜底跳过（该节点已兜底过一次，防环）: instId={}, nodeKey={}", inst.getId(), nodeKey);
+            return false;
+        }
+
+        String target;
+        if (way == WfNodeSettingsUtil.FALLBACK_NEXT_NODE) {
+            target = resolveNextNodeKey(inst.getDefId(), nodeKey);
+        } else if (way == WfNodeSettingsUtil.FALLBACK_ASSIGN_NODE) {
+            target = WfNodeSettingsUtil.exceptionFallbackTargetNodeKey(node);
+        } else {
+            // way=3「由用户指定操作者」需要人工介入，本端无法自动决定
+            log.warn("[blade-workflow] 异常兜底方式=由用户指定操作者，本端不自动流转: instId={}, nodeKey={}", inst.getId(), nodeKey);
+            return false;
+        }
+        if (target == null || target.isBlank() || loadNode(inst.getDefId(), target) == null) {
+            log.warn("[blade-workflow] 异常兜底目标节点不合法，回退原有行为: instId={}, nodeKey={}, target={}",
+                inst.getId(), nodeKey, target);
+            return false;
+        }
+
+        processService.moveActivity(inst.getEngineInstId(), nodeKey, target, new HashMap<>(4));
+        appendLog(inst.getId(), null, nodeKey, WfAuthUtil.systemId(), WfApprovalLog.LOG_SUPERVISE,
+            "节点未解析到操作者，按「流程异常处理」自动流转至节点 " + target);
+        log.warn("[blade-workflow] 异常兜底触发: instId={}, from={}, to={}, way={}", inst.getId(), nodeKey, target, way);
+        return true;
+    }
+
+    /**
+     * 取节点在 {@code wf_node_link} 上的首个下游节点（按 {@code sortOrder} 升序）。
+     *
+     * <p>多出口（含网关）时取第一条并记 warn——「自动流转至下一节点」本身即兜底语义，
+     * 不做条件求值；条件分流由引擎在 token 到达网关时自行判定。</p>
+     */
+    private String resolveNextNodeKey(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null) {
+            return null;
+        }
+        List<WfNodeLink> links = linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
+            .eq(WfNodeLink::getDefId, defId)
+            .eq(WfNodeLink::getFromNodeKey, nodeKey)
+            .orderByAsc(WfNodeLink::getSortOrder));
+        if (links == null || links.isEmpty()) {
+            return null;
+        }
+        if (links.size() > 1) {
+            log.warn("[blade-workflow] 异常兜底（自动流转下一节点）存在多个下游出口，取第一条: defId={}, nodeKey={}, count={}",
+                defId, nodeKey, links.size());
+        }
+        return links.get(0).getToNodeKey();
     }
 
     /** 待办是否已存在（assignee 为 null 时只按引擎任务判重） */
     private boolean existsTask(Long instId, String engineTaskId, Long assignee) {
+        return existsTask(instId, engineTaskId, assignee, null);
+    }
+
+    /** 待办是否已存在（可附加 status 过滤，如协办待办判重） */
+    private boolean existsTask(Long instId, String engineTaskId, Long assignee, Integer status) {
         LambdaQueryWrapper<WfTask> q = Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, instId)
             .eq(WfTask::getEngineTaskId, engineTaskId);
         if (assignee != null) {
             q.eq(WfTask::getAssignee, assignee);
+        }
+        if (status != null) {
+            q.eq(WfTask::getStatus, status);
         }
         Long count = taskMapper.selectCount(q);
         return count != null && count > 0;
@@ -614,7 +951,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         task.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
         task.setStatus(WfTask.STATUS_TODO);
         task.setReceiveTime(new Date());
-        Date due = resolveDueTime(inst.getDefId(), nodeKey, task.getReceiveTime());
+        Date due = resolveDueTime(inst.getDefId(), nodeKey, task, inst);
         if (due != null) {
             task.setDueTime(due);
         }
@@ -649,13 +986,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return title.isBlank() ? defName : title;
     }
 
-    /** 按节点 settings.timeout.hours 计算截止时间；未配置返回 null */
-    private Date resolveDueTime(Long defId, String nodeKey, Date from) {
-        int hours = WfNodeSettingsUtil.timeoutHours(loadNode(defId, nodeKey));
-        if (hours <= 0) {
-            return null;
-        }
-        return new Date(from.getTime() + hours * 60L * 60L * 1000L);
+    /** 按节点超时规则计算截止时间；无规则回退旧 settings.timeout.hours；未配置返回 null */
+    private Date resolveDueTime(Long defId, String nodeKey, WfTask task, WfInstance inst) {
+        return timeoutService.resolveDueTime(defId, nodeKey, task, inst);
     }
 
     /** 按 defId + nodeKey 取节点（取不到返回 null） */
@@ -731,10 +1064,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         inst.setEndTime(new Date());
         instanceMapper.updateById(inst);
 
-        // 关闭所有未完成任务
+        // 关闭所有未完成任务（含协办/征询待办：实例终止时一并清掉，避免孤儿待办）
         List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+            .in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
         for (WfTask t : tasks) {
             t.setStatus(WfTask.STATUS_FINISHED);
             t.setOperateTime(new Date());
@@ -945,6 +1278,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         log.setOpinion(opinion == null ? "" : opinion);
         log.setOperateTime(new Date());
         logMapper.insert(log);
+    }
+
+    @Override
+    public void recordLog(Long instId, String nodeKey, Long operator, String logType, String opinion) {
+        appendLog(instId, null, nodeKey, operator, logType, opinion);
     }
 
     private static Long parseAssignee(String assignee) {

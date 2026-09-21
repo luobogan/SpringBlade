@@ -1,7 +1,9 @@
 package org.springblade.workflow.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
+import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
@@ -23,6 +25,14 @@ public interface IWfInstanceService {
      * @return 流程实例ID（wf_instance.id）
      */
     Long start(StartProcessDTO dto);
+
+    /**
+     * 保存草稿（只存不流转）：创建/更新草稿实例（status=草稿）与发起人待办任务，
+     * 并写业务数据行与表单快照；返回草稿实例ID。再次保存同一草稿时复用实例与业务行。
+     *
+     * @return 草稿实例ID（wf_instance.id）
+     */
+    Long saveDraft(FormSaveDTO dto);
 
     /**
      * 实例详情
@@ -133,5 +143,43 @@ public interface IWfInstanceService {
      * @param overrideAssignee 指定流转的目标操作者（null 表示按节点设置解析）
      */
     void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee);
+
+    /**
+     * 推进实例（带「推进来源」标识）。
+     *
+     * <p>来源用于让运行时按链路施加不同策略。当前唯一消费方是「流程异常处理」
+     * （{@code settings.exceptionHandle}）：该兜底只在<b>提交</b>链路生效，
+     * <b>退回</b>链路不生效（对齐 ecology「退回忽略异常处理设置」）。</p>
+     *
+     * <p>其余重载（1/2/4 参）等价于传入 {@link AdvanceSrc#SUBMIT}，行为不变。</p>
+     *
+     * @param instId           实例ID
+     * @param currentOperator  到达本节点的当前办理人
+     * @param overrideNodeKey  指定流转的目标节点Key（null 表示不覆盖）
+     * @param overrideAssignee 指定流转的目标操作者（null 表示按节点设置解析）
+     * @param src              推进来源（null 视为 {@link AdvanceSrc#SUBMIT}）
+     */
+    void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee, AdvanceSrc src);
+
+    /**
+     * 推进实例（「指定流转·多目标」专用：按节点 Key 分别指定操作者）。
+     *
+     * @param instId            实例ID
+     * @param currentOperator   到达本节点的当前办理人
+     * @param overrideAssignees 节点Key → 指定操作者ID（仅对该节点的待办生效；未列出的节点按自身设置解析）
+     * @param src               推进来源（null 视为 {@link AdvanceSrc#SUBMIT}）
+     */
+    void advance(Long instId, Long currentOperator, Map<String, Long> overrideAssignees, AdvanceSrc src);
+
+    /**
+     * 记录一条流转日志（供子流程服务等内部模块复用，避免重复私有方法）。
+     *
+     * @param instId  实例ID
+     * @param nodeKey 节点Key（可空）
+     * @param operator 操作人
+     * @param logType 流转动作（WfApprovalLog.LOG_*）
+     * @param opinion 意见/说明
+     */
+    void recordLog(Long instId, String nodeKey, Long operator, String logType, String opinion);
 
 }

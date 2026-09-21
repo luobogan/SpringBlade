@@ -31,6 +31,7 @@ import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfPermService;
 import org.springblade.workflow.utils.WfAuthUtil;
+import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
 import org.springblade.workflow.vo.FormRenderVO;
@@ -105,6 +106,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
 
         FormRenderVO vo = new FormRenderVO();
         vo.setInstanceId(inst.getId());
+        vo.setDefId(inst.getDefId());
         vo.setTaskId(taskId);
         vo.setNodeKey(nodeKey);
         vo.setFormId(inst.getFormId());
@@ -112,6 +114,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         vo.setInstanceStatus(inst.getStatus());
         vo.setFieldPerms(permService.getFieldPerm(inst.getDefId(), nodeKey));
         vo.setDetailPerms(permService.getDetailPerm(inst.getDefId(), nodeKey));
+        vo.setDetailFilters(permService.getDetailFilter(inst.getDefId(), nodeKey, 1));
         vo.setReadonly(!canOperate(task));
 
         // 节点信息 → 运行时消费：操作菜单（可用操作）与签字意见必填
@@ -120,7 +123,11 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             .eq(WfProcessNode::getNodeKey, nodeKey)
             .last("LIMIT 1"));
         vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
-        vo.setOpinionRequired(WfNodeSettingsUtil.opinionRequired(node));
+        fillSignOpinion(vo, node);
+        // 节点信息 → 运行时消费：打印内容设置（打印模板页签的「打印内容设置」）
+        vo.setPrintSet(WfNodeSettingsUtil.printSet(node));
+        // 节点信息 → 运行时消费：签字意见显示设置（节点意见页签的「意见显示设置」）
+        vo.setOpinionDisplay(WfNodeSettingsUtil.opinionDisplay(node));
 
         // 布局：跨服务读取（按节点取布局：优先节点级，回退表单级；布局类型默认 0=编辑）
         try {
@@ -151,12 +158,27 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         return vo;
     }
 
+    /** 把节点「签字意见设置」三组（输入/显示/反馈）填充进渲染包 */
+    private void fillSignOpinion(FormRenderVO vo, WfProcessNode node) {
+        vo.setOpinionRequired(WfNodeSettingsUtil.opinionRequired(node));
+        vo.setOpinionMustInput(WfNodeSettingsUtil.signOpinionMustInput(node));
+        vo.setOpinionMustInputOperations(WfNodeSettingsUtil.signOpinionMustInputOperations(node));
+        vo.setOpinionHideInput(WfNodeSettingsUtil.signOpinionHideInput(node));
+        vo.setOpinionHideArea(WfNodeSettingsUtil.signOpinionHideArea(node));
+        vo.setOpinionViewMode(WfNodeSettingsUtil.signOpinionViewMode(node));
+        vo.setOpinionViewNodeKeys(WfNodeSettingsUtil.signOpinionViewNodeKeys(node));
+        vo.setOpinionNotSeeEachOther(WfNodeSettingsUtil.signOpinionNotSeeEachOther(node));
+        vo.setOpinionFeedback(WfNodeSettingsUtil.signOpinionFeedback(node));
+        vo.setOpinionNullNotFeedback(WfNodeSettingsUtil.signOpinionNullNotFeedback(node));
+    }
+
     @Override
     public FormRenderVO preview(Long defId, Long formId, String nodeKey) {
         if (defId == null && formId == null) {
             throw new ServiceException("无法确定预览所用的流程定义或表单");
         }
         FormRenderVO vo = new FormRenderVO();
+        vo.setDefId(defId);
         vo.setFormId(formId);
         vo.setNodeKey(nodeKey);
         vo.setReadonly(true);
@@ -168,9 +190,12 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                 .eq(WfProcessNode::getNodeKey, nodeKey)
                 .last("LIMIT 1"));
             vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
-            vo.setOpinionRequired(WfNodeSettingsUtil.opinionRequired(node));
+            fillSignOpinion(vo, node);
+            vo.setPrintSet(WfNodeSettingsUtil.printSet(node));
+            vo.setOpinionDisplay(WfNodeSettingsUtil.opinionDisplay(node));
             vo.setFieldPerms(permService.getFieldPerm(defId, nodeKey));
             vo.setDetailPerms(permService.getDetailPerm(defId, nodeKey));
+            vo.setDetailFilters(permService.getDetailFilter(defId, nodeKey, 1));
         }
 
         // 布局：跨服务读取（与 render 同口径，按节点取布局：优先节点级，回退表单级）
@@ -302,7 +327,11 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         List<String> missing = new ArrayList<>();
         List<FieldPermVO> perms = permService.getFieldPerm(defId, nodeKey);
         for (FieldPermVO perm : perms) {
-            if (perm.getPerm() != null && perm.getPerm() == PERM_REQUIRED) {
+            // 必填判定：优先用三维度的 required（权威值）；仅当它缺省时才回退到 perm 兼容列
+            boolean required = perm.getRequired() != null
+                ? perm.getRequired()
+                : (perm.getPerm() != null && perm.getPerm() == PERM_REQUIRED);
+            if (required) {
                 if (isEmpty(dto.getFormData().get(perm.getFieldName()))) {
                     missing.add(perm.getFieldName());
                 }

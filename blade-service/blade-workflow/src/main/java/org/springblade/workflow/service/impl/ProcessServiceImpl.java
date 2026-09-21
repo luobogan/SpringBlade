@@ -117,6 +117,32 @@ public class ProcessServiceImpl implements IProcessService {
             engineInstId, fromActivityKey, toActivityKey);
     }
 
+    @Override
+    public void moveActivityToActivities(String engineInstId, String fromActivityKey,
+                                         List<String> toActivityKeys, Map<String, Object> variables) {
+        if (engineInstId == null || fromActivityKey == null || toActivityKeys == null
+            || toActivityKeys.isEmpty()) {
+            throw new IllegalArgumentException("指定流转（多目标）失败：实例ID、起止节点均不能为空");
+        }
+        if (variables != null && !variables.isEmpty()) {
+            runtimeService.setVariables(engineInstId, variables);
+        }
+        // 单目标退化为普通 move，保持语义一致；多目标则并行扇出（每组一个 token）
+        if (toActivityKeys.size() == 1) {
+            runtimeService.createChangeActivityStateBuilder()
+                .processInstanceId(engineInstId)
+                .moveActivityIdTo(fromActivityKey, toActivityKeys.get(0))
+                .changeState();
+        } else {
+            runtimeService.createChangeActivityStateBuilder()
+                .processInstanceId(engineInstId)
+                .moveSingleActivityIdToActivityIds(fromActivityKey, toActivityKeys)
+                .changeState();
+        }
+        log.info("[blade-workflow] 引擎指定流转（多目标）跳转. engineInstId={}, {} -> {}",
+            engineInstId, fromActivityKey, String.join(",", toActivityKeys));
+    }
+
     private static List<TaskVO> toTaskVO(List<Task> tasks) {
         List<TaskVO> result = new ArrayList<>(tasks.size());
         for (Task task : tasks) {

@@ -50,4 +50,7 @@ public class WfNodeLink extends TenantEntity {
     @Schema(description = "经由的网关节点 key（A→网关→B 折叠为 A→B 时记录该网关；网关本身不入 wf_process_node，凭此字段让网关节点呈现/配置其下游分支）")
     private String viaGatewayKey;
 
+    @Schema(description = "出口级附加操作脚本（多行，前缀分派；离开本出口时执行，对齐 E9 连线上的附加操作）")
+    private String extraOperations;
+
 }

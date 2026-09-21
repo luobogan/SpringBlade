@@ -5,11 +5,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.entity.WfInstance;
+import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
+import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.service.IWfInstanceService;
+import org.springblade.workflow.service.IWfSubflowService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
@@ -42,6 +46,10 @@ public class NodeActionExecutor {
 
     private final WfProcessDefinitionMapper defMapper;
     private final WfInstanceMapper instanceMapper;
+    /** 节点查询（出口级附加操作需要目标节点上下文） */
+    private final WfProcessNodeMapper nodeMapper;
+    /** 出口查询（读取 wf_node_link.extra_operations） */
+    private final WfNodeLinkMapper linkMapper;
     /** 附加操作实际执行器（http / sql / field 前缀分派） */
     private final WfActionExecutor actionExecutor;
     /**
@@ -49,15 +57,23 @@ public class NodeActionExecutor {
      * 故用 {@link Lazy} 延迟到实际调用时再取代理。
      */
     private final IWfInstanceService instanceService;
+    /** 子流程高级设置：触发时登记主/子关系，归档时回写并推进主流程 */
+    private final IWfSubflowService subflowService;
 
     public NodeActionExecutor(WfProcessDefinitionMapper defMapper,
                               WfInstanceMapper instanceMapper,
+                              WfProcessNodeMapper nodeMapper,
+                              WfNodeLinkMapper linkMapper,
                               WfActionExecutor actionExecutor,
-                              @Lazy IWfInstanceService instanceService) {
+                              @Lazy IWfInstanceService instanceService,
+                              @Lazy IWfSubflowService subflowService) {
         this.defMapper = defMapper;
         this.instanceMapper = instanceMapper;
+        this.nodeMapper = nodeMapper;
+        this.linkMapper = linkMapper;
         this.actionExecutor = actionExecutor;
         this.instanceService = instanceService;
+        this.subflowService = subflowService;
     }
 
     /** 执行节点的前/后附加操作（非退回场景，见 {@link #execute(WfInstance, WfProcessNode, String, Long, boolean)}） */
@@ -136,7 +152,14 @@ public class NodeActionExecutor {
         if (flowKey == null || flowKey.isBlank()) {
             return;
         }
-        if (!WfNodeSettingsUtil.subflowTrigger(node).equals(trigger)) {
+        // 全部归档才能提交：子流程必须在「提交后」触发。否则若配置为 afterArchive，
+        // 主流程因本开关被阻塞而永不归档 → afterArchive 永远不触发 → 配置失效（死锁）。
+        boolean allEndBeforeSubmit = WfNodeSettingsUtil.subflowAllEndBeforeSubmit(node) == 1;
+        if (allEndBeforeSubmit) {
+            if (!TRIGGER_AFTER_SUBMIT.equals(trigger)) {
+                return;
+            }
+        } else if (!WfNodeSettingsUtil.subflowTrigger(node).equals(trigger)) {
             return;
         }
         try {
@@ -183,8 +206,57 @@ public class NodeActionExecutor {
         dto.setUrgency(inst.getUrgency());
         dto.setTitle((inst.getTitle() == null ? "" : inst.getTitle()) + "-子流程");
         Long subInstId = instanceService.start(dto);
+        // 登记主/子流程关系（供「全部归档才能提交 / 数据汇总 / 提醒 / 自动流转」消费）
+        try {
+            subflowService.record(inst.getId(), subInstId, subDef.getId(), node);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 子流程关系登记失败（不影响子流程发起）. parentInstId={}, subInstId={}",
+                inst.getId(), subInstId, e);
+        }
         log.info("[blade-workflow] 子流程已发起. parentInstId={}, subInstId={}, subProcKey={}, nodeKey={}, depth={}",
             inst.getId(), subInstId, flowKey, node.getNodeKey(), depth);
+    }
+
+    /**
+     * 出口级附加操作：离开 {@code fromKey} 进入 {@code toKey} 该出口时执行（对齐 E9 连线上的附加操作）。
+     *
+     * <p>读取 {@code wf_node_link.extra_operations}（多行脚本，前缀分派：http / sql / field / action）；
+     * 在目标节点上下文（toKey）下执行。异常按「流程异常处理」策略处理（stop 中断 / continue 跳过）。</p>
+     */
+    public void executeLink(WfInstance inst, Long defId, String fromKey, String toKey, Long operator) {
+        if (defId == null || fromKey == null || toKey == null) {
+            return;
+        }
+        WfNodeLink link = linkMapper.selectOne(Wrappers.<WfNodeLink>lambdaQuery()
+            .eq(WfNodeLink::getDefId, defId)
+            .eq(WfNodeLink::getFromNodeKey, fromKey)
+            .eq(WfNodeLink::getToNodeKey, toKey)
+            .last("LIMIT 1"));
+        if (link == null || link.getExtraOperations() == null || link.getExtraOperations().isBlank()) {
+            return;
+        }
+        WfProcessNode toNode = loadNode(defId, toKey);
+        try {
+            doExecute(inst, toNode, PHASE_POST, link.getExtraOperations(), operator);
+            log.info("[blade-workflow] 出口级附加操作执行完成. instId={}, from={}, to={}",
+                inst == null ? null : inst.getId(), fromKey, toKey);
+        } catch (Exception e) {
+            if ("stop".equals(WfNodeSettingsUtil.exceptionMode(toNode))) {
+                throw new ServiceException("出口级附加操作执行失败（流程异常处理=中断）：" + e.getMessage());
+            }
+            log.warn("[blade-workflow] 出口级附加操作执行失败，按「继续」跳过. from={}, to={}", fromKey, toKey, e);
+        }
+    }
+
+    /** 读取节点（取不到返回 null，不抛异常） */
+    private WfProcessNode loadNode(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null) {
+            return null;
+        }
+        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
     }
 
     /** 沿 parentId 上溯计算当前实例的嵌套深度（0 = 顶层） */

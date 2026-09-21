@@ -49,6 +49,13 @@ public class StartProcessDTO implements Serializable {
     private Long dataId;
 
     /**
+     * 草稿实例ID：非空时表示「提交草稿」——把该草稿实例<b>原地提升</b>为正式运行实例，
+     * 复用其 {@code wf_instance} 行与业务数据行（避免 {@code uk_biz_key(formId:dataId)} 唯一键冲突），
+     * 不新建实例；草稿期合成的待办（engineTaskId 为空）由服务端删除后由引擎重新生成。
+     */
+    private Long draftInstId;
+
+    /**
      * 流程标题
      */
     private String title;

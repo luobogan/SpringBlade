@@ -244,6 +244,14 @@ public class WfDefinitionController {
         return R.data(definitionService.configOperator(id, nodeKey, body.getOperators()), "保存成功");
     }
 
+    @PostMapping("/{id}/node/{nodeKey}/operator/sync")
+    @Operation(summary = "同步操作者到其它节点", description = "把本节点操作者整体覆盖写入目标节点集合")
+    public R<Boolean> syncOperator(@PathVariable("id") Long id,
+                                   @PathVariable("nodeKey") String nodeKey,
+                                   @RequestBody List<String> targetNodeKeys) {
+        return R.data(definitionService.syncOperatorToNodes(id, nodeKey, targetNodeKeys), "同步成功");
+    }
+
     @GetMapping("/form-condition")
     @Operation(summary = "获取定义表单字段描述", description = "condition 驱动：前端据此动态渲染新增/编辑表单")
     public R<FormConditionVO> formCondition(

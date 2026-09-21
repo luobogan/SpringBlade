@@ -29,6 +29,10 @@ public class FormRenderVO implements Serializable {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long instanceId;
 
+    @Schema(description = "流程定义ID（wf_process_definition.id，19位雪花ID需 ToString 保精度）")
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long defId;
+
     @Schema(description = "当前任务ID（若为待办渲染）")
     @JsonSerialize(using = ToStringSerializer.class)
     private Long taskId;
@@ -66,6 +70,13 @@ public class FormRenderVO implements Serializable {
     @Schema(description = "节点明细表权限")
     private List<DetailPermVO> detailPerms;
 
+    /**
+     * 节点明细表「显示时」字段筛选规则（来自 {@code wf_node_detail_filter} modeType=1）。
+     * 审批态渲染据此隐藏不满足规则的明细行（对齐 ecology「明细表数据根据操作者筛选显示」）。
+     */
+    @Schema(description = "节点明细表显示时字段筛选规则（运行期据此过滤明细行）")
+    private List<DetailFilterVO> detailFilters;
+
     @Schema(description = "是否只读（无办理权限时为 true，前端整体降级为只读）")
     private Boolean readonly;
 
@@ -76,8 +87,52 @@ public class FormRenderVO implements Serializable {
     @Schema(description = "当前节点可用操作（来自节点信息「操作菜单」；null=不限制）")
     private List<String> allowMenus;
 
-    /** 当前节点签字意见是否必填（来自节点信息「签字意见设置」） */
-    @Schema(description = "签字意见是否必填")
+    /** 当前节点签字意见是否必填（旧口径：等价于 mustInput=all） */
+    @Schema(description = "签字意见是否必填（旧口径）")
     private Boolean opinionRequired;
+
+    /** 签字意见必填模式：never / all / byOperation（缺省 never） */
+    @Schema(description = "签字意见必填模式")
+    private String opinionMustInput;
+
+    /** byOperation 模式下必填的操作类型（缺省 退回+征询回复） */
+    @Schema(description = "必填操作类型（byOperation 模式生效）")
+    private List<String> opinionMustInputOperations;
+
+    /** 意见输入框是否不显示 */
+    @Schema(description = "意见输入框不显示")
+    private Boolean opinionHideInput;
+
+    /** 意见区域是否整体不显示（输入框+历史意见一并隐藏） */
+    @Schema(description = "意见区域整体不显示")
+    private Boolean opinionHideArea;
+
+    /** 意见显示范围模式：all / none / list */
+    @Schema(description = "意见显示范围模式")
+    private String opinionViewMode;
+
+    /** 意见显示范围：list 模式下的节点Key集合 */
+    @Schema(description = "意见显示范围节点集合")
+    private List<String> opinionViewNodeKeys;
+
+    /** 同节点办理人互不可见彼此意见 */
+    @Schema(description = "同节点互不可见意见")
+    private Boolean opinionNotSeeEachOther;
+
+    /** 意见反馈（回写/反馈给上游节点） */
+    @Schema(description = "意见反馈")
+    private Boolean opinionFeedback;
+
+    /** 意见为空时不反馈（需配合 feedback） */
+    @Schema(description = "意见为空不反馈")
+    private Boolean opinionNullNotFeedback;
+
+    /** 当前节点「打印内容设置」（来自节点信息 → 表单内容 → 打印模板 → 打印内容设置） */
+    @Schema(description = "节点打印内容设置")
+    private PrintSetVO printSet;
+
+    /** 当前节点「签字意见显示设置」（来自节点信息 → 表单内容 → 节点意见 → 意见显示设置） */
+    @Schema(description = "节点签字意见显示设置")
+    private OpinionDisplayVO opinionDisplay;
 
 }

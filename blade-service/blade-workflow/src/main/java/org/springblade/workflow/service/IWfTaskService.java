@@ -6,6 +6,7 @@ import org.springblade.workflow.dto.CirculateDTO;
 import org.springblade.workflow.dto.ForwardDTO;
 import org.springblade.workflow.dto.RejectDTO;
 import org.springblade.workflow.dto.UrgeDTO;
+import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.WfTaskVO;
 
 import java.util.List;
@@ -81,9 +82,20 @@ public interface IWfTaskService {
     boolean autoApprove(Long taskId, String opinion, java.util.Map<String, Object> variables, Long operator);
 
     /**
-     * 退回：回到指定节点（为空则退回上一节点）
+     * 退回：将流程回退到目标节点（保持实例运行，不终止）。
+     * <p>targetNodeKey 为空时按节点「退回设置」退回默认/上一节点；
+     * 目标节点必须是 {@link #rejectNodes} 计算出的可退回集合之一，否则拒绝。</p>
      */
     boolean reject(Long taskId, RejectDTO dto);
+
+    /**
+     * 退回前查询：当前节点可退回的目标节点集合与退回方式。
+     * <p>对应 ecology {@code RejectNodeSet.jsp} 的数据来源；前端据此决定是直接退回还是弹窗选节点。</p>
+     *
+     * @param taskId 待办任务ID
+     * @return 可退回节点集合（含退回方式 type、默认节点、候选列表）
+     */
+    RejectCandidatesVO rejectNodes(Long taskId);
 
     /**
      * 转发 / 转办

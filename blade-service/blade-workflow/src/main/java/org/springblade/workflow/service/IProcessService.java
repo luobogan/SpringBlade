@@ -79,6 +79,20 @@ public interface IProcessService {
     void moveActivity(String engineInstId, String fromActivityKey, String toActivityKey, Map<String, Object> variables);
 
     /**
+     * 将引擎实例的当前活动节点<b>并行跳转</b>到多个目标节点（「指定流转·多目标」的运行期消费）。
+     *
+     * <p>单目标退化为 {@link #moveActivity}；多目标用 {@code moveActivityIdToActivityIds}
+     * 一次扇出多组 token（每个目标节点一条并行分支）。</p>
+     *
+     * @param engineInstId    引擎实例ID
+     * @param fromActivityKey 当前活动节点Key
+     * @param toActivityKeys  目标活动节点Key 列表（≥1）
+     * @param variables       跳转前写入的流程变量（可为 null）
+     */
+    void moveActivityToActivities(String engineInstId, String fromActivityKey,
+                                 List<String> toActivityKeys, Map<String, Object> variables);
+
+    /**
      * 查询引擎实例经历过的<b>历史活动实例</b>（节点 + 流转），按开始时间升序。
      *
      * <p>用于「真实引擎假数据测试」的<b>覆盖率采集</b>：把引擎实际经过的节点集合，

@@ -6,9 +6,11 @@ import lombok.RequiredArgsConstructor;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.workflow.dto.DetailFilterSaveDTO;
 import org.springblade.workflow.dto.DetailPermSaveDTO;
 import org.springblade.workflow.dto.FieldPermSaveDTO;
 import org.springblade.workflow.service.IWfPermService;
+import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -66,6 +69,23 @@ public class WfPermController {
                                      @RequestBody DetailPermSaveDTO dto) {
         dto.setNodeKey(nodeKey);
         return R.data(permService.saveDetailPerm(id, dto), "保存成功");
+    }
+
+    @GetMapping("/{id}/node/{nodeKey}/detail-filter")
+    @Operation(summary = "读取节点明细表字段筛选规则", description = "modeType: 1显示 2打印")
+    public R<List<DetailFilterVO>> getDetailFilter(@PathVariable("id") Long id,
+                                                   @PathVariable("nodeKey") String nodeKey,
+                                                   @RequestParam(value = "modeType", required = false) Integer modeType) {
+        return R.data(permService.getDetailFilter(id, nodeKey, modeType));
+    }
+
+    @PutMapping("/{id}/node/{nodeKey}/detail-filter")
+    @Operation(summary = "保存节点明细表字段筛选规则", description = "整体覆盖某一口径（modeType 在 body 中）")
+    public R<Boolean> saveDetailFilter(@PathVariable("id") Long id,
+                                       @PathVariable("nodeKey") String nodeKey,
+                                       @RequestBody DetailFilterSaveDTO dto) {
+        dto.setNodeKey(nodeKey);
+        return R.data(permService.saveDetailFilter(id, dto), "保存成功");
     }
 
 }

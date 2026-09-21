@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS `wf_node_detail_perm` (
 -- 流程实例
 CREATE TABLE IF NOT EXISTS `wf_instance` (
     `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
-    `engine_inst_id`    VARCHAR(64)  NOT NULL DEFAULT ''    COMMENT '引擎实例ID（Flowable PROC_INST_ID_），弱关联，不依赖 ACT_* 表',
+    `engine_inst_id`    VARCHAR(64)  NULL DEFAULT NULL       COMMENT '引擎实例ID（Flowable PROC_INST_ID_），弱关联，不依赖 ACT_* 表；草稿等未进引擎的实例为 NULL（唯一索引允许多个 NULL）',
     `def_id`            BIGINT UNSIGNED NOT NULL            COMMENT '流程定义ID',
     `form_id`           BIGINT       NOT NULL                COMMENT '表单ID（workflow_bill.id）',
     `data_id`           BIGINT       NOT NULL                COMMENT '业务数据ID（formtable_main_{id}.id）',

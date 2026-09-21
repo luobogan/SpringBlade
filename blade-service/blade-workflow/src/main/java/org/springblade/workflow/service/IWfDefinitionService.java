@@ -59,6 +59,11 @@ public interface IWfDefinitionService {
     boolean configOperator(Long defId, String nodeKey, List<WfNodeOperator> operators);
 
     /**
+     * 把某节点的操作者配置同步到其它节点（整体覆盖写目标节点）
+     */
+    boolean syncOperatorToNodes(Long defId, String fromNodeKey, List<String> targetNodeKeys);
+
+    /**
      * 部署到引擎（置为已发布）
      */
     boolean deploy(Long defId);

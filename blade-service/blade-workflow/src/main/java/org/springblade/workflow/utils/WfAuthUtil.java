@@ -49,6 +49,16 @@ public final class WfAuthUtil {
     }
 
     /**
+     * 「所有人」占位 id（0）。
+     *
+     * <p>供无登录上下文的系统动作记录操作人：超时自动通过、异常兜底自动流转、子流程自动推进等，
+     * 使 {@code wf_approval_log.operator} 有确定值（{@code secureUtil.getUserId()} 在定时任务里为 null）。</p>
+     */
+    public static Long systemId() {
+        return SYSTEM;
+    }
+
+    /**
      * 当前用户是否流程管理员（角色别名 {@code workflow} 或 {@code administrator}）
      */
     public static boolean isAdmin() {
