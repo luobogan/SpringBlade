@@ -254,13 +254,21 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             dataId = dto.getDataId();
             starter = (dto.getStarter() != null) ? dto.getStarter() : SecureUtil.getUserId();
             if (dataId == null) {
-                Long created = createBusinessData(def, dto);
-                if (created != null) {
-                    dataId = created;
-                    ownBusinessRow = true;
-                } else {
-                    // 兜底唯一占位（业务行创建失败时仍要满足 data_id NOT NULL 与 uk_biz_key 唯一）
+                // 测试态：**绝不建真实业务行**（见方案 V13 / C17）。测试期建的业务行既无
+                // request_id（无主），又不会被 cleanupTestData 删除，会永久留在 formtable_main_N，
+                // 还会把「表单引用计数」等统计口径带偏。直接用唯一占位 dataId 即可满足
+                // data_id NOT NULL 与 uk_biz_key 唯一。
+                if (Boolean.TRUE.equals(dto.getTestFlag())) {
                     dataId = IdWorker.getId();
+                } else {
+                    Long created = createBusinessData(def, dto);
+                    if (created != null) {
+                        dataId = created;
+                        ownBusinessRow = true;
+                    } else {
+                        // 兜底唯一占位（业务行创建失败时仍要满足 data_id NOT NULL 与 uk_biz_key 唯一）
+                        dataId = IdWorker.getId();
+                    }
                 }
             }
             bizKey = buildBizKey(formId, dataId);
@@ -508,7 +516,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Override
     public InstanceVO detail(Long id) {
         // 记录级鉴权：只有发起人、参与人（办理人/抄送人）或流程管理员能看实例详情
-        return toInstanceVO(requireVisible(id, "查看流程详情"));
+        WfInstance inst = requireVisible(id, "查看流程详情");
+        // 测试态实例在生产入口默认不可见（方案 §6.4 C1 / V3、S2）：
+        // 普通参与人（哪怕他名下有测试待办）一律拒绝，防止用测试 instanceId 拼 URL 打开生产办理页；
+        // 仅流程管理员放行（S5：管理员需在测试域核查，且只读由办理页保证）。
+        if (inst.getIsTest() != null && inst.getIsTest() == 1 && !WfAuthUtil.isAdmin()) {
+            throw new WfAccessDeniedException("该流程为测试数据，无权查看");
+        }
+        return toInstanceVO(inst);
     }
 
     @Override
@@ -519,6 +534,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         IPage<WfInstance> result = instanceMapper.selectPage(page, Wrappers.<WfInstance>lambdaQuery()
             // 「我的请求」= 我发起的：发起人在服务端收口为当前登录人，不接受前端传 starter
             .eq(WfInstance::getStarter, WfAuthUtil.userId())
+            // 测试实例不进「我的请求」（方案 §6.4 C1 / V4、S4）：测试发起人多为管理员，
+            // 列表会被测试单污染；需查看走 /test/**（测试历史）
+            .eq(WfInstance::getIsTest, 0)
             .like(title != null && !title.isBlank(), WfInstance::getTitle, title)
             .orderByDesc(WfInstance::getStartTime));
         return result.convert(this::toInstanceVO);
@@ -528,6 +546,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     public InstanceVO getByBiz(Long formId, Long dataId) {
         WfInstance inst = instanceMapper.selectOne(Wrappers.<WfInstance>lambdaQuery()
             .eq(WfInstance::getBizKey, buildBizKey(formId, dataId))
+            // 测试实例不参与「按业务数据反查」（方案 §6.4 C1）：单据侧反查只应看到正式流程
+            .eq(WfInstance::getIsTest, 0)
             .last("LIMIT 1"));
         if (inst == null) {
             return null;
@@ -548,7 +568,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             return 0;
         }
         Long count = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
-            .eq(WfInstance::getFormId, formId));
+            .eq(WfInstance::getFormId, formId)
+            // 测试实例不计入「表单引用计数」（方案 §6.4 C1）：该计数用于删除表单前的绑定校验，
+            // 被测试实例抬高会导致表单删不掉
+            .eq(WfInstance::getIsTest, 0));
         return count == null ? 0 : count.intValue();
     }
 
@@ -837,6 +860,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         // 记录级鉴权：只有发起人本人（或流程管理员）能终止自己的申请
         WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "终止");
+        assertNotTestInst(inst, "终止");
         inst.setStatus(WfInstance.STATUS_SUSPENDED);
         instanceMapper.updateById(inst);
         appendLog(instId, null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
@@ -851,6 +875,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
         }
+        // 记录级鉴权：原实现只有方法级角色门，任何 workflow 角色都能恢复「任意」实例（含正式实例），
+        // 属越权 —— 补齐为与 stop 同口径（见方案 V15 / C19）
+        WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "恢复");
+        assertNotTestInst(inst, "恢复");
         inst.setStatus(WfInstance.STATUS_RUNNING);
         instanceMapper.updateById(inst);
         appendLog(instId, null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
@@ -861,6 +889,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean cancel(Long instId, String opinion) {
+        // 记录级鉴权：原实现完全没有鉴权（只有方法级角色门），任何 workflow 角色都能撤销
+        // 「任意」实例 —— 与 resume 同源的越权项，补齐为与 withdraw 同口径（见方案 V15 / C19）
+        WfAuthUtil.requireStarterOrAdmin(instanceMapper.selectById(instId), "撤销");
         return terminate(instId, WfInstance.STATUS_CANCELED, opinion, "撤销");
     }
 
@@ -1270,11 +1301,26 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return count != null && count > 0;
     }
 
+    /**
+     * 测试态守卫：拒绝在测试实例上执行终态类操作（撤回 / 终止 / 恢复 / 撤销，方案 §6.4 C19）。
+     *
+     * <p>测试实例的收尾动作是「清理测试数据」，而不是被当成正式单据撤回/终止/恢复；
+     * 否则测试残留会以「已撤销 / 已暂停」的形态留在生产库里，既污染统计也难以被发现。</p>
+     */
+    private void assertNotTestInst(WfInstance inst, String action) {
+        if (inst != null && inst.getIsTest() != null && inst.getIsTest() == 1) {
+            throw new ServiceException("测试流程不支持「" + action
+                + "」：请在流程测试页点击「清理测试数据」结束本次测试");
+        }
+    }
+
     private boolean terminate(Long instId, int status, String opinion, String action) {
         WfInstance inst = instanceMapper.selectById(instId);
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
         }
+        // 测试态：撤回 / 撤销 会终结实例并关闭其全部待办 —— 测试实例不走这条收尾路径（C19）
+        assertNotTestInst(inst, action);
         inst.setStatus(status);
         inst.setEndTime(new Date());
         instanceMapper.updateById(inst);

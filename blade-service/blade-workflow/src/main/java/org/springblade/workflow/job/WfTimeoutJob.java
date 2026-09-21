@@ -17,7 +17,7 @@ import java.util.List;
 /**
  * 超时扫描任务：消费节点超时规则（wf_node_timeout，多条）。
  *
- * <p>扫描 {@code wf_task} 中 {@code status=待办 且 due_time <= now 且 timeout_handled=0} 的任务，
+ * <p>扫描 {@code wf_task} 中 {@code status=待办 且 due_time <= now 且 timeout_handled=0 且 is_test=0} 的任务，
  * 取第一条已到期规则由 {@link IWfTimeoutService#fire} 执行动作（自动通过 / 流转 / 指定操作者 / 提醒）。
  * 无规则节点回退旧 {@code settings.timeout} 单条配置（由 WfTimeoutServiceImpl 处理）。</p>
  *
@@ -48,6 +48,11 @@ public class WfTimeoutJob {
                 .isNotNull(WfTask::getDueTime)
                 .le(WfTask::getDueTime, now)
                 .eq(WfTask::getTimeoutHandled, 0)
+                // 测试态任务一律不参与超时扫描（方案 §6.4 C4 / V5）。
+                // 否则测试待办到期后会触发「自动通过 / 转办给真人 / 催办留痕」：
+                // 既干扰测试结果，还会主动给真人新建任务、扩大测试数据的可见面。
+                // 注：wf_task.is_test 为 tinyint NOT NULL DEFAULT 0，不存在 NULL 漏网。
+                .eq(WfTask::getIsTest, 0)
                 .last("LIMIT " + BATCH_LIMIT));
         } catch (Exception e) {
             log.warn("[blade-workflow] 超时扫描查询失败，本轮跳过", e);

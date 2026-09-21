@@ -359,7 +359,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
         taskMapper.updateById(task);
-        appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
+        // 留痕记「节点接收人」而非当前登录人：代跑/测试态下当前登录人是管理员，记管理员会让
+        // 流程信息看起来是「管理员退回了这张单」，与代跑留痕口径不一致（见方案 C14/C16）
+        appendLog(inst.getId(), task.getId(), task.getNodeKey(), task.getAssignee(),
             WfApprovalLog.LOG_REJECT, dto == null ? null : dto.getOpinion());
         closeSiblings(inst.getId(), task.getNodeKey(), task.getId());
 
@@ -374,11 +376,15 @@ public class WfTaskServiceImpl implements IWfTaskService {
             processService.moveActivity(inst.getEngineInstId(), task.getNodeKey(), targetNodeKey, vars);
             // 同步 wf_task / 当前节点：advance 读引擎当前活动任务，为目标节点生成待办
             // 来源标记 REJECT：退回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理设置」）
-            instanceService.advance(inst.getId(), SecureUtil.getUserId(), null, null, AdvanceSrc.REJECT);
+            instanceService.advance(inst.getId(), task.getAssignee(), null, null, AdvanceSrc.REJECT);
         }
 
         // 节点信息 → 运行时消费：节点后附加操作（退回场景，仅执行勾选「退回时触发」的条目）
-        nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, SecureUtil.getUserId(), true);
+        // 测试态：跳过附加操作 —— 对齐 doApprove 的 PHASE_POST 跳过（:309-313），
+        // 否则在测试实例上点退回会真的执行「写业务数据 / 调外部接口」类动作（方案 V14/C16）
+        if (!isTestInst(inst)) {
+            nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, task.getAssignee(), true);
+        }
         return true;
     }
 
@@ -428,6 +434,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfInstance inst = instanceMapper.selectById(task.getInstId());
         // 记录级鉴权：只有该任务办理人本人（或流程管理员）能把自己的待办转出去
         WfAuthUtil.requireOperateTask(task, "转办");
+        // 测试态：转办会给「目标人」新建一条待办（且存在标记断层 V10），必须后端拒绝
+        assertNotTestTask(task, "转办");
         if (dto == null || dto.getAssignee() == null) {
             throw new ServiceException("转办目标人不能为空");
         }
@@ -449,6 +457,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
         forwarded.setOriginalUser(task.getAssignee());
         forwarded.setStatus(WfTask.STATUS_TODO);
         forwarded.setReceiveTime(new Date());
+        // 标记继承：任务 is_test 必须随实例 —— 否则将来放开「测试域转办」时，
+        // 新建的这条任务会是 is_test=0，任何 is_test 过滤都拦不住它（V10 / C2 标记断层）
+        forwarded.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
         taskMapper.insert(forwarded);
         return true;
     }
@@ -460,6 +471,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfInstance inst = instanceMapper.selectById(task.getInstId());
         // 记录级鉴权：只有该任务办理人本人（或流程管理员）能加签
         WfAuthUtil.requireOperateTask(task, "加签");
+        // 测试态：加签会给「加签人」新建一条待办（且存在标记断层 V10），必须后端拒绝
+        assertNotTestTask(task, "加签");
         if (dto == null || dto.getAssignee() == null) {
             throw new ServiceException("加签人不能为空");
         }
@@ -472,6 +485,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         added.setSignOrder(dto.getAddSignType());
         added.setStatus(WfTask.STATUS_TODO);
         added.setReceiveTime(new Date());
+        // 标记继承：同 forward（V10 / C2）
+        added.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
         taskMapper.insert(added);
 
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
@@ -490,6 +505,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfInstance inst = instanceMapper.selectById(task.getInstId());
         // 记录级鉴权：只有该任务办理人本人（或流程管理员）能发起抄送
         WfAuthUtil.requireOperateTask(task, "抄送");
+        // 测试态：抄送会给真人建「已办」条目（status=8，V9），必须后端拒绝
+        assertNotTestTask(task, "抄送");
         if (dto == null || dto.getAssignees() == null || dto.getAssignees().isEmpty()) {
             throw new ServiceException("抄送人不能为空");
         }
@@ -501,6 +518,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
             cc.setAssignee(assignee);
             cc.setStatus(WfTask.STATUS_CIRCULATE);
             cc.setReceiveTime(new Date());
+            // 标记继承：同 forward（V10 / C2）—— 抄送任务会进入被抄送人的「已办」（V9）
+            cc.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
             taskMapper.insert(cc);
         }
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
@@ -524,6 +543,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (!WfAuthUtil.isSelfOrAdmin(inst.getStarter()) && !WfAuthUtil.canOperateTask(task)) {
             throw new WfAccessDeniedException("无权催办：只有流程发起人、当前节点办理人或流程管理员可以催办");
         }
+        // 测试态：催办会在「当前登录人」名下写留痕且无实际意义，后端拒绝
+        assertNotTestTask(task, "催办");
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_SUPERVISE, dto == null ? null : dto.getOpinion());
         return true;
@@ -556,12 +577,16 @@ public class WfTaskServiceImpl implements IWfTaskService {
         Map<String, Long> result = new HashMap<>(4);
         // 记录级鉴权：非流程管理员只能看自己的角标数（顶栏待办红点）
         Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
+        // 测试态任务不计入角标（方案 §6.4 C1 / V2）：否则顶栏红点会把测试单算进去，
+        // 把用户引去「办理」一条根本不该出现在生产面的单子
         Long todo = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getAssignee, target)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .eq(WfTask::getIsTest, 0));
         Long done = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getAssignee, target)
-            .ne(WfTask::getStatus, WfTask.STATUS_TODO));
+            .ne(WfTask::getStatus, WfTask.STATUS_TODO)
+            .eq(WfTask::getIsTest, 0));
         result.put("todo", todo == null ? 0L : todo);
         result.put("done", done == null ? 0L : done);
         return result;
@@ -572,9 +597,14 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private List<WfTaskVO> list(Long assignee, List<Integer> statuses) {
         // 记录级鉴权：非流程管理员一律只能查自己的待办/已办，忽略传入的 assignee
         Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
+        // 测试态任务不进生产「待办 / 已办」列表（方案 §6.4 C1 / V1、V3、C14）：
+        // 含已办(2)/办结(3)/自动提交(4)/协办(7)/传阅(8)/已读(9) —— 整组排除，
+        // 其中「已办」最易漏：代跑会在真人名下留一条已办，平时无人细看，漏了就长期存在。
+        // 注：wf_task.is_test 为 tinyint NOT NULL DEFAULT 0，不存在 NULL 漏网。
         List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getAssignee, target)
             .in(WfTask::getStatus, statuses)
+            .eq(WfTask::getIsTest, 0)
             .orderByDesc(WfTask::getCreateTime));
         List<WfTaskVO> result = new ArrayList<>(tasks.size());
         for (WfTask t : tasks) {
@@ -760,6 +790,42 @@ public class WfTaskServiceImpl implements IWfTaskService {
         instanceService.advance(inst.getId(), operator);
         log.info("[blade-workflow] 退回发起人后重新提交. instId={}, creatorNode={}, operator={}",
             inst.getId(), creatorNode.getNodeKey(), operator);
+    }
+
+    /**
+     * 实例是否为测试态（{@code wf_instance.is_test=1}）。
+     *
+     * <p>测试态实例与正式实例<b>同库同表</b>，仅靠 {@code is_test} 区分；任何会「外溢到生产」
+     * 的写操作（给真人建任务、写生产可见留痕、触发外部接口）都必须先过这一层。</p>
+     */
+    private boolean isTestInst(WfInstance inst) {
+        return inst != null && inst.getIsTest() != null && inst.getIsTest() == 1;
+    }
+
+    /** 任务所属实例是否为测试态（见 {@link #isTestInst}） */
+    private boolean isTestTask(WfTask task) {
+        if (task == null || task.getInstId() == null) {
+            return false;
+        }
+        return isTestInst(instanceMapper.selectById(task.getInstId()));
+    }
+
+    /**
+     * 测试态守卫：拒绝在测试实例上执行「会外溢到生产」的动作（方案 §6.4 C16）。
+     *
+     * <p><b>为什么必须在后端兜底</b>：前端已在测试面板禁用这些按钮（C6），但
+     * 「前端禁用 ≠ 后端拒绝」——直接调接口照样能触发。而这几类动作的共同点是
+     * <b>会向生产用户产生东西</b>：转办/加签给真人新建待办、传阅给真人建已办条目、
+     * 催办在真人名下写留痕；且新建的任务还存在「标记断层」（V10/C2）。</p>
+     *
+     * <p>注：退回（{@link #reject}）不走本守卫——退回是流程测试需要验证的路径，
+     * 改为「允许执行 + 跳过副作用 + 留痕用接收人」。</p>
+     */
+    private void assertNotTestTask(WfTask task, String action) {
+        if (isTestTask(task)) {
+            throw new ServiceException("测试流程不支持「" + action
+                + "」：该操作会给真实用户产生任务或留痕，请在正式流程中使用");
+        }
     }
 
     private WfTask requireTodoTask(Long taskId) {

@@ -91,6 +91,8 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                 instanceId, inst.getStarter(), WfAuthUtil.userId());
             throw new WfAccessDeniedException("无权查看该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以查看");
         }
+        // 测试态实例：生产办理页不允许渲染（方案 §6.4 C8 / V3、S2）
+        assertNotTestForProdEntry(inst);
 
         String nodeKey = inst.getCurrentNodeKey();
         WfTask task = null;
@@ -232,6 +234,10 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         if (dto.getInstanceId() != null && !instanceService.canView(dto.getInstanceId())) {
             throw new WfAccessDeniedException("无权保存该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以操作");
         }
+        // 测试态实例：生产入口不允许保存（同 C8；测试面板由管理员操作，故管理员放行）
+        if (dto.getInstanceId() != null) {
+            assertNotTestForProdEntry(instanceMapper.selectById(dto.getInstanceId()));
+        }
 
         // ① 过期页面守卫（与「页面新鲜度复检」同一套规则，单一权威实现见 IWfInstanceService#fresh）：
         //    流程被退回、被他人流转、已归档/撤回后，浏览器里未刷新的页面仍显示原节点，
@@ -246,16 +252,30 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             }
         }
 
+        // ① 测试态判定：测试实例「不写业务表行」（见方案 V13 / C17）。
+        //    测试产生的业务行不会被 cleanupTestData 删除，会永久留在 formtable_main_N 成为
+        //    「无主脏行」（有行、无 request_id）。改为只更新快照 —— 快照在 wf_form_snapshot 内，
+        //    清理测试数据时一并删除，零残留。
+        WfInstance saveInst = dto.getInstanceId() != null
+            ? instanceMapper.selectById(dto.getInstanceId()) : null;
+        boolean testInst = saveInst != null && saveInst.getIsTest() != null && saveInst.getIsTest() == 1;
+
         // ① 写业务数据行（跨服务 formmode：dataId 为空=新建，非空=更新同一行）
-        FormDataSaveDTO saveDto = new FormDataSaveDTO();
-        saveDto.setFormId(formId);
-        saveDto.setDataId(dto.getDataId());
-        saveDto.setFieldValues(dto.getFieldValues() == null ? Map.of() : dto.getFieldValues());
-        R<Long> r = formmodeClient.saveBusinessData(saveDto);
-        if (r == null || !r.isSuccess() || r.getData() == null) {
-            throw new ServiceException("保存业务数据失败：" + (r == null ? "无响应" : r.getMsg()));
+        Long dataId;
+        if (testInst) {
+            // 测试态：沿用实例上的 dataId（占位或已建），业务表不落任何行
+            dataId = dto.getDataId() != null ? dto.getDataId() : saveInst.getDataId();
+        } else {
+            FormDataSaveDTO saveDto = new FormDataSaveDTO();
+            saveDto.setFormId(formId);
+            saveDto.setDataId(dto.getDataId());
+            saveDto.setFieldValues(dto.getFieldValues() == null ? Map.of() : dto.getFieldValues());
+            R<Long> r = formmodeClient.saveBusinessData(saveDto);
+            if (r == null || !r.isSuccess() || r.getData() == null) {
+                throw new ServiceException("保存业务数据失败：" + (r == null ? "无响应" : r.getMsg()));
+            }
+            dataId = r.getData();
         }
-        Long dataId = r.getData();
 
         // ② 办理态：同步当前节点快照（不改任务状态、不推进引擎）
         if (dto.getInstanceId() != null) {
@@ -266,6 +286,21 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         log.info("[blade-workflow] 表单已保存（未流转）. instId={}, formId={}, dataId={}",
             dto.getInstanceId(), formId, dataId);
         return String.valueOf(dataId);
+    }
+
+    /**
+     * 测试态实例：生产入口不允许渲染 / 保存（方案 §6.4 **C8** / V3、S2）。
+     *
+     * <p>仅**流程管理员**放行 —— 测试面板由管理员操作，走的正是本接口；
+     * 普通参与人（哪怕他名下有测试待办）一律拒绝，防止「用测试 instanceId 拼 URL 打开生产办理页」。</p>
+     *
+     * <p>⚠️ 将来若落地「测试域真人办理面」（C12），需在此按实例归属再放开一档
+     * （届时真人不是管理员，会被本守卫挡住）。</p>
+     */
+    private void assertNotTestForProdEntry(WfInstance inst) {
+        if (inst != null && inst.getIsTest() != null && inst.getIsTest() == 1 && !WfAuthUtil.isAdmin()) {
+            throw new WfAccessDeniedException("该流程为测试数据，无权办理");
+        }
     }
 
     /** 实例的当前节点Key（保存时未显式指定节点时用它定位快照） */

@@ -12,6 +12,7 @@ import org.flowable.engine.history.HistoricActivityInstance;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.system.user.feign.IUserClient;
@@ -736,7 +737,27 @@ public class WfTestServiceImpl implements IWfTestService {
         }
         List<WfInstance> insts = instanceMapper.selectList(q);
         Set<String> deployments = new LinkedHashSet<>();
+        int bizDeleted = 0;
         for (WfInstance inst : insts) {
+            // 业务表行：测试期若建过业务行（历史数据，见方案 V13 / C17），这里一并删除，
+            // 避免留下「有行、无 request_id」的无主脏行。
+            // ⚠️ 安全条件：仅当本实例**未回填过 request_id**（request_id_bound != 1）才删 ——
+            //    若测试复用了一张真实单据的 dataId 且已绑定流程，那行是别人的真实业务数据，绝不删。
+            if (inst.getFormId() != null && inst.getDataId() != null
+                && (inst.getRequestIdBound() == null || inst.getRequestIdBound() != 1)) {
+                try {
+                    R<Boolean> dr = formmodeClient.deleteBusinessData(inst.getFormId(), inst.getDataId());
+                    if (dr != null && Boolean.TRUE.equals(dr.getData())) {
+                        bizDeleted++;
+                    } else {
+                        log.warn("[blade-workflow] 清理测试业务数据失败（业务行可能残留）. instId={}, formId={}, dataId={}, msg={}",
+                            inst.getId(), inst.getFormId(), inst.getDataId(), dr == null ? "无响应" : dr.getMsg());
+                    }
+                } catch (Exception e) {
+                    // 跨服务删除失败不能阻断 wf_* 清理：业务行残留有巡检 ⑰⑱ 兜底
+                    log.warn("[blade-workflow] 清理测试业务数据异常. instId={}, dataId={}", inst.getId(), inst.getDataId(), e);
+                }
+            }
             taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, inst.getId()));
             approvalLogMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, inst.getId()));
             snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, inst.getId()));
@@ -752,7 +773,8 @@ public class WfTestServiceImpl implements IWfTestService {
             }
         }
         instanceMapper.delete(q);
-        log.info("[blade-workflow] 已清理测试数据. defId={}, 实例数={}, 卸载部署数={}", defId, insts.size(), deployments.size());
+        log.info("[blade-workflow] 已清理测试数据. defId={}, 实例数={}, 卸载部署数={}, 清理业务行数={}",
+            defId, insts.size(), deployments.size(), bizDeleted);
         return insts.size();
     }
 
@@ -886,15 +908,35 @@ public class WfTestServiceImpl implements IWfTestService {
         }
     }
 
+    /**
+     * 测试域守卫：只允许操作测试态实例（{@code is_test=1}），方案 §6.4 **C11**。
+     *
+     * <p><b>为什么必须在入口断言</b>：{@code /test/**} 各接口都直接接受 {@code instId}，
+     * 而整个控制器只有角色门，拿到实例后并不校验它是不是测试实例。传入<b>正式实例</b> id 时：</p>
+     * <ul>
+     *   <li>{@code step}：{@code pendingTestTasks} 带 {@code .eq(isTest,1)} 查不到任务 →
+     *       落入 {@code instanceService.advance(instId)}，**推进正式实例**（V11，最危险）；</li>
+     *   <li>{@code state} / {@code todo}：把正式实例的待办与覆盖率当「测试结果」返回（信息泄漏）。</li>
+     * </ul>
+     */
+    private void requireTestInst(WfInstance inst, String action) {
+        if (inst == null) {
+            throw new ServiceException("测试实例不存在（可能已被清理）");
+        }
+        if (inst.getIsTest() == null || inst.getIsTest() != 1) {
+            log.warn("[blade-workflow] 越权拦截：/test/{} 目标非测试实例. instId={}, isTest={}, current={}",
+                action, inst.getId(), inst.getIsTest(), SecureUtil.getUserId());
+            throw new ServiceException("该实例不是测试实例，不允许通过测试接口操作");
+        }
+    }
+
     @Override
     public WfTestResultVO state(Long instId) {
         if (instId == null) {
             throw new ServiceException("测试实例ID不能为空");
         }
         WfInstance inst = instanceMapper.selectById(instId);
-        if (inst == null) {
-            throw new ServiceException("测试实例不存在（可能已被清理）");
-        }
+        requireTestInst(inst, "state");
         List<WfProcessNode> nodeList = nodeMapper.selectList(
             Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
         List<WfNodeLink> links = linkMapper.selectList(
@@ -950,9 +992,9 @@ public class WfTestServiceImpl implements IWfTestService {
         }
         Long instId = dto.getInstId();
         WfInstance inst = instanceMapper.selectById(instId);
-        if (inst == null) {
-            throw new ServiceException("测试实例不存在（可能已被清理）");
-        }
+        // 测试域守卫：不校验的话，传正式实例 id 会因 pendingTestTasks 查不到任务而落入
+        // advance(instId) —— 直接推进生产实例（V11）
+        requireTestInst(inst, "step");
         // 已结束：原样返回当前状态（幂等）
         if (inst.getStatus() != null && WfInstance.STATUS_RUNNING != inst.getStatus()) {
             return state(instId);
@@ -1126,9 +1168,8 @@ public class WfTestServiceImpl implements IWfTestService {
             return vos;
         }
         WfInstance inst = instanceMapper.selectById(instId);
-        if (inst == null) {
-            return vos;
-        }
+        // 测试域守卫：避免用正式实例 id 读到正式待办（信息泄漏，V11）
+        requireTestInst(inst, "todo");
         List<WfProcessNode> nodeList = nodeMapper.selectList(
             Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
         for (WfTask t : pendingTestTasks(instId)) {

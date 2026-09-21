@@ -178,6 +178,21 @@ public class WfCustomOperationServiceImpl implements IWfCustomOperationService {
             return R.fail("流程实例不存在");
         }
 
+        // ① 记录级鉴权：只有发起人 / 参与人（办理人·被抄送·被传阅）/ 流程管理员能执行。
+        //    原实现只校验按钮权限矩阵 hasRight —— 任何知道 opId + instId 的人都能触发，
+        //    而自定义操作会带出业务数据做 $field$ 占位符替换，甚至外发 HTTP（见方案 V12 / C18）。
+        if (!instanceService.canView(instId)) {
+            log.warn("[blade-workflow] 越权拦截：自定义操作非参与人. instId={}, opId={}, current={}",
+                instId, opId, SecureUtil.getUserId());
+            return R.fail("无权执行该自定义操作：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以执行");
+        }
+
+        // ② 测试态拒绝：actionType=1 会按配置 URL 真的向外发 HTTP（body 由 $field$ 从业务数据替换），
+        //    在测试实例上执行会把测试动作打到生产第三方系统（见方案 V12 / C18）。
+        if (inst.getIsTest() != null && inst.getIsTest() == 1) {
+            return R.fail("测试流程不允许执行自定义操作：该操作可能向外发送真实请求，请在正式流程中验证");
+        }
+
         // 表单字段占位符上下文
         Map<String, Object> fieldValues = loadFieldValues(inst.getDataId());
 
