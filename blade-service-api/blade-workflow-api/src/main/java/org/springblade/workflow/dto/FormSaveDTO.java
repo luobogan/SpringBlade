@@ -46,4 +46,9 @@ public class FormSaveDTO implements Serializable {
     @Schema(description = "表单字段值（主表 + 明细表，key 沿用布局坐标/字段命名）")
     private Map<String, Object> fieldValues;
 
+    @Schema(description = "测试态标记：发起态（instanceId 为空）传 true 时建测试草稿"
+        + "（is_test=1、占位 dataId、不写业务行，随 /test/cleanup 清理）；"
+        + "办理态（instanceId 非空）一律以实例自身 is_test 为准，本字段被忽略")
+    private Boolean testFlag;
+
 }

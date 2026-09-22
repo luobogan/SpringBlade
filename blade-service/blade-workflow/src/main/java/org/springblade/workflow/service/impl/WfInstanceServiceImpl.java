@@ -422,26 +422,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         Long formId = dto.getFormId() != null ? dto.getFormId() : def.getFormId();
         Map<String, Object> values = dto.getFieldValues() != null ? dto.getFieldValues() : Map.of();
 
-        // ① 写/更新业务数据行（与正式发起同一落点，返回 dataId 以复用同一行）
-        FormDataSaveDTO saveDto = new FormDataSaveDTO();
-        saveDto.setFormId(formId);
-        saveDto.setDataId(dto.getDataId());
-        saveDto.setFieldValues(values);
-        Long dataId;
-        try {
-            R<Long> r = formmodeClient.saveBusinessData(saveDto);
-            if (r == null || !r.isSuccess() || r.getData() == null) {
-                throw new ServiceException(r == null ? "表单服务无响应" : r.getMsg());
-            }
-            dataId = r.getData();
-        } catch (ServiceException se) {
-            throw se;
-        } catch (Exception e) {
-            throw new ServiceException("保存草稿业务数据失败：" + e.getMessage());
-        }
-
-        // ② 草稿实例：再次保存则复用、否则新建；无论哪种都保持 status=草稿
-        WfInstance inst;
+        // ① 先取既有草稿实例（如有）：用于「测试/生产」判定与复用，并杜绝「删了又复活」
+        WfInstance inst = null;
         if (dto.getInstanceId() != null) {
             inst = instanceMapper.selectById(dto.getInstanceId());
             if (inst == null) {
@@ -452,6 +434,38 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 // 已发起/已处理/已终止等状态的实例不能再当草稿保存
                 throw new ServiceException("该流程已发起或已处理，无法再保存草稿");
             }
+        }
+        // 测试态判定：既有实例一律以自身 is_test 为准（防伪造 testFlag 绕过业务行）；
+        // 仅「新建草稿」时才认入参 testFlag（测试页/统一入口 mode=test 会传 true）。
+        boolean test = (inst != null)
+            ? (inst.getIsTest() != null && inst.getIsTest() == 1)
+            : Boolean.TRUE.equals(dto.getTestFlag());
+
+        // ② 业务数据行：生产态才落业务表；测试态沿用占位/既有 dataId，绝不写业务行（V13 / C17）
+        Long dataId;
+        if (test) {
+            dataId = dto.getDataId() != null ? dto.getDataId()
+                : (inst != null && inst.getDataId() != null ? inst.getDataId() : IdWorker.getId());
+        } else {
+            FormDataSaveDTO saveDto = new FormDataSaveDTO();
+            saveDto.setFormId(formId);
+            saveDto.setDataId(dto.getDataId());
+            saveDto.setFieldValues(values);
+            try {
+                R<Long> r = formmodeClient.saveBusinessData(saveDto);
+                if (r == null || !r.isSuccess() || r.getData() == null) {
+                    throw new ServiceException(r == null ? "表单服务无响应" : r.getMsg());
+                }
+                dataId = r.getData();
+            } catch (ServiceException se) {
+                throw se;
+            } catch (Exception e) {
+                throw new ServiceException("保存草稿业务数据失败：" + e.getMessage());
+            }
+        }
+
+        // ③ 草稿实例：再次保存则复用、否则新建；无论哪种都保持 status=草稿
+        if (inst != null) {
             inst.setDataId(dataId);
             instanceMapper.updateById(inst);
         } else {
@@ -459,15 +473,17 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setDefId(def.getId());
             inst.setFormId(formId);
             inst.setDataId(dataId);
-            inst.setTitle(def.getName());
+            inst.setTitle(test ? "【测试】" + def.getName() : def.getName());
             inst.setBizKey(buildBizKey(formId, dataId));
             inst.setStarter(SecureUtil.getUserId());
             inst.setStartTime(new Date());
             inst.setStatus(WfInstance.STATUS_DRAFT);
+            // 测试草稿打 is_test=1：不进生产任何列表，随 /test/cleanup 一并清理
+            inst.setIsTest(test ? 1 : 0);
             instanceMapper.insert(inst);
         }
 
-        // ③ 草稿合成任务（区别于引擎任务）：保证草稿出现在发起人待办。
+        // ④ 草稿合成任务（区别于引擎任务）：保证草稿出现在发起人待办。
         //    幂等处理：草稿实例（status=5，尚未发起）不可能存在引擎任务，
         //    故每次保存直接清掉本实例的全部待办再插入一条，确保同一草稿恒为 1 条待办，
         //    避免多次保存（或后端热更新滞后）导致同一草稿在待办里出现多条。
@@ -481,10 +497,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         draftTask.setNodeKey(firstNodeKey);
         draftTask.setAssignee(inst.getStarter());
         draftTask.setStatus(WfTask.STATUS_TODO);
+        // 测试草稿的合成任务同样打 is_test=1：生产待办/角标查询按 is_test=0 过滤，天然不可见
+        draftTask.setIsTest(test ? 1 : 0);
         draftTask.setReceiveTime(new Date());
         taskMapper.insert(draftTask);
 
-        // ④ 表单快照：供重新打开草稿时回填表单值（与正式快照同一张表，按 nodeKey 取）。
+        // ⑤ 表单快照：供重新打开草稿时回填表单值（与正式快照同一张表，按 nodeKey 取）。
         //    覆盖写：同一 (instId, nodeKey) 仅保留最新一份，避免重复保存产生多份快照。
         snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery()
             .eq(WfFormSnapshot::getInstId, inst.getId())

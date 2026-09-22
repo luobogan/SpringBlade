@@ -331,7 +331,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         //    若测试沿用正式 procKey，每次测试都会把正式版本顶掉（未清理时正式发起跑的是「关校验+消毒」的测试 BPMN）。
         //    发起侧必须成对使用同一 key：WfTestServiceImpl 把 StartProcessDTO.engineKey 设为下面这个值。
         String testKey = def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX;
-        String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)));
+        // ⚠️ 必须把 BPMN 的 <process id> 一并改成 testKey（见 neutralizeForTest(_, testKey)），
+        //    否则引擎里不存在 __test 这个流程 key，测试发起会报 no process definition。
+        String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)), testKey);
         String deploymentId = processService.deployProcessForTest(testKey, deployXml);
         log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态，独立 key 不顶正式版本）. "
             + "defId={}, testKey={}, deploymentId={}", defId, testKey, deploymentId);
@@ -1252,9 +1254,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
      *  - businessRuleTask（Flowable 解析即需 org.kie / Drools 类）；
      *  - intermediateThrowEvent（未配置 / 不支持的抛出事件，运行期失败）；
      *  - intermediateCatchEvent / boundaryEvent 含 timerEventDefinition（未配置则卡死、已配置则测试不应真等待）。
+     * 另外把 main process 的 id 改写为测试独立 key（{@code procKey + "__test"}）——Flowable 的流程 key
+     * 取自 BPMN 的 {@code <process id>}，不改这里则引擎中不存在该 key（测试发起报 no process definition）。
      * 消毒失败时回退原 XML，保证部署不中断。
      */
-    private String neutralizeForTest(String bpmnXml) {
+    private String neutralizeForTest(String bpmnXml, String testKey) {
         if (bpmnXml == null || bpmnXml.isBlank()) {
             return bpmnXml;
         }
@@ -1264,6 +1268,16 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
             Process process = model.getMainProcess();
             boolean changed = false;
+            // ⚠️ 关键：Flowable 的「流程 key」来自 BPMN 的 <process id="...">，**不是**部署名/资源名。
+            //    测试必须把 process id 改成独立 key（procKey + "__test"），否则：
+            //      ① 引擎里不存在 __test 这个 key → 测试发起 startProcessInstanceByKey("xxx__test")
+            //         报 "no processes deployed with key 'xxx__test'"（即日志 no process definition）；
+            //      ② 测试部署会落到正式 procKey 的版本序列上，把正式版本顶掉（一致性规范 §1.5 风险1）。
+            if (testKey != null && !testKey.isBlank() && !testKey.equals(process.getId())) {
+                log.info("[blade-workflow] 测试态改用独立流程 key：process id {} → {}", process.getId(), testKey);
+                process.setId(testKey);
+                changed = true;
+            }
             for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
                 if (needsNeutralize(fe)) {
                     ManualTask task = new ManualTask();
