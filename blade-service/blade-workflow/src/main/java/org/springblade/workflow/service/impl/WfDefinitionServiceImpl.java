@@ -1549,13 +1549,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         desc.setRules("stringLength:1000");
         fields.add(desc);
 
-        // 5. 流程状态 —— 对齐 ecology getWorkflowStatusItem（0无效/1有效/2测试）
+        // 5. 流程状态 —— 0草稿 1已发布 2停用 3测试（测试态流程：仅 /formmode/test 可选，不进正式发起页 /workflow/create）
+        //   注：ecology getWorkflowStatusItem 用（0无效/1有效/2测试），本项目 2 已用作「停用」，故测试态顺延为 3
         FormFieldVO status = field("status", "流程状态", "select", false);
         status.setDefaultValue(0);
         status.setOptions(Arrays.asList(
             option(0, "草稿"),
             option(1, "已发布"),
-            option(2, "停用")
+            option(2, "停用"),
+            option(3, "测试")
         ));
         fields.add(status);
 
