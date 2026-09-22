@@ -623,6 +623,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         vo.setReceiveTime(t.getReceiveTime());
         vo.setOperateTime(t.getOperateTime());
         vo.setDueTime(t.getDueTime());
+        // 测试态标记透出（C3）：前端据此识别「这是测试任务」并置只读 / 加标识
+        vo.setIsTest(t.getIsTest());
 
         WfInstance inst = instanceMapper.selectById(t.getInstId());
         if (inst != null) {

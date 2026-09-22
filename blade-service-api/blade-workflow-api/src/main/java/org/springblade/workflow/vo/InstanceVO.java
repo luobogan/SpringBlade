@@ -97,4 +97,14 @@ public class InstanceVO implements Serializable {
     @Schema(description = "L3自检：引擎 latest == 定义 deployment_id 1=一致 0=被顶替 NULL=未知")
     private Integer engineDeploymentMatched;
 
+    /**
+     * 是否测试态实例（1=流程测试产生，0=正式）。
+     *
+     * <p>前端据此判断「这是测试单」并置为只读 / 加「测试」标识（方案 §6.4 **C3** / S5）。
+     * 生产入口（待办/已办/角标/我的请求）已由 C1 排除 `is_test=1`，且 `detail` 仅管理员放行，
+     * 故生产面正常情况下拿不到测试实例；本字段用于管理员核查与将来放开真人办理面（C12）。</p>
+     */
+    @Schema(description = "是否测试态 1=流程测试 0=正式")
+    private Integer isTest;
+
 }

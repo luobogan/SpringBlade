@@ -95,7 +95,11 @@ public class WfSubflowServiceImpl implements IWfSubflowService {
         // 全部归档后提醒（节点操作者本人 / 指定人员）
         boolean remind = group.stream()
             .anyMatch(g -> g.getRemindEnabled() != null && g.getRemindEnabled() == 1);
-        if (remind && req.getRemindEnabled() != null && req.getRemindEnabled() == 1) {
+        // 测试态：不下发任何提醒（方案 §6.4 C5 / S8）——提醒会写流转意见、落到真人名下留痕
+        WfInstance remindMain = instanceMapper.selectById(mainInstId);
+        boolean remindTestInst =
+            remindMain != null && remindMain.getIsTest() != null && remindMain.getIsTest() == 1;
+        if (remind && !remindTestInst && req.getRemindEnabled() != null && req.getRemindEnabled() == 1) {
             List<Long> recipients = resolveRecipients(mainInstId, mainNodeKey, req);
             String msg = buildRemindMsg(req);
             for (Long who : recipients) {

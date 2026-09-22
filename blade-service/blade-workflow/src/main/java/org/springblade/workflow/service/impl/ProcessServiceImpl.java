@@ -10,6 +10,7 @@ import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.Deployment;
+import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springblade.workflow.service.IProcessService;
@@ -18,8 +19,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Flowable 引擎适配实现
@@ -43,6 +46,27 @@ public class ProcessServiceImpl implements IProcessService {
         ProcessInstance instance = runtimeService.startProcessInstanceByKey(procKey, bizKey, vars);
         log.info("[blade-workflow] 引擎发起流程. procKey={}, bizKey={}, engineInstId={}",
             procKey, bizKey, instance.getId());
+        return instance.getId();
+    }
+
+    @Override
+    public String latestProcDefId(String procKey) {
+        if (procKey == null || procKey.isBlank()) {
+            return null;
+        }
+        ProcessDefinition pd = repositoryService.createProcessDefinitionQuery()
+            .processDefinitionKey(procKey)
+            .latestVersion()
+            .singleResult();
+        return pd == null ? null : pd.getId();
+    }
+
+    @Override
+    public String startInstanceById(String processDefinitionId, String bizKey, Map<String, Object> variables) {
+        Map<String, Object> vars = (variables == null) ? new HashMap<>(8) : variables;
+        ProcessInstance instance = runtimeService.startProcessInstanceById(processDefinitionId, bizKey, vars);
+        log.info("[blade-workflow] 引擎按定义ID发起流程. procDefId={}, bizKey={}, engineInstId={}",
+            processDefinitionId, bizKey, instance.getId());
         return instance.getId();
     }
 
@@ -191,6 +215,24 @@ public class ProcessServiceImpl implements IProcessService {
     public void deleteDeployment(String deploymentId) {
         repositoryService.deleteDeployment(deploymentId, true);
         log.info("[blade-workflow] 测试部署已卸载. deploymentId={}", deploymentId);
+    }
+
+    @Override
+    public List<String> deploymentIdsByKeyLike(String keyLike) {
+        if (keyLike == null || keyLike.isBlank()) {
+            return new ArrayList<>();
+        }
+        List<ProcessDefinition> defs = repositoryService.createProcessDefinitionQuery()
+            .processDefinitionKeyLike(keyLike)
+            .list();
+        // 同一部署可能含多个流程定义：按部署ID去重（LinkedHashSet 保持稳定顺序，便于日志复现）
+        Set<String> ids = new LinkedHashSet<>();
+        for (ProcessDefinition pd : defs) {
+            if (pd.getDeploymentId() != null) {
+                ids.add(pd.getDeploymentId());
+            }
+        }
+        return new ArrayList<>(ids);
     }
 
     @Override

@@ -156,6 +156,13 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
         if (rule == null || task == null || inst == null) {
             return;
         }
+        // 测试态：任何超时动作都不执行（方案 §6.4 C5 / V5、V6、S6、S7）。
+        // WfTimeoutJob 已在**扫描阶段**排除 is_test=1，这里是纵深防御 ——
+        // 防止将来扫描条件变化、或其他调用路径把测试任务送进来，
+        // 触发「自动通过 / 转办给真人 / 催办留痕」把测试动作外溢到生产。
+        if (inst.getIsTest() != null && inst.getIsTest() == 1) {
+            return;
+        }
         String way = rule.getActionWay() == null ? "autoApprove" : rule.getActionWay();
         try {
             switch (way) {

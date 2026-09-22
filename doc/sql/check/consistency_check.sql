@@ -1,5 +1,5 @@
 -- ============================================================================
--- 测试流程 ↔ 正式流程 一致性巡检（一条命令跑完全部 8 项）
+-- 测试流程 ↔ 正式流程 一致性巡检（一条命令跑完全部 18 项）
 -- ============================================================================
 -- 依据：《测试流程与正式流程一致性规范》§2-L4
 --
@@ -17,6 +17,18 @@
 --   ⑦ 引擎 latest 部署 == wf_process_definition.deployment_id（精确比对，需先执行 V2026.09.20_005）
 --   ⑧ 实例 L3 自检异常（发起时自检：业务行仅占位 / request_id 未回填 / 引擎 latest 被顶替）
 --      （需先执行 V2026.09.20_006；存量实例三列为 NULL = 未自检，按"未知"处理不误报）
+--
+--   —— 以下 ⑨–⑱ 为《流程测试与生产上线隔离方案》§5.4 + §6.6 补充的「测试隔离」巡检 ——
+--   ⑨ 灰度实例健康度（命中灰度的实例数/运行中数；未启用灰度时给 INFO 提示）
+--   ⑩ 引擎里仍是 __test key 的残留/孤儿测试部署（期望：清理测试数据后为 0）
+--   ⑪ 测试数据残留（任务侧）——生产入口已由 C1 过滤，此处提示该清理了
+--   ⑫ 标记断层：测试实例下的任务未继承 is_test（V10/C2）——期望恒为 0
+--   ⑬ 测试实例被「超时/提醒/自定义操作」类驱动过（V5-V6/V12）——期望为 0
+--   ⑭ 未清理的测试实例明细（含 data_id / 测试部署引用）——清理后期望为空
+--   ⑮ 测试实例误回填 request_id（污染业务表闭环）——期望恒为 0
+--   ⑯ 代跑留痕明细（非待办态：已办/办结/协办/传阅）——代跑会在真人名下留「已办」
+--   ⑰ 测试实例的业务行来源清单（配合 ⑱ 定位业务表脏行）
+--   ⑱ 业务表「无主行」（有行、request_id 为空）——测试期建行且未清理的典型特征
 --
 -- 说明：业务表名一律取 workflow_bill.table_name（迁移表单表名 ≠ formtable_main_{formId}），
 --       故 ①② 走游标 + 预处理语句逐表比对；⑤-2 用过程式循环抽布局字段名（不依赖 JSON 通配符）。
@@ -79,6 +91,14 @@ BEGIN
                 ' WHERE i.is_deleted = 0 AND i.is_test = 0 AND i.form_id = ', v_form_id,
                 ' AND (b.request_id IS NULL OR b.request_id <> i.id)');
             PREPARE s2 FROM @sql; EXECUTE s2; DEALLOCATE PREPARE s2;
+
+            -- ⑱ 业务表「无主行」（有行、request_id 为空）：测试期建行且清理未覆盖的典型特征
+            --    （方案 §6.3 V13 / §6.4 C17）。期望为 0 或可解释；配合 ⑰ 定位来源 data_id
+            SET @sql = CONCAT(
+                'INSERT INTO t_cc SELECT 18,''业务表无主行(疑似测试脏行)'',''WARN'',',
+                'CONCAT(''formId=', v_form_id, ' 表=', v_table, ' 无主行数='', COUNT(*))',
+                ' FROM blade.`', v_table, '` b WHERE b.request_id IS NULL HAVING COUNT(*) > 0');
+            PREPARE s18 FROM @sql; EXECUTE s18; DEALLOCATE PREPARE s18;
         END IF;
     END LOOP;
     CLOSE cur;
@@ -247,6 +267,96 @@ SELECT 8,
 FROM blade_workflow.wf_instance i
 WHERE i.is_deleted = 0 AND i.is_test = 0
   AND (i.business_row_ready = 0 OR i.request_id_bound = 0 OR i.engine_deployment_matched = 0);
+
+-- ---------------------------------------------------------------------------
+-- ⑨–⑱ 测试流程 ↔ 正式流程隔离巡检（方案《流程测试与生产上线隔离方案》§5.4 + §6.6）
+--    判据：⑪⑫⑬⑮ 恒为 0（或可解释）；⑭ 在点过「清理测试数据」后为 0；
+--          ⑨⑩⑯ 为 INFO/WARN 供人工判读；⑰⑱ 用于核对业务表零污染（C17）是否生效。
+-- ---------------------------------------------------------------------------
+
+-- ⑨ 灰度实例健康度（卡单/异常）。表可能未建（灰度是可选功能）→ 动态判存在，避免脚本整体报错
+SET @has_gray = (SELECT COUNT(*) FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = 'blade_workflow' AND TABLE_NAME = 'wf_definition_gray');
+SET @sql = IF(@has_gray > 0,
+    CONCAT('INSERT INTO t_cc SELECT 9, ''灰度实例健康度'', ''INFO'', ',
+           'CONCAT(''defId='', i.def_id, '' procDefId='', i.proc_def_id, ',
+           ''' 命中实例='', COUNT(*), '' 运行中='', SUM(i.status = 0)) ',
+           'FROM blade_workflow.wf_instance i ',
+           'JOIN blade_workflow.wf_definition_gray g ON g.gray_proc_def_id = i.proc_def_id ',
+           'WHERE i.is_gray = 1 AND i.is_test = 0 AND i.is_deleted = 0 ',
+           'GROUP BY i.def_id, i.proc_def_id'),
+    'INSERT INTO t_cc VALUES (9, ''灰度实例健康度'', ''INFO'', ''未启用（wf_definition_gray 不存在，需执行 V2026.09.21_017）'')');
+PREPARE s9 FROM @sql; EXECUTE s9; DEALLOCATE PREPARE s9;
+
+-- ⑩ 引擎里仍是 __test key 的测试部署。正常由「清理测试数据」卸载；
+--    这里列出来供人工判读：若实例早已删而部署还在 → 孤儿（C9/C10 已支持自动清理）。
+--    注：KEY_ LIKE 里 `_` 是单字符通配符，需转义为 `\_` 才是字面下划线
+INSERT INTO t_cc
+SELECT 10, '残留测试部署(__test)', 'WARN',
+       CONCAT('procKey=', pd.KEY_, ' ver=', pd.VERSION_, ' 部署时间=', d.DEPLOY_TIME_)
+FROM blade_workflow.ACT_RE_PROCDEF pd
+JOIN blade_workflow.ACT_RE_DEPLOYMENT d ON d.ID_ = pd.DEPLOYMENT_ID_
+WHERE pd.KEY_ LIKE '%\_\_test';
+
+-- ⑪ 测试数据残留（任务侧）：生产入口已由 C1 过滤，此处提示「该清理了」
+INSERT INTO t_cc
+SELECT 11, '测试数据残留(任务)', 'WARN',
+       CONCAT('instId=', i.id, ' defId=', i.def_id, ' 残留任务数=', COUNT(*))
+FROM blade_workflow.wf_task t
+JOIN blade_workflow.wf_instance i ON i.id = t.inst_id
+WHERE i.is_test = 1 AND t.is_deleted = 0
+GROUP BY i.id, i.def_id;
+
+-- ⑫ 标记断层（V10/C2）：测试实例下的任务必须继承 is_test=1，期望恒为 0
+INSERT INTO t_cc
+SELECT 12, '标记断层:测试任务未继承is_test', 'ERROR',
+       CONCAT('taskId=', t.id, ' instId=', t.inst_id, ' task.is_test=', IFNULL(t.is_test, 'NULL'))
+FROM blade_workflow.wf_task t
+JOIN blade_workflow.wf_instance i ON i.id = t.inst_id
+WHERE i.is_test = 1 AND (t.is_test IS NULL OR t.is_test = 0);
+
+-- ⑬ 测试实例被「超时/提醒」类驱动过（非提交类留痕）：期望为 0
+--    log_type：s=催办/督办  h=超时提醒  9=自定义操作
+INSERT INTO t_cc
+SELECT 13, '测试实例被超时/提醒驱动', 'WARN',
+       CONCAT('instId=', l.inst_id, ' node=', IFNULL(l.node_key, ''), ' logType=', l.log_type)
+FROM blade_workflow.wf_approval_log l
+JOIN blade_workflow.wf_instance i ON i.id = l.inst_id
+WHERE i.is_test = 1 AND l.log_type IN ('s', 'h', '9');
+
+-- ⑭ 未清理的测试实例明细（含引擎/部署引用）：点过「清理测试数据」后期望为空
+INSERT INTO t_cc
+SELECT 14, '未清理测试实例(明细)', 'WARN',
+       CONCAT('instId=', i.id, ' defId=', i.def_id, ' title=', IFNULL(i.title, ''),
+              ' dataId=', IFNULL(i.data_id, ''), ' 部署=', IFNULL(i.test_deployment_id, 'NULL'))
+FROM blade_workflow.wf_instance i
+WHERE i.is_test = 1 AND i.is_deleted = 0;
+
+-- ⑮ 测试实例误回填 request_id（污染业务表闭环）：期望恒为 0
+INSERT INTO t_cc
+SELECT 15, '测试实例误回填request_id', 'ERROR',
+       CONCAT('instId=', i.id, ' dataId=', IFNULL(i.data_id, ''),
+              ' request_id_bound=', IFNULL(i.request_id_bound, 'NULL'))
+FROM blade_workflow.wf_instance i
+WHERE i.is_test = 1 AND i.request_id_bound = 1;
+
+-- ⑯ 代跑留痕明细（非待办态：已办/办结/协办/传阅）：代跑会在真人名下留一条「已办」，
+--    生产口由 C1 挡住、清理口由 C9 收尾，此查询用于核对两处是否都生效
+INSERT INTO t_cc
+SELECT 16, '代跑留痕(非待办态)', 'WARN',
+       CONCAT('taskId=', t.id, ' instId=', t.inst_id, ' node=', IFNULL(t.node_key, ''),
+              ' assignee=', IFNULL(t.assignee, 'NULL'), ' status=', IFNULL(t.status, 'NULL'))
+FROM blade_workflow.wf_task t
+JOIN blade_workflow.wf_instance i ON i.id = t.inst_id
+WHERE i.is_test = 1 AND t.status <> 0 AND t.is_deleted = 0;
+
+-- ⑰ 测试期业务行的「源头清单」：把这些 data_id 拿到业务表核对（配合 ⑱ / 巡检①）
+INSERT INTO t_cc
+SELECT 17, '测试实例的业务行来源', 'INFO',
+       CONCAT('instId=', i.id, ' formId=', i.form_id, ' dataId=', IFNULL(i.data_id, ''),
+              ' requestIdBound=', IFNULL(i.request_id_bound, 'NULL'))
+FROM blade_workflow.wf_instance i
+WHERE i.is_test = 1 AND i.data_id IS NOT NULL;
 
 -- ============================ 结果 ============================
 SELECT no AS 序号, level AS 级别, item AS 检查项, detail AS 详情

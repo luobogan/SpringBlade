@@ -9,6 +9,13 @@ blade:
     prior-ip-pattern:
       - 192.168.0.*
       - 127.0.0.1
+  # 流程测试接口（/blade-workflow/test/**）的网关侧访问控制（方案 §5.1 / §8 P3）
+  # 两项都不配置 / 为 0 = 不限制（保持现有行为）；生产建议在 Nacos 的网关配置中按环境设置
+  workflow:
+    # 来源IP白名单，逗号分隔，支持 * 通配（如 192.168.1.*）；空 = 不限制来源
+    test-ip-whitelist: ""
+    # 每来源IP每分钟最大请求数；0 = 不限流
+    test-rate-limit-per-minute: 0
 
 # HTTP 服务端配置（Netty 底层）
 server:

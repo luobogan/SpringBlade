@@ -28,6 +28,21 @@ public interface IProcessService {
     String startInstance(String procKey, String bizKey, Map<String, Object> variables);
 
     /**
+     * 按**流程定义ID**发起引擎流程实例（方案 §3 —— 定义级隔离的技术根）。
+     *
+     * <p>与 {@link #startInstance} 的区别：后者由引擎解析「该 key 的<b>最新部署</b>」，
+     * 版本取决于部署时序（任何一次重新部署都会改变"最新"）；本方法精确绑定
+     * {@code ACT_RE_PROCDEF.ID_}，与部署时序彻底解耦 ——
+     * 这是「绝对不会跑错版本」的根，也是灰度路由与秒级回滚的基础。</p>
+     *
+     * @param processDefinitionId 流程定义ID（{@code ACT_RE_PROCDEF.ID_}）
+     * @param bizKey              业务主键（formId:dataId）
+     * @param variables           流程变量
+     * @return 引擎实例ID（PROC_INST_ID_）
+     */
+    String startInstanceById(String processDefinitionId, String bizKey, Map<String, Object> variables);
+
+    /**
      * 查询指定引擎实例的当前活动任务
      */
     List<TaskVO> currentTasks(String engineInstId);
@@ -125,6 +140,18 @@ public interface IProcessService {
     String latestDeploymentId(String procKey);
 
     /**
+     * 查询引擎中该 procKey 的<b>最新版本</b>对应的流程定义ID（{@code ACT_RE_PROCDEF.ID_}）。
+     *
+     * <p>用途：部署后把「激活的那一版定义ID」回写 {@code wf_process_definition.proc_def_id}，
+     * 供发起时按 {@link #startInstanceById} 精确启动（方案 §3）；也可用于测试态部署后
+     * 取「测试版本的定义ID」，与正式版本物理隔离。</p>
+     *
+     * @param procKey 流程定义Key（BPMN process id）
+     * @return latest 版本的 processDefinitionId；无部署返回 null
+     */
+    String latestProcDefId(String procKey);
+
+    /**
      * 删除引擎部署（级联清理流程定义与历史数据）。
      *
      * <p>用于「真实引擎假数据测试」的<b>测试态清理</b>：测试部署走 {@code test_<procKey>} 独立 key，
@@ -133,6 +160,20 @@ public interface IProcessService {
      * @param deploymentId 部署ID
      */
     void deleteDeployment(String deploymentId);
+
+    /**
+     * 列出引擎中 <b>procKey 匹配给定模式</b> 的所有部署ID（去重）。
+     *
+     * <p>用途：清理「孤儿测试部署」（方案 §6.4 C9/C10 / S12）。测试部署走
+     * {@code procKey__test} 独立 key，正常由 {@link #deleteDeployment} 卸载；但若实例被手工删除、
+     * 或清理时卸载失败，这些 {@code __test} 部署会长期留在引擎库中 —— 既白占空间，
+     * 又会让巡检 ⑥ 误报「latest 部署被测试顶替」。清理测试数据时用它扫出全部测试部署，
+     * 再对照 {@code wf_instance.test_deployment_id} 判定哪些已无人引用（= 孤儿）后卸载。</p>
+     *
+     * @param keyLike 引擎 key 匹配模式（SQL LIKE 语义，如 {@code %__test}）
+     * @return 部署ID列表（去重）；无匹配返回空列表
+     */
+    List<String> deploymentIdsByKeyLike(String keyLike);
 
     /**
      * 统计引擎当前待执行作业数（普通作业 + 定时作业）。

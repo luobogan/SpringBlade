@@ -51,8 +51,10 @@ public class WfFormRenderController {
     public R<org.springblade.workflow.vo.FormRenderVO> render(
         @Parameter(description = "流程实例ID") @RequestParam("instanceId") Long instanceId,
         @Parameter(description = "任务ID（待办渲染时传入，用于判定读写态）") @RequestParam(value = "taskId", required = false) Long taskId,
-        @Parameter(description = "指定渲染节点Key（测试页直显某节点布局；为空取当前/任务节点）") @RequestParam(value = "nodeKey", required = false) String nodeKey) {
-        return R.data(formRenderService.render(instanceId, taskId, nodeKey));
+        @Parameter(description = "指定渲染节点Key（测试页直显某节点布局；为空取当前/任务节点）") @RequestParam(value = "nodeKey", required = false) String nodeKey,
+        @Parameter(description = "是否来自测试入口：true 时允许渲染 is_test=1 的测试实例（测试面板/真人模式用）；生产办理页不传")
+        @RequestParam(value = "testMode", required = false, defaultValue = "false") boolean testMode) {
+        return R.data(formRenderService.render(instanceId, taskId, nodeKey, testMode));
     }
 
     @GetMapping("/preview")

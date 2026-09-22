@@ -78,7 +78,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final WfProcessDefinitionMapper defMapper;
 
     @Override
-    public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam) {
+    public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam, boolean testMode) {
         WfInstance inst = instanceMapper.selectById(instanceId);
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
@@ -91,8 +91,8 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                 instanceId, inst.getStarter(), WfAuthUtil.userId());
             throw new WfAccessDeniedException("无权查看该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以查看");
         }
-        // 测试态实例：生产办理页不允许渲染（方案 §6.4 C8 / V3、S2）
-        assertNotTestForProdEntry(inst);
+        // 测试态实例：生产办理页不允许渲染（方案 §6.4 C8 / V3、S2）；测试入口（testMode=true）放行
+        assertNotTestForProdEntry(inst, testMode);
 
         String nodeKey = inst.getCurrentNodeKey();
         WfTask task = null;
@@ -234,9 +234,10 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         if (dto.getInstanceId() != null && !instanceService.canView(dto.getInstanceId())) {
             throw new WfAccessDeniedException("无权保存该流程表单：只有流程发起人、参与人（办理人/抄送人）或流程管理员可以操作");
         }
-        // 测试态实例：生产入口不允许保存（同 C8；测试面板由管理员操作，故管理员放行）
+        // 测试态实例：生产入口不允许保存（同 C8；测试面板由管理员操作，故管理员放行）。
+        // 保存不参与「真人模式」（测试域只做提交），故固定按生产入口口径（testMode=false）
         if (dto.getInstanceId() != null) {
-            assertNotTestForProdEntry(instanceMapper.selectById(dto.getInstanceId()));
+            assertNotTestForProdEntry(instanceMapper.selectById(dto.getInstanceId()), false);
         }
 
         // ① 过期页面守卫（与「页面新鲜度复检」同一套规则，单一权威实现见 IWfInstanceService#fresh）：
@@ -291,14 +292,20 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     /**
      * 测试态实例：生产入口不允许渲染 / 保存（方案 §6.4 **C8** / V3、S2）。
      *
-     * <p>仅**流程管理员**放行 —— 测试面板由管理员操作，走的正是本接口；
-     * 普通参与人（哪怕他名下有测试待办）一律拒绝，防止「用测试 instanceId 拼 URL 打开生产办理页」。</p>
+     * <p>放行条件（满足其一）：① 调用方来自测试入口（{@code testMode=true}，即测试面板 / 真人模式
+     * —— 这条正是 C12「用相应用户审批」的通道）② 流程管理员（测试面板历史兼容）。
+     * 其余情况（尤其是<b>生产办理页拼 URL</b>）一律拒绝。</p>
      *
-     * <p>⚠️ 将来若落地「测试域真人办理面」（C12），需在此按实例归属再放开一档
-     * （届时真人不是管理员，会被本守卫挡住）。</p>
+     * <p>⚠️ {@code testMode} 由调用方显式声明，可被伪造 —— 但这不构成安全缺口：
+     * 能走到这里的前提是已通过 {@code canView}（本人是发起人/参与人/管理员），
+     * 伪造只是「让自己看到自己参与的测试单」；真正要防的是「测试单出现在生产办理链路」，
+     * 而生产页面（{@code ApprovalPage}）不会传该标记。</p>
      */
-    private void assertNotTestForProdEntry(WfInstance inst) {
-        if (inst != null && inst.getIsTest() != null && inst.getIsTest() == 1 && !WfAuthUtil.isAdmin()) {
+    private void assertNotTestForProdEntry(WfInstance inst, boolean testMode) {
+        if (inst == null || inst.getIsTest() == null || inst.getIsTest() != 1) {
+            return;
+        }
+        if (!testMode && !WfAuthUtil.isAdmin()) {
             throw new WfAccessDeniedException("该流程为测试数据，无权办理");
         }
     }

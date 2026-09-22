@@ -15,6 +15,8 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.feign.IFormmodeClient;
+import org.springblade.workflow.exception.WfAccessDeniedException;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.StartProcessDTO;
@@ -62,9 +64,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -95,6 +97,16 @@ public class WfTestServiceImpl implements IWfTestService {
     private static final int MAX_OPERATORS = 5;
     /** 交互式测试默认签字意见 */
     private static final String DEFAULT_TEST_OPINION = "流程测试提交";
+    /**
+     * 代跑签字意见统一前缀（方案 C15「留痕需自证」）。
+     *
+     * <p>代跑是「以节点接收人身份」提交的，留痕落在真人名下；而 {@code wf_task} 无
+     * {@code operate_user} 列、Blade 的审计列自动填充在本项目未生效、Flowable 历史的
+     * {@code ASSIGNEE_}/{@code COMPLETED_BY_} 也全为 NULL。若意见文本不带标识，
+     * 这条留痕与真实审批<b>完全无法区分</b>（实测库里是手填的 '2'/'3'/'23'）。
+     * 统一加前缀后，即便数据从任何入口泄出，也能一眼识别为测试。</p>
+     */
+    private static final String TEST_OPINION_PREFIX = "[测试] ";
     /** 解析 wf_form_snapshot.data_json 用 */
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -251,6 +263,9 @@ public class WfTestServiceImpl implements IWfTestService {
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
             // 引擎用「测试独立 key」启动：与 deployForTest 成对，避免测试部署顶替正式版本
             startDto.setEngineKey(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX);
+            // 同 start()：按「测试版本」的定义ID启动，与正式版本物理隔离（方案 §3.4）
+            startDto.setProcDefId(
+                processService.latestProcDefId(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX));
             // 测试态无真实业务数据行：构造唯一 dataId，否则 data_id NOT NULL 校验失败，
             // 且 uk_biz_key(formId:dataId) 会在多次测试同一流程时重复。
             if (startDto.getDataId() == null) {
@@ -321,7 +336,8 @@ public class WfTestServiceImpl implements IWfTestService {
                             sr.fatal = new AbstractMap.SimpleEntry<>(t.getNodeKey(), msg);
                             return sr;
                         }
-                        taskService.autoApprove(t.getId(), "测试自动通过", t.getAssignee());
+                        // 一键测试的自动通过意见同样加统一前缀（C15）
+                        taskService.autoApprove(t.getId(), testOpinion("测试自动通过"), t.getAssignee());
                         logLines.add(fmt.format(new Date()) + " 节点【" + t.getNodeKey() + "】已自动通过（办理人="
                             + t.getAssignee() + "）");
                     } catch (Exception e) {
@@ -693,7 +709,20 @@ public class WfTestServiceImpl implements IWfTestService {
     private void saveTestLog(WfProcessDefinition def, WfTestRunDTO dto, WfTestResultVO result,
             List<String> logLines, Long instId) {
         String testUserName = resolveName(dto.getTestUserId());
-        WfTestLog entity = new WfTestLog();
+        // 交互式测试（instId 非空）：同一实例复用同一条「测试历史」（方案 C15 逐步可追溯）——
+        // 每次提交都刷新进度与执行人，而不是等到跑到归档才落一条（进行中即 TEST_RUNNING）。
+        WfTestLog entity = (instId == null) ? null : testLogMapper.selectOne(
+            Wrappers.<WfTestLog>lambdaQuery()
+                .eq(WfTestLog::getInstId, instId)
+                .orderByDesc(WfTestLog::getId)
+                .last("LIMIT 1"));
+        if (entity == null) {
+            entity = new WfTestLog();
+            // 显式落「谁在执行本次测试」：Blade 的审计列自动填充在本项目未生效
+            // （实测 create_user 全为 NULL），不显式设置就永远答不上「谁点的提交」；
+            // 更新分支沿用首次执行人，不覆盖
+            entity.setCreateUser(SecureUtil.getUserId());
+        }
         entity.setDefId(def.getId());
         entity.setDefVersion(def.getVersion());
         entity.setProcKey(def.getProcKey());
@@ -710,9 +739,20 @@ public class WfTestServiceImpl implements IWfTestService {
         entity.setLogContent(String.join("\n", logLines));
         entity.setResultJson(JsonUtil.toJson(result));
         entity.setInstId(instId);
-        entity.setCreateUser(SecureUtil.getUserId());
-        testLogMapper.insert(entity);
+        if (entity.getId() == null) {
+            testLogMapper.insert(entity);
+        } else {
+            testLogMapper.updateById(entity);
+        }
         result.setLogId(entity.getId());
+    }
+
+    /**
+     * 给代跑产生的签字意见加统一前缀（方案 C15，幂等：已带前缀不重复加；空值用默认意见）。
+     */
+    private static String testOpinion(String opinion) {
+        String body = StringUtil.isBlank(opinion) ? DEFAULT_TEST_OPINION : opinion;
+        return body.startsWith(TEST_OPINION_PREFIX) ? body : TEST_OPINION_PREFIX + body;
     }
 
     /** 用 nodeKey 取节点显示名（无名称时回退为 key） */
@@ -737,8 +777,11 @@ public class WfTestServiceImpl implements IWfTestService {
         }
         List<WfInstance> insts = instanceMapper.selectList(q);
         Set<String> deployments = new LinkedHashSet<>();
+        // 本次将被删除的实例ID：用于把「测试日志 / 测试部署」与实例对齐清理（方案 C9/C10）
+        Set<Long> removingInstIds = new LinkedHashSet<>();
         int bizDeleted = 0;
         for (WfInstance inst : insts) {
+            removingInstIds.add(inst.getId());
             // 业务表行：测试期若建过业务行（历史数据，见方案 V13 / C17），这里一并删除，
             // 避免留下「有行、无 request_id」的无主脏行。
             // ⚠️ 安全条件：仅当本实例**未回填过 request_id**（request_id_bound != 1）才删 ——
@@ -765,7 +808,45 @@ public class WfTestServiceImpl implements IWfTestService {
                 deployments.add(inst.getTestDeploymentId());
             }
         }
-        for (String dep : deployments) {
+        // ② 测试日志（wf_test_log）：与实例同源清理（方案 C9/C10 / S12 / V-8）。
+        //    原实现不清理，导致「测试历史」越积越多、且指向已被删除的实例ID。
+        //    按被清理实例的 inst_id 精确删；defId 明确时再按 defId 补一次
+        //    （含「一键测试 run」这类没有实例ID 的日志）。
+        int logDeleted = 0;
+        if (!removingInstIds.isEmpty()) {
+            logDeleted += testLogMapper.delete(Wrappers.<WfTestLog>lambdaQuery()
+                .in(WfTestLog::getInstId, removingInstIds));
+        }
+        if (defId != null) {
+            logDeleted += testLogMapper.delete(Wrappers.<WfTestLog>lambdaQuery()
+                .eq(WfTestLog::getDefId, defId));
+        }
+
+        // ③ 卸载测试部署：本次实例引用的 + 「孤儿」测试部署（方案 C9/C10）。
+        //    孤儿的来源：实例被手工删除、或上次清理时卸载失败 —— 它们会长期留在引擎库，
+        //    既白占空间，又让巡检 ⑥ 误报「latest 部署被测试顶替」。
+        //    判据：扫出全部 __test 部署，去掉「仍被其他测试实例引用」的那些，剩下的都卸。
+        Set<String> liveDeployments = new LinkedHashSet<>();
+        for (WfInstance left : instanceMapper.selectList(Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getIsTest, 1)
+            .isNotNull(WfInstance::getTestDeploymentId))) {
+            if (!removingInstIds.contains(left.getId()) && StringUtil.isNotBlank(left.getTestDeploymentId())) {
+                liveDeployments.add(left.getTestDeploymentId());
+            }
+        }
+        Set<String> toUndeploy = new LinkedHashSet<>(deployments);
+        try {
+            for (String dep : processService.deploymentIdsByKeyLike(
+                "%" + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX)) {
+                if (!liveDeployments.contains(dep)) {
+                    toUndeploy.add(dep);
+                }
+            }
+        } catch (Exception e) {
+            // 引擎查询失败不影响实例/日志清理：孤儿部署残留可下次清理或手工卸载
+            log.warn("[blade-workflow] 扫描孤儿测试部署失败（跳过，不影响实例清理）", e);
+        }
+        for (String dep : toUndeploy) {
             try {
                 processService.deleteDeployment(dep);
             } catch (Exception e) {
@@ -773,9 +854,215 @@ public class WfTestServiceImpl implements IWfTestService {
             }
         }
         instanceMapper.delete(q);
-        log.info("[blade-workflow] 已清理测试数据. defId={}, 实例数={}, 卸载部署数={}, 清理业务行数={}",
-            defId, insts.size(), deployments.size(), bizDeleted);
+        log.info("[blade-workflow] 已清理测试数据. defId={}, 实例数={}, 卸载部署数={}, 清理业务行数={}, 清理测试日志数={}",
+            defId, insts.size(), toUndeploy.size(), bizDeleted, logDeleted);
         return insts.size();
+    }
+
+    @Override
+    public Map<String, Object> shadowCompare(Long defId, Long baseDefId, Long testUserId) {
+        if (defId == null) {
+            throw new ServiceException("流程定义ID不能为空");
+        }
+        WfProcessDefinition target = defMapper.selectById(defId);
+        if (target == null) {
+            throw new ServiceException("流程定义（目标版本）不存在");
+        }
+        WfProcessDefinition base = baseDefId != null ? defMapper.selectById(baseDefId) : prevVersionOf(target);
+        if (base == null) {
+            throw new ServiceException("找不到对照的旧版本：请显式传入 baseDefId，或先发布一个历史版本");
+        }
+        Long starter = testUserId != null ? testUserId
+            : (target.getCreateUser() != null ? target.getCreateUser() : SecureUtil.getUserId());
+        if (starter == null) {
+            throw new ServiceException("无法确定测试发起人：请显式传入 testUserId");
+        }
+
+        // 先记下「跑之前已存在的测试实例」，跑完后做差集 —— 这样收尾只清理本次比对产生的实例，
+        // 不会误删该流程既有的测试历史与用户手动跑出来的测试数据
+        Set<Long> before = shadowExistingInstIds(base.getId(), target.getId());
+
+        // 两边各跑一次：复用 run（临时部署 → 真实发起 → 自动驱动到终态 → 采集节点/出口覆盖）
+        WfTestResultVO baseResult = run(shadowDto(base.getId(), starter));
+        WfTestResultVO targetResult = run(shadowDto(target.getId(), starter));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("baseDefId", base.getId());
+        out.put("baseVersion", base.getVersion());
+        out.put("targetDefId", target.getId());
+        out.put("targetVersion", target.getVersion());
+        out.put("base", shadowSummary(baseResult));
+        out.put("target", shadowSummary(targetResult));
+
+        List<String> diffs = new ArrayList<>();
+        if (!Objects.equals(baseResult.getReachedEnd(), targetResult.getReachedEnd())) {
+            diffs.add("是否走到归档不一致：base=" + baseResult.getReachedEnd()
+                + "，target=" + targetResult.getReachedEnd());
+        }
+        if (!Objects.equals(baseResult.getTestStatus(), targetResult.getTestStatus())) {
+            diffs.add("测试结论不一致：base=" + baseResult.getTestStatus()
+                + "，target=" + targetResult.getTestStatus());
+        }
+        // 走通节点集合差异（新增/消失的节点最需要人工确认）
+        Set<String> basePassed = passedNodeKeys(baseResult);
+        Set<String> targetPassed = passedNodeKeys(targetResult);
+        Set<String> onlyBase = new LinkedHashSet<>(basePassed);
+        onlyBase.removeAll(targetPassed);
+        Set<String> onlyTarget = new LinkedHashSet<>(targetPassed);
+        onlyTarget.removeAll(basePassed);
+        if (!onlyBase.isEmpty() || !onlyTarget.isEmpty()) {
+            diffs.add("走通节点集合不一致：仅base走通=" + onlyBase + "，仅target走通=" + onlyTarget);
+        }
+        // 节点经过次数差异（会签/回退/循环路径变化会体现在这里）
+        Map<String, Integer> baseTimes = baseResult.getNodeTimes() == null
+            ? Collections.emptyMap() : baseResult.getNodeTimes();
+        Map<String, Integer> targetTimes = targetResult.getNodeTimes() == null
+            ? Collections.emptyMap() : targetResult.getNodeTimes();
+        Set<String> allNodes = new LinkedHashSet<>(baseTimes.keySet());
+        allNodes.addAll(targetTimes.keySet());
+        for (String k : allNodes) {
+            int b = baseTimes.get(k) == null ? 0 : baseTimes.get(k);
+            int t = targetTimes.get(k) == null ? 0 : targetTimes.get(k);
+            if (b != t) {
+                diffs.add("节点【" + k + "】经过次数不一致：base=" + b + "，target=" + t);
+            }
+        }
+        // 流转路径顺序差异
+        List<String> basePath = pathKeys(baseResult);
+        List<String> targetPath = pathKeys(targetResult);
+        if (!basePath.equals(targetPath)) {
+            diffs.add("流转路径不一致：base=" + basePath + "，target=" + targetPath);
+        }
+        out.put("diffs", diffs);
+        out.put("identical", diffs.isEmpty());
+
+        // 收尾：只清理本次比对新增的测试实例（含其任务/日志/快照与测试部署）
+        cleanupShadowInstances(base.getId(), target.getId(), before);
+        return out;
+    }
+
+    /** 目标版本「上一版」：同 procKey 下 version 小于当前的最大版本（版本组内） */
+    private WfProcessDefinition prevVersionOf(WfProcessDefinition def) {
+        if (def == null || def.getProcKey() == null || def.getVersion() == null) {
+            return null;
+        }
+        return defMapper.selectOne(Wrappers.<WfProcessDefinition>lambdaQuery()
+            .eq(WfProcessDefinition::getProcKey, def.getProcKey())
+            .lt(WfProcessDefinition::getVersion, def.getVersion())
+            .orderByDesc(WfProcessDefinition::getVersion)
+            .last("LIMIT 1"));
+    }
+
+    private WfTestRunDTO shadowDto(Long defId, Long starter) {
+        WfTestRunDTO dto = new WfTestRunDTO();
+        dto.setDefId(defId);
+        dto.setTestUserId(starter);
+        return dto;
+    }
+
+    /** 影子比对的「跑之前」快照：两个定义下已存在的测试实例ID */
+    private Set<Long> shadowExistingInstIds(Long... defIds) {
+        Set<Long> ids = new LinkedHashSet<>();
+        for (Long defId : defIds) {
+            if (defId == null) {
+                continue;
+            }
+            for (WfInstance i : instanceMapper.selectList(Wrappers.<WfInstance>lambdaQuery()
+                .eq(WfInstance::getIsTest, 1)
+                .eq(WfInstance::getDefId, defId)
+                .select(WfInstance::getId))) {
+                ids.add(i.getId());
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 影子比对收尾：只删「本次比对新增」的测试实例及其任务/流转日志/快照与测试部署。
+     *
+     * <p>为什么不直接调 {@link #cleanupTestData}：后者按 defId 清理，会连带删掉该流程
+     * <b>既有的测试历史</b>（用户手动跑过的测试记录）—— 影子比对不能有这种副作用。</p>
+     */
+    private void cleanupShadowInstances(Long baseDefId, Long targetDefId, Set<Long> before) {
+        Set<Long> created = shadowExistingInstIds(baseDefId, targetDefId);
+        created.removeAll(before);
+        if (created.isEmpty()) {
+            return;
+        }
+        Set<String> deployments = new LinkedHashSet<>();
+        for (Long instId : created) {
+            WfInstance inst = instanceMapper.selectById(instId);
+            if (inst != null && StringUtil.isNotBlank(inst.getTestDeploymentId())) {
+                deployments.add(inst.getTestDeploymentId());
+            }
+            taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, instId));
+            approvalLogMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, instId));
+            snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, instId));
+        }
+        testLogMapper.delete(Wrappers.<WfTestLog>lambdaQuery().in(WfTestLog::getInstId, created));
+        instanceMapper.deleteBatchIds(created);
+        // 测试部署：仅当已无其他测试实例引用时才卸载（避免影响用户手动测试中的实例）
+        for (String dep : deployments) {
+            Long refCount = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+                .eq(WfInstance::getIsTest, 1)
+                .eq(WfInstance::getTestDeploymentId, dep));
+            if (refCount != null && refCount > 0) {
+                continue;
+            }
+            try {
+                processService.deleteDeployment(dep);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 影子比对收尾：测试部署卸载失败. deploymentId={}, err={}",
+                    dep, e.getMessage());
+            }
+        }
+        log.info("[blade-workflow] 影子比对收尾完成. baseDefId={}, targetDefId={}, 清理实例数={}",
+            baseDefId, targetDefId, created.size());
+    }
+
+    private Map<String, Object> shadowSummary(WfTestResultVO r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("testStatus", r.getTestStatus());
+        m.put("reachedEnd", r.getReachedEnd());
+        m.put("nodeTotal", r.getNodeTotal());
+        m.put("nodePassed", r.getNodePassed());
+        m.put("path", pathKeys(r));
+        m.put("summary", r.getSummary());
+        return m;
+    }
+
+    /** 走通的节点Key集合（status=1） */
+    private Set<String> passedNodeKeys(WfTestResultVO r) {
+        Set<String> set = new LinkedHashSet<>();
+        if (r == null || r.getNodes() == null) {
+            return set;
+        }
+        for (WfTestResultVO.TestNodeVO n : r.getNodes()) {
+            if (n != null && n.getStatus() != null && n.getStatus() == 1 && n.getNodeKey() != null) {
+                set.add(n.getNodeKey());
+            }
+        }
+        return set;
+    }
+
+    /** 流转路径的节点Key序列（首段源节点 + 每段目标节点） */
+    private List<String> pathKeys(WfTestResultVO r) {
+        List<String> keys = new ArrayList<>();
+        if (r == null || r.getPath() == null) {
+            return keys;
+        }
+        for (WfTestResultVO.TestStepVO s : r.getPath()) {
+            if (s == null) {
+                continue;
+            }
+            if (keys.isEmpty() && s.getFromNodeKey() != null) {
+                keys.add(s.getFromNodeKey());
+            }
+            if (s.getToNodeKey() != null) {
+                keys.add(s.getToNodeKey());
+            }
+        }
+        return keys;
     }
 
     @Override
@@ -809,7 +1096,14 @@ public class WfTestServiceImpl implements IWfTestService {
     // ==================================================================
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    // 注意：此处**不能**加 @Transactional。
+    // start 的编排意图是「部署/发起失败也要优雅终止、把错误日志落库」（见下方 catch）。
+    // 若本方法开事务，则内部 instanceService.start / definitionService.deployForTest
+    // （均为 REQUIRED）会加入同一事务；一旦它们抛异常，外层事务被标 rollback-only，
+    // 而 catch 又吞掉异常去 saveTestLog 并提交 —— 提交时即抛出
+    // 「Transaction rolled back because it has been marked as rollback-only」。
+    // 去掉本注解后，内部调用各自跑独立事务，失败只回滚自身；catch 中的 saveTestLog
+    // 以自动提交方式正常落库并返回错误结果，不再 500。
     public WfTestResultVO start(WfTestRunDTO dto) {
         if (dto == null || dto.getDefId() == null) {
             throw new ServiceException("流程定义ID不能为空");
@@ -866,6 +1160,11 @@ public class WfTestServiceImpl implements IWfTestService {
             startDto.setTestDeploymentId(deploymentId);
             // 引擎用「测试独立 key」启动：与 deployForTest 成对，避免测试部署顶替正式版本
             startDto.setEngineKey(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX);
+            // 定义级隔离（方案 §3.4 双重保险）：带上「测试版本」的流程定义ID，
+            // 发起走 startProcessInstanceById —— 即便 __test key 因历史原因残留部署，
+            // 只要按 ID 启动就不可能跑到正式版本
+            startDto.setProcDefId(
+                processService.latestProcDefId(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX));
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
             startDto.setDataId(IdWorker.getId());
             // 说明：开始节点（创建/申请人）在 instanceService.start 时即被 advance() 自动完成、不生成待办。
@@ -891,6 +1190,9 @@ public class WfTestServiceImpl implements IWfTestService {
                 lines.addAll(result.getLog());
             }
             result.setLog(lines);
+            // 落一条「进行中」的测试历史（C15）：让测试一发起就出现在「测试历史」中，
+            // 并记录本次测试的操作人（代跑人）——原实现要等到归档才落库
+            persistInteractiveLog(instanceMapper.selectById(instId), result);
             return result;
         } catch (Exception e) {
             // 部署/发起阶段异常：优雅终止，定位首个业务节点
@@ -1021,7 +1323,7 @@ public class WfTestServiceImpl implements IWfTestService {
             // 无待办可推进（多已到归档）：返回最新状态
             WfInstance after = instanceMapper.selectById(instId);
             WfTestResultVO r = state(instId);
-            persistInteractiveLogIfFinished(after, r);
+            persistInteractiveLog(after, r);
             return r;
         }
 
@@ -1060,18 +1362,21 @@ public class WfTestServiceImpl implements IWfTestService {
                     .orderByDesc(WfApprovalLog::getId)
                     .last("LIMIT 1"));
                 if (submitLog != null) {
-                    submitLog.setOpinion(dto.getOpinion());
+                    // 开始节点（申请人）意见同样加统一前缀（C15）
+                    submitLog.setOpinion(testOpinion(dto.getOpinion()));
                     approvalLogMapper.updateById(submitLog);
                 }
             }
             WfInstance afterStart = instanceMapper.selectById(instId);
             WfTestResultVO r = state(instId);
             r.setSummary("已提交开始节点（申请人）表单，流程停在【" + r.getCurrentNodeName() + "】等待办理。");
-            persistInteractiveLogIfFinished(afterStart, r);
+            persistInteractiveLog(afterStart, r);
             return r;
         }
 
-        String opinion = StringUtil.isBlank(dto.getOpinion()) ? DEFAULT_TEST_OPINION : dto.getOpinion();
+        // 代跑签字意见统一加「[测试]」前缀（C15）：该意见会以「节点接收人」名义落进 wf_approval_log，
+        // 不加标识就与真实审批无从区分
+        String opinion = testOpinion(dto.getOpinion());
         // 交互式测试：一次「提交」只办理一个人（一个待办）。
         // 会签节点＝同一节点有多条待办，需每个人各自点一次提交；或签＝首条办结即关闭其余并推进；
         // 普通单人节点＝只有一条待办，一次办结。这样与 ecology「会签需逐人审批」一致，
@@ -1151,14 +1456,78 @@ public class WfTestServiceImpl implements IWfTestService {
             // 兜底：当前节点已无可办待办（极少见，如全部被或签关闭），回退到最新状态
             WfInstance afterFallback = instanceMapper.selectById(instId);
             WfTestResultVO r = state(instId);
-            persistInteractiveLogIfFinished(afterFallback, r);
+            persistInteractiveLog(afterFallback, r);
             return r;
         }
 
         WfInstance after = instanceMapper.selectById(instId);
         WfTestResultVO r = state(instId);
-        persistInteractiveLogIfFinished(after, r);
+        persistInteractiveLog(after, r);
         return r;
+    }
+
+    @Override
+    public List<WfTaskVO> myTodo() {
+        List<WfTaskVO> vos = new ArrayList<>();
+        Long me = SecureUtil.getUserId();
+        if (me == null) {
+            return vos;
+        }
+        // 「我的测试待办」= 当前登录人在**测试实例**上的待办（真人模式的数据源，方案 §6.4 C12）。
+        // 与 todo(instId) 的区别：那个是「某测试实例的全部待办」（管理面代跑用来定位 taskId），
+        // 这个按登录人过滤 —— 供节点操作者本人从测试入口看到属于自己的测试单并办理。
+        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getAssignee, me)
+            .eq(WfTask::getIsTest, 1)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .orderByDesc(WfTask::getCreateTime));
+        for (WfTask t : tasks) {
+            WfInstance inst = instanceMapper.selectById(t.getInstId());
+            if (inst == null) {
+                continue;
+            }
+            List<WfProcessNode> nodeList = nodeMapper.selectList(
+                Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
+            WfTaskVO vo = new WfTaskVO();
+            vo.setId(t.getId());
+            vo.setInstId(t.getInstId());
+            vo.setNodeKey(t.getNodeKey());
+            vo.setNodeName(nodeName(nodeList, t.getNodeKey()));
+            vo.setAssignee(t.getAssignee());
+            vo.setStatus(t.getStatus());
+            vo.setReceiveTime(t.getReceiveTime());
+            vo.setDueTime(t.getDueTime());
+            vo.setTitle(inst.getTitle());
+            vo.setFormId(inst.getFormId());
+            vo.setDataId(inst.getDataId());
+            vo.setIsTest(t.getIsTest());
+            vos.add(vo);
+        }
+        return vos;
+    }
+
+    @Override
+    public WfTestResultVO approve(WfTestStepDTO dto) {
+        if (dto == null || dto.getInstId() == null) {
+            throw new ServiceException("测试实例ID不能为空");
+        }
+        WfInstance inst = instanceMapper.selectById(dto.getInstId());
+        // C11：目标必须是测试实例（防借测试入口推进正式实例）
+        requireTestInst(inst, "approve");
+        // C12 记录级鉴权：真人模式下必须「本人是该测试实例当前待办的执行人」；
+        // 管理员不受限（保留管理面代跑能力 —— 代跑走 /test/step，两者提交语义一致）
+        if (!WfAuthUtil.isAdmin()) {
+            Long me = SecureUtil.getUserId();
+            boolean mine = pendingTestTasks(dto.getInstId()).stream()
+                .anyMatch(t -> me != null && me.equals(t.getAssignee()));
+            if (!mine) {
+                log.warn("[blade-workflow] 越权拦截：/test/approve 非本人待办. instId={}, current={}",
+                    dto.getInstId(), me);
+                throw new WfAccessDeniedException("该测试待办不属于当前用户，无法提交");
+            }
+        }
+        // 提交语义与代跑完全一致：step 内部按「待办接收人」身份办理，真人模式下接收人即本人
+        return step(dto);
     }
 
     @Override
@@ -1479,19 +1848,23 @@ public class WfTestServiceImpl implements IWfTestService {
     }
 
     /**
-     * 交互式测试跑到终态时落一条测试日志（同一实例只落一条，重复调用跳过）,
-     * 使其在「测试历史」中可见。
+     * 交互式测试的「测试历史」落库 / 刷新（方案 C15：逐步可追溯 + 留痕自证）。
+     *
+     * <p><b>与原实现的差别</b>：原来只在实例跑到终态时落一条、且「同实例已存在就跳过」，
+     * 于是既看不到进行中的测试进展，也无法回答「谁在哪一步点的提交」。现改为<b>每次提交刷新同一条</b>：
+     * 进行中记为 {@link WfTestLog#TEST_RUNNING}，结束后刷新为最终结论；并在正文末尾显式写出
+     * 「本次测试操作人（代跑人）」。</p>
+     *
+     * <p><b>为什么必须显式写执行人</b>：{@code wf_task} 无 {@code operate_user} 列、Blade 的审计列
+     * 自动填充在本项目未生效（实测 {@code create_user} 全 NULL）、Flowable 历史的
+     * {@code ASSIGNEE_}/{@code COMPLETED_BY_} 也全 NULL；而代跑又是「以节点接收人身份」提交的，
+     * 不写这一行就无从追溯是谁在测试面板点的提交。</p>
      */
-    private void persistInteractiveLogIfFinished(WfInstance inst, WfTestResultVO result) {
-        if (inst == null || inst.getStatus() == null || WfInstance.STATUS_RUNNING == inst.getStatus()) {
+    private void persistInteractiveLog(WfInstance inst, WfTestResultVO result) {
+        if (inst == null || inst.getId() == null || inst.getStatus() == null) {
             return;
         }
         try {
-            Long existed = testLogMapper.selectCount(Wrappers.<WfTestLog>lambdaQuery()
-                .eq(WfTestLog::getInstId, inst.getId()));
-            if (existed != null && existed > 0) {
-                return;
-            }
             WfProcessDefinition def = defMapper.selectById(inst.getDefId());
             if (def == null) {
                 return;
@@ -1499,7 +1872,12 @@ public class WfTestServiceImpl implements IWfTestService {
             WfTestRunDTO dto = new WfTestRunDTO();
             dto.setDefId(def.getId());
             dto.setTestUserId(inst.getStarter());
-            saveTestLog(def, dto, result, result.getLog() == null ? new ArrayList<>() : result.getLog(), inst.getId());
+            List<String> lines = result.getLog() == null
+                ? new ArrayList<>() : new ArrayList<>(result.getLog());
+            lines.add("本次测试操作人（代跑人）=" + resolveName(SecureUtil.getUserId())
+                + "；测试发起人=" + resolveName(inst.getStarter())
+                + "；各节点签字意见统一加「" + TEST_OPINION_PREFIX.trim() + "」前缀以区别真实审批");
+            saveTestLog(def, dto, result, lines, inst.getId());
         } catch (Exception e) {
             // 容错：wf_test_log.inst_id 未执行迁移时不影响测试推进
             log.warn("[blade-workflow] 交互式测试日志落库失败（请确认已执行 V2026.09.19_002 迁移）. instId={}, err={}",

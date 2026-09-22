@@ -7,6 +7,7 @@ import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.vo.WfTestResultVO;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 流程测试服务（设计期校验）
@@ -59,6 +60,24 @@ public interface IWfTestService {
     WfTestResultVO step(WfTestStepDTO dto);
 
     /**
+     * 「我的测试待办」（真人模式，方案 §6.4 **C12**）：当前登录人在测试实例上的待办
+     * （{@code is_test=1} 且 {@code status=待办}）。
+     *
+     * <p>这是「用相应用户审批」的数据源 —— 节点操作者本人从测试入口登录后能看到并办理
+     * 属于自己的测试单；而生产入口（待办/已办/角标/我的请求）对测试数据一律不可见（C1）。</p>
+     */
+    List<WfTaskVO> myTodo();
+
+    /**
+     * 真人办理测试待办（方案 §6.4 **C12**）：提交「当前用户作为执行人」的那条测试待办。
+     *
+     * <p>与 {@link #step} 的差别<b>只有鉴权</b>：本方法要求当前用户是该测试实例当前待办的
+     * 执行人（管理员不受限，保留代跑）；提交逻辑完全复用 {@code step}
+     * （同样按待办接收人身份办理、同样做节点必填校验、同样返回最新状态）。</p>
+     */
+    WfTestResultVO approve(WfTestStepDTO dto);
+
+    /**
      * 交互式测试-查询测试态实例的待办（供手动办理定位 taskId / 判断当前节点是否有待办）。
      *
      * @param instId 测试态实例ID
@@ -72,6 +91,21 @@ public interface IWfTestService {
      * @return 清理的实例数量
      */
     long cleanupTestData(Long defId);
+
+    /**
+     * 影子比对（方案 §4.3 / §6「影子测试」落地项）：把同一套测试分别在<b>对照版本</b>与<b>目标版本</b>
+     * 的定义上各跑一遍，比对流转路径、节点经过次数与覆盖率 —— 作为「新版本与旧版本行为是否等价」
+     * 的上线依据（等价才放量，不等价先查差异）。
+     *
+     * <p>落地方式复用现有能力：临时部署 → 真实发起测试态实例 → 自动驱动到终态 → 采集节点/出口覆盖。
+     * 跑完<b>只清理本次比对产生的测试实例</b>（不动该流程既有的测试历史），结论直接返回。</p>
+     *
+     * @param defId      目标（新）版本定义ID
+     * @param baseDefId  对照（旧）版本定义ID；为空时自动取同 procKey 的上一版本
+     * @param testUserId 测试发起人；为空时用目标定义的创建人
+     * @return base/target 摘要 + 差异清单（{@code identical} / {@code diffs}）
+     */
+    Map<String, Object> shadowCompare(Long defId, Long baseDefId, Long testUserId);
 
     /**
      * 测试历史列表

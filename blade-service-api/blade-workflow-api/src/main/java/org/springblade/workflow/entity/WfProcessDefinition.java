@@ -63,6 +63,19 @@ public class WfProcessDefinition extends TenantEntity {
     @Schema(description = "最近一次正式部署的引擎部署ID；NULL=尚未正式部署")
     private String deploymentId;
 
+    /**
+     * 激活版本对应的 Flowable {@code processDefinitionId}（{@code ACT_RE_PROCDEF.ID_}）。
+     *
+     * <p>与 {@link #deploymentId} 的区别：deploymentId 是「部署」的 ID，一个部署可含多个流程定义；
+     * 本列是**精确的那一个流程定义 ID**，发起时用它调
+     * {@code runtimeService.startProcessInstanceById} —— 与「哪个部署最新」彻底解耦，
+     * 是「绝对不会跑错版本」的技术根（方案 §3）。</p>
+     *
+     * <p>NULL = 尚未部署 / 存量数据（发起时回退为按 key 启动）。</p>
+     */
+    @Schema(description = "激活版本的引擎流程定义ID（ACT_RE_PROCDEF.ID_）；NULL=尚未部署")
+    private String procDefId;
+
     @Schema(description = "是否自由流程")
     private Integer isFree;
 

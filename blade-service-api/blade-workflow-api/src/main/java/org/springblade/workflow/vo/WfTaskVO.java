@@ -87,4 +87,15 @@ public class WfTaskVO implements Serializable {
     @Schema(description = "紧急程度 0/1/2")
     private Integer urgency;
 
+    /**
+     * 是否测试态任务（1=流程测试产生，0=正式）。
+     *
+     * <p>用于前端识别「这条是测试数据」并据此着色 / 分栏 / 置为只读（方案 §6.4 **C3** / S5）。
+     * 生产列表（待办/已办/角标）已由 C1 在服务端排除 `is_test=1`，故正常情况下
+     * 生产列表拿不到测试任务；本字段主要为「测试域内的真人办理」（C12）与
+     * 将来放开管理员可见性时提供判别依据。</p>
+     */
+    @Schema(description = "是否测试态 1=流程测试 0=正式")
+    private Integer isTest;
+
 }

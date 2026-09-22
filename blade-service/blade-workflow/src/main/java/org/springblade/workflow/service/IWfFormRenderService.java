@@ -20,7 +20,20 @@ public interface IWfFormRenderService {
      * @param taskId     任务ID（待办渲染时传入，用于判定读写态；为空则只读）
      * @param nodeKey    指定渲染的节点Key（测试页用于直显某节点布局；为空时取当前节点/任务节点）
      */
-    FormRenderVO render(Long instanceId, Long taskId, String nodeKey);
+    default FormRenderVO render(Long instanceId, Long taskId, String nodeKey) {
+        return render(instanceId, taskId, nodeKey, false);
+    }
+
+    /**
+     * 同 {@link #render(Long, Long, String)}，额外声明「是否来自测试入口」。
+     *
+     * <p>用途（方案 §6.4 C8 + C12）：测试实例在<b>生产办理页必须拒绝渲染</b>，
+     * 但<b>测试域（测试面板 / 真人模式）必须能渲染</b> —— 二者共用本接口，
+     * 故由调用方显式声明：测试入口传 {@code true}，生产办理页不传。</p>
+     *
+     * @param testMode true = 测试入口（对 {@code is_test=1} 的实例放行渲染）
+     */
+    FormRenderVO render(Long instanceId, Long taskId, String nodeKey, boolean testMode);
 
     /**
      * 表单预览（无需实例）：按流程定义/表单/节点返回布局 + 字段权限 + 操作菜单，

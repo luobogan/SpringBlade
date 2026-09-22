@@ -4,7 +4,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.annotation.PreAuth;
+import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.BpmnSaveDTO;
@@ -54,6 +56,7 @@ import java.util.Map;
  * （{@code status=1}）的定义，草稿/停用版本不对普通用户暴露；
  * 发起动作本身的记录级校验在实例侧（{@code WfInstanceServiceImpl}）。</p>
  */
+@Slf4j
 @RestController
 @RequestMapping("/definition")
 @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
@@ -81,7 +84,12 @@ public class WfDefinitionController {
     @PostMapping("/{id}/deploy")
     @Operation(summary = "部署到引擎", description = "将画布 BPMN 部署到 Flowable 并置为已发布")
     public R<Boolean> deploy(@PathVariable("id") Long id) {
-        return R.data(definitionService.deploy(id), "部署成功");
+        Boolean ok = definitionService.deploy(id);
+        // 管理面审计（方案 §8 P3）：部署会改变「引擎最新版本」，必须能回答
+        // 「谁在何时部署了哪个定义」—— 这是排查「正式版本被测试/手工部署顶替」的第一手依据
+        log.info("[blade-workflow][审计] 部署流程定义. defId={}, 结果={}, operator={}",
+            id, ok, SecureUtil.getUserId());
+        return R.data(ok, "部署成功");
     }
 
     @PutMapping("/{id}/bpmn")
@@ -100,7 +108,10 @@ public class WfDefinitionController {
     @PostMapping("/{id}/version")
     @Operation(summary = "另存为新版本", description = "完整复制定义/BPMN/节点/出口/权限/操作者为 v+1 草稿，返回新版本 defId")
     public R<String> saveAsNewVersion(@PathVariable("id") Long id) {
-        return R.data(String.valueOf(definitionService.saveAsNewVersion(id)), "已生成新版本");
+        String newDefId = String.valueOf(definitionService.saveAsNewVersion(id));
+        log.info("[blade-workflow][审计] 另存为新版本. 源defId={}, 新defId={}, operator={}",
+            id, newDefId, SecureUtil.getUserId());
+        return R.data(newDefId, "已生成新版本");
     }
 
     @GetMapping("/{id}/versions")
@@ -112,7 +123,11 @@ public class WfDefinitionController {
     @PostMapping("/{id}/version/activate")
     @Operation(summary = "切换当前版本", description = "把该定义所在版本组的当前（激活）版本切为本版本；不部署引擎、不改发布状态")
     public R<Boolean> activateVersion(@PathVariable("id") Long id) {
-        return R.data(definitionService.activateVersion(id), "已切换为当前版本");
+        Boolean ok = definitionService.activateVersion(id);
+        // 版本切换直接决定「之后发起的流程跑哪一版」，是灰度/回滚的关键动作 → 必须留痕
+        log.info("[blade-workflow][审计] 切换当前版本. defId={}, 结果={}, operator={}",
+            id, ok, SecureUtil.getUserId());
+        return R.data(ok, "已切换为当前版本");
     }
 
     @GetMapping("/{id}/version/diff")
@@ -147,19 +162,28 @@ public class WfDefinitionController {
     @PostMapping("/{id}/enable")
     @Operation(summary = "启用")
     public R<Boolean> enable(@PathVariable("id") Long id) {
-        return R.data(definitionService.enable(id, true), "已启用");
+        Boolean ok = definitionService.enable(id, true);
+        log.info("[blade-workflow][审计] 启用流程定义. defId={}, 结果={}, operator={}",
+            id, ok, SecureUtil.getUserId());
+        return R.data(ok, "已启用");
     }
 
     @PostMapping("/{id}/disable")
     @Operation(summary = "停用")
     public R<Boolean> disable(@PathVariable("id") Long id) {
-        return R.data(definitionService.enable(id, false), "已停用");
+        Boolean ok = definitionService.enable(id, false);
+        log.info("[blade-workflow][审计] 停用流程定义. defId={}, 结果={}, operator={}",
+            id, ok, SecureUtil.getUserId());
+        return R.data(ok, "已停用");
     }
 
     @DeleteMapping("/{id}")
     @Operation(summary = "删除流程定义", description = "级联清理节点、出口、操作者、权限与布局，再删除定义本身")
     public R<Boolean> remove(@PathVariable("id") Long id) {
-        return R.data(definitionService.removeDefinition(id), "已删除");
+        Boolean ok = definitionService.removeDefinition(id);
+        log.info("[blade-workflow][审计] 删除流程定义. defId={}, 结果={}, operator={}",
+            id, ok, SecureUtil.getUserId());
+        return R.data(ok, "已删除");
     }
 
     @GetMapping("/{id}/nodes")

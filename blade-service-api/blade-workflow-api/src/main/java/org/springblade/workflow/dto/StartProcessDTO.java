@@ -39,6 +39,15 @@ public class StartProcessDTO implements Serializable {
     private String engineKey;
 
     /**
+     * 精确指定的引擎流程定义ID（{@code ACT_RE_PROCDEF.ID_}）—— 优先级**高于** {@link #engineKey}。
+     *
+     * <p>非空时发起走 {@code startProcessInstanceById}：与「哪个部署最新」彻底解耦，
+     * 是「绝对不会跑错版本」的技术根（方案 §3），也是灰度路由的落点（§4.3）。
+     * 为空则回退按 key 启动（存量定义 / 尚未回写 procDefId 时保持既有行为）。</p>
+     */
+    private String procDefId;
+
+    /**
      * 表单ID（workflow_bill.id）
      */
     private Long formId;

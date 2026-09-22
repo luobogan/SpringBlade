@@ -127,6 +127,24 @@ public class WfInstance extends TenantEntity {
     private String testDeploymentId;
 
     /**
+     * 本实例实际使用的 Flowable {@code processDefinitionId}（{@code ACT_RE_PROCDEF.ID_}）。
+     *
+     * <p>审计与回滚依据：同一 procKey 多版本并存时，凭本列可确定这张单跑的是哪一版；
+     * 灰度期还可据此统计「新版本跑了多少单、有无卡单」（巡检 ⑨）。NULL = 存量数据。</p>
+     */
+    @Schema(description = "本实例实际使用的引擎流程定义ID（ACT_RE_PROCDEF.ID_）；NULL=存量")
+    private String procDefId;
+
+    /**
+     * 是否灰度实例：1 = 本次发起命中灰度规则、走的是灰度版本；0 = 正式版本。
+     *
+     * <p>用于灰度期的观测与回滚排查（方案 §4.3）：按定义维度统计灰度单量、健康度，
+     * 出问题先切回 base 版本（在途实例不受影响，Flowable 原生按定义 ID 隔离）。</p>
+     */
+    @Schema(description = "灰度实例 1=走灰度版本 0=正式版本")
+    private Integer isGray;
+
+    /**
      * 主键以字符串形式序列化（对齐 {@code WfProcessDefinition}）：
      * 避免 19 位雪花 ID 在前端 JS 解析时丢失精度。
      */

@@ -11,6 +11,7 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.workflow.action.NodeActionExecutor;
@@ -18,6 +19,7 @@ import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.entity.WfApprovalLog;
+import org.springblade.workflow.entity.WfDefinitionGray;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeLink;
@@ -25,6 +27,7 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
+import org.springblade.workflow.mapper.WfDefinitionGrayMapper;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
@@ -79,6 +82,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfFormSnapshotMapper snapshotMapper;
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
+    /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
+    private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
     private final WfOperatorResolver operatorResolver;
     private final WfNodeLinkMapper linkMapper;
@@ -306,7 +311,27 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     def.getId(), def.getProcKey(), def.getDeploymentId(), latest);
             }
         }
-        String engineInstId = processService.startInstance(engineKey, bizKey, vars);
+        // 发起版本（方案 §3 —— 定义级隔离的技术根）：
+        //   优先按「精确的流程定义ID」启动（startProcessInstanceById），与部署时序彻底解耦；
+        //   procDefId 为空（存量定义 / 定义尚未回写）→ 回退按 key 启动，向后兼容。
+        //   优先级：dto.procDefId > 灰度命中（§4.3）> def.procDefId > engineKey
+        String procDefId = (dto.getProcDefId() != null && !dto.getProcDefId().isBlank())
+            ? dto.getProcDefId() : def.getProcDefId();
+        // 灰度路由（方案 §4.3）：仅「正式发起（非测试态）+ 调用方未显式指定版本 + 命中启用中的规则」
+        // 才切到灰度版本。命中后实例打 is_gray=1 —— 供 §5.4 巡检⑨ 观察灰度健康度，
+        // 出问题时也能按 proc_def_id 精确定位是哪一版在跑、并回溯影响面。
+        boolean gray = false;
+        if (!test && (dto.getProcDefId() == null || dto.getProcDefId().isBlank())
+            && procDefId != null && !procDefId.isBlank()) {
+            String grayProcDefId = resolveGrayProcDefId(def.getId(), starter);
+            if (grayProcDefId != null && !grayProcDefId.equals(procDefId)) {
+                procDefId = grayProcDefId;
+                gray = true;
+            }
+        }
+        String engineInstId = (procDefId != null && !procDefId.isBlank())
+            ? processService.startInstanceById(procDefId, bizKey, vars)
+            : processService.startInstance(engineKey, bizKey, vars);
 
         // 首节点先算出来：实例标题模板取自首节点的「标题显示设置」
         String firstNodeKey = resolveFirstNodeKey(def.getId());
@@ -319,6 +344,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             // L3 运行时自检②：草稿业务行已存在（dataId 非空），置 1
             inst.setBusinessRowReady((ownBusinessRow || dataId != null) ? 1 : 0);
             inst.setEngineDeploymentMatched(engineMatched);
+            // 本次实际使用的定义ID（审计/回滚依据）；草稿提升同样走灰度路由结果
+            inst.setProcDefId(procDefId);
+            inst.setIsGray(gray ? 1 : 0);
             instanceMapper.updateById(inst);
             taskMapper.delete(Wrappers.<WfTask>lambdaQuery()
                 .eq(WfTask::getInstId, inst.getId())
@@ -337,6 +365,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             // 测试态标记：测试产生的实例打 is_test=1，并记下临时部署ID，便于一键清理且不污染正常数据
             inst.setIsTest(test ? 1 : 0);
             inst.setTestDeploymentId(dto.getTestDeploymentId());
+            // 本次实际使用的定义ID（审计/灰度/回滚依据）；命中灰度路由时置 is_gray=1（§4.3）
+            inst.setProcDefId(procDefId);
+            inst.setIsGray(gray ? 1 : 0);
             // L3 运行时自检②：业务数据行是否就绪。单据发起（dataId 已给）= 行本就存在；
             // 表单直发 = 本次现场创建成功；两者都没成 = 用了占位 dataId（业务表里查不到这张单）。
             inst.setBusinessRowReady((ownBusinessRow || dto.getDataId() != null) ? 1 : 0);
@@ -1302,6 +1333,82 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     /**
+     * 灰度路由（方案 §4.3）：判断本次发起是否命中灰度，命中则返回<b>灰度版本</b>的
+     * {@code processDefinitionId}。
+     *
+     * <p>取该定义下「启用中」的规则（多条时按 id 倒序，取第一条命中的）：
+     * {@code whitelist} 白名单、{@code ratio} 比例两类策略真正参与判定；
+     * {@code dept}/{@code role} 需要拉取用户组织信息，当前按「未命中」处理
+     * （保留策略位，接入组织接口后放开，规则表已留好字段）。</p>
+     *
+     * <p><b>为什么比例策略用「用户ID 取模」而不是随机数</b>：同一用户每次发起必须恒定落在同一侧，
+     * 否则刷新一次就换了版本 —— 灰度观察与问题定位都无从谈起。</p>
+     *
+     * @param defId   流程定义ID（版本组锚点）
+     * @param starter 发起人（灰度命中的判定主体）
+     * @return 灰度 procDefId；未命中 / 无规则 / 规则全部停用 → {@code null}（调用方回退正式版本）
+     */
+    private String resolveGrayProcDefId(Long defId, Long starter) {
+        if (defId == null || starter == null) {
+            return null;
+        }
+        List<WfDefinitionGray> rules;
+        try {
+            rules = grayMapper.selectList(Wrappers.<WfDefinitionGray>lambdaQuery()
+                .eq(WfDefinitionGray::getDefId, defId)
+                .eq(WfDefinitionGray::getStatus, WfDefinitionGray.STATUS_ENABLED)
+                .orderByDesc(WfDefinitionGray::getId));
+        } catch (Exception e) {
+            // 灰度为可选能力：规则表未建（未执行迁移 017）时绝不能影响正式发起
+            log.warn("[blade-workflow] 灰度规则查询失败（跳过灰度，按正式版本发起）. defId={}, err={}",
+                defId, e.getMessage());
+            return null;
+        }
+        if (rules == null || rules.isEmpty()) {
+            return null;
+        }
+        for (WfDefinitionGray rule : rules) {
+            if (StringUtil.isBlank(rule.getGrayProcDefId())) {
+                continue;
+            }
+            if (isGrayHit(rule, starter)) {
+                log.info("[blade-workflow] 发起命中灰度. defId={}, starter={}, strategy={}, grayProcDefId={}",
+                    defId, starter, rule.getStrategy(), rule.getGrayProcDefId());
+                return rule.getGrayProcDefId();
+            }
+        }
+        return null;
+    }
+
+    /** 单条灰度规则的命中判定（口径见 {@link #resolveGrayProcDefId}） */
+    private boolean isGrayHit(WfDefinitionGray rule, Long starter) {
+        String strategy = StringUtil.isBlank(rule.getStrategy())
+            ? WfDefinitionGray.STRATEGY_WHITELIST : rule.getStrategy();
+        if (WfDefinitionGray.STRATEGY_RATIO.equals(strategy)) {
+            Integer ratio = rule.getRatio();
+            if (ratio == null || ratio <= 0) {
+                return false;
+            }
+            if (ratio >= 100) {
+                return true;
+            }
+            // 稳定散列：floorMod 避免负数取模落到负区间
+            return Math.floorMod(starter, 100L) < ratio;
+        }
+        // whitelist / dept / role：当前都按「scope_value 里含该用户ID」判定
+        // （dept/role 待接入组织接口后改为按部门/角色匹配）
+        if (StringUtil.isBlank(rule.getScopeValue())) {
+            return false;
+        }
+        for (String s : rule.getScopeValue().split(",")) {
+            if (s.trim().equals(String.valueOf(starter))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 测试态守卫：拒绝在测试实例上执行终态类操作（撤回 / 终止 / 恢复 / 撤销，方案 §6.4 C19）。
      *
      * <p>测试实例的收尾动作是「清理测试数据」，而不是被当成正式单据撤回/终止/恢复；
@@ -1401,6 +1508,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         vo.setStartTime(inst.getStartTime());
         vo.setEndTime(inst.getEndTime());
         vo.setUrgency(inst.getUrgency());
+        // 测试态标记透出（C3）：前端据此识别「这是测试单」并置只读 / 加「测试」标识
+        vo.setIsTest(inst.getIsTest());
         // L3 运行时自检标志（发起时写入 wf_instance，随详情/我的请求返回前端）
         vo.setBusinessRowReady(inst.getBusinessRowReady());
         vo.setRequestIdBound(inst.getRequestIdBound());

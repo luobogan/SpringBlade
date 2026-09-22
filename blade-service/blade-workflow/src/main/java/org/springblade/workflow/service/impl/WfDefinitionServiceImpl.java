@@ -297,6 +297,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             // 「引擎 latest == 正式部署」（只能靠部署时间与消毒标记间接判读，见巡检 ⑥）。
             // 落库后：① 巡检可直接 JOIN 比对；② 发起自检可给出 engineDeploymentMatched 标志。
             def.setDeploymentId(processService.deployProcess(def.getProcKey(), deployXml));
+            // 回写「激活版本的流程定义ID」（方案 §3 / 迁移 _015）：
+            // 发起时据此走 startProcessInstanceById，精确绑定这一版，与「哪个部署最新」解耦。
+            def.setProcDefId(processService.latestProcDefId(def.getProcKey()));
         } else {
             throw new ServiceException("尚无 BPMN 定义，请先在「流程画布」中设计并保存");
         }
@@ -306,8 +309,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         // 在途实例由 Flowable 绑定创建时的 ACT_RE_PROCDEF.ID_ 原生隔离，不受新版本影响。
         promoteActiveVersion(def);
         log.info("[blade-workflow] 流程定义已发布并部署到引擎（并激活为当前版本）. "
-                + "defId={}, procKey={}, version={}, deploymentId={}",
-            defId, def.getProcKey(), def.getVersion(), def.getDeploymentId());
+                + "defId={}, procKey={}, version={}, deploymentId={}, procDefId={}",
+            defId, def.getProcKey(), def.getVersion(), def.getDeploymentId(), def.getProcDefId());
         return true;
     }
 

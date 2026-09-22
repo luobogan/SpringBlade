@@ -1,77 +1,30 @@
 #服务器配置
 server:
-  tomcat:
+  undertow:
+    # 以下的配置会影响buffer,这些buffer会用于服务器连接的IO操作,有点类似netty的池化内存管理
+    buffer-size: 1024
+    # 是否分配的直接内存
+    direct-buffers: true
     # 线程配置
     threads:
-      # 最大工作线程数(可同时处理请求的线程上限)
-      max: 400
-      # 最小空闲工作线程数(保持存活的常驻线程数)
-      min-spare: 16
+      # 设置IO线程数, 它主要执行非阻塞的任务,它们会负责多个连接, 默认设置每个CPU核心一个线程
+      io: 16
+      # 阻塞任务线程池, 当执行类似servlet请求阻塞操作, undertow会从这个线程池中取得线程,它的值设置取决于系统的负载
+      worker: 400
 
 #spring配置
 spring:
   cloud:
     sentinel:
       eager: true
-    gateway:
-      routes:
-        - id: blade-mall
-          uri: lb://blade-mall
-          predicates:
-            - Path=/blade-mall/**
-          filters:
-            - StripPrefix=1
-        - id: blade-mall-uploads
-          uri: lb://blade-mall
-          predicates:
-            - Path=/uploads/**
-          filters:
-            - StripPrefix=0
-        - id: blade-order
-          uri: lb://blade-order
-          predicates:
-            - Path=/blade-order/**
-          filters:
-            - StripPrefix=1
-        - id: blade-pay
-          uri: lb://blade-pay
-          predicates:
-            - Path=/blade-pay/**
-          filters:
-            - StripPrefix=1
-        - id: blade-formmode
-          uri: lb://blade-formmode
-          predicates:
-            - Path=/blade-formmode/**
-          filters:
-            - StripPrefix=1
-        - id: blade-workflow
-          uri: lb://blade-workflow
-          predicates:
-            - Path=/blade-workflow/**
-          filters:
-            - StripPrefix=1
-  datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
-    username: root
-    password: 123456
-
-# 各服务数据源配置（Nacos统一管理，修改后重启生效）
-blade:
-  datasource:
-    dev:
-      url: jdbc:mysql://localhost:3306/blade?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
-      username: root
-      password: 123456
-    order:
-      url: jdbc:mysql://localhost:3306/blade_order?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
-      username: root
-      password: 123456
-    pay:
-      url: jdbc:mysql://localhost:3306/blade_pay?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
-      username: root
-      password: 123456
+  gateway:
+    routes:
+      - id: blade-mall
+        uri: lb://blade-mall
+        predicates:
+          - Path=/blade-mall/**
+        filters:
+          - StripPrefix=1
   devtools:
     restart:
       log-condition-evaluation-delta: false
@@ -101,11 +54,34 @@ management:
 springdoc:
   default-flat-param-object: true
 
+#knife4j配置
+knife4j:
+  #启用
+  enable: true
+  #基础认证
+  basic:
+    enable: false
+    username: blade
+    password: blade
+  #增强配置
+  setting:
+    enableSwaggerModels: true
+    enableDocumentManage: true
+    enableHost: false
+    enableHostText: http://localhost
+    enableRequestCache: true
+    enableFilterMultipartApis: false
+    enableFilterMultipartApiMethodType: POST
+    language: zh_cn
+    enableFooter: false
+    enableFooterCustom: true
+    footerCustomContent: Copyright © 2026 SpringBlade All Rights Reserved
+
 #swagger配置信息
 swagger:
   title: SpringBlade 接口文档系统
   description: SpringBlade 接口文档系统
-  version: 5.0.1
+  version: 4.8.0
   license: Powered By SpringBlade
   licenseUrl: https://bladex.cn
   terms-of-service-url: https://bladex.cn
@@ -114,20 +90,7 @@ swagger:
     email: bladejava@qq.com
     url: https://gitee.com/smallc
 
-#MyBatis Plus配置
-mybatis-plus:
-  mapper-locations: classpath*:mapper/**/*Mapper.xml
-  type-aliases-package: org.springblade.formmode.entity
-  global-config:
-    banner: false
-    db-config:
-      id-type: ASSIGN_ID
-      logic-delete-value: 1
-      logic-not-delete-value: 0
-  configuration:
-    jdbc-type-for-null: 'null'
-
-#Blade配置
+#blade配置
 blade:
   datasource:
     dev:
@@ -140,6 +103,10 @@ blade:
       password: 123456
     pay:
       url: jdbc:mysql://localhost:3306/blade_pay?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      username: root
+      password: 123456
+    workflow:
+      url: jdbc:mysql://localhost:3306/blade_workflow?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
       username: root
       password: 123456
   upload-path: d:\workproject\springbladeandreact\springBlade\uploads
@@ -155,7 +122,7 @@ blade:
     # 是否ZIP压缩（true=所有上传的文件都会压缩成zip格式）
     zip-enabled: true
     # 是否AES加密（true=所有上传的文件都会AES加密）
-    encrypt-enabled: true
+    encrypt-enabled: false
     # 是否保存到ImageFile数据库表（true=所有文件元数据存入ImageFile表）
     save-to-db: true
     # 图片尺寸压缩（仅对图片生效，减小图片分辨率/质量）
@@ -171,33 +138,11 @@ blade:
     sign-key: qHJlcyzQ7YoGmHA7wZzvioTKYzYMaugG
     #使用 @org.springblade.test.SignKeyGenerator 获取
     aes-key: hJtodEd1qzJX9UOB9RBFdWk9KrAb59fH
-  #jackson配置
-  jackson:
-    #null自动转空值
-    null-to-empty: true
-    #大数字自动转字符串
-    big-num-to-string: true
-    #支持text文本请求,与报文加密同时开启
-    support-text-plain: false
-    #视图配置
-    view:
-      #动态模式的默认视图
-      default-view: summary
-      #角色→视图映射
-      role-mapping:
-        administrator: administrator
-        admin: admin
-        user: detail
-        guest: summary
   xss:
     enabled: true
-    # ⚠️ skip-url 匹配的是**服务内路径**（网关 RequestFilter 已剥掉 /api/{service} 前缀），
-    #    故写 /instance/** 而不是 /api/blade-workflow/instance/**。
-    #    判定依据：XssHttpServletRequestWrapper 由各服务的 BladeRequestFilter 包装，
-    #    path 取的是 httpServletRequest.getServletPath()。
     skip-url:
       - /weixin
-      # 富文本（TinyMCE）表单值/审批意见经 POST body 下发，不能被 XSS 过滤器清洗
+       # 富文本（TinyMCE）表单值/审批意见经 POST body 下发，不能被 XSS 过滤器清洗
       # （XssHtmlFilter 白名单仅 a/b/em/i/img/strong，<p>/<br>/<table> 等会被剥掉）
       # blade-formmode：表单数据 / 业务数据写入（Feign 直连，无 /api 前缀）
       - /form-data/**
@@ -218,16 +163,13 @@ blade:
       - /test/**
       - /blade-mall/front/**
       - /blade-mall/uploads/**
+      - /blade-mall/file/download/**
       - /blade-mall/auth/**
       - /blade-mall/upload/**
-      - /blade-mall/file/download/**
       - /file/download/**
       - /front/**
       - /uploads/**
       - /auth/**
-      - /api/blade-formmode/form/data/save
-      - /api/blade-formmode/browser/**
-      - /api/blade-workflow/**
     client:
       - client-id: sword
         path-patterns:
@@ -240,28 +182,8 @@ blade:
           - /blade-mall/front/**
   tenant:
     column: tenant_id
-    auto: true
     tables:
       - blade_notice
-      - modeinfo
-      - workflow_bill
-      - workflow_billfield
-      - moderightinfo
-      - mode_browser
-      - mode_customsearch
-      - mode_customtree
-      - mode_triggerworkflowset
-      - mode_workflowtomodeset
-    # 排除多租户的数据表 — 这些表虽然实体继承 TenantEntity，但实际是全局共享的
-    # blade_menu: 菜单表，所有租户共享同一套菜单结构
-    # blade_role_menu: 角色-菜单关联表
-    # blade_role_scope: 角色-数据权限/接口权限关联表
-    # blade_top_menu_setting: 顶部菜单设置表
-    # blade_tenant_package: 产品包定义表
-    # blade_package_menu: 产品包-菜单关联表
-    # blade_dict: 字典表（通常全局共享）
-    # blade_dict_option: 字典选项表
-    # exclude-tables:
 
 # 微信小程序配置
 wechat:
