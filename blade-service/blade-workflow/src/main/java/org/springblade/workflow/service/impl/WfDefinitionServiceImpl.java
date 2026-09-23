@@ -66,6 +66,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -73,6 +74,19 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.springblade.workflow.dto.DefinitionImportDTO;
+import org.springblade.workflow.dto.WfCustomOperationFull;
+import org.springblade.workflow.entity.WfCustomOperation;
+import org.springblade.workflow.entity.WfCustomOperationAction;
+import org.springblade.workflow.entity.WfCustomOperationRight;
+import org.springblade.workflow.service.IWfCustomOperationService;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
  * 流程定义服务实现
@@ -88,6 +102,19 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     /** 流程定义状态：0草稿 1已发布 3测试（三态；2停用已废除，仅存量数据可能残留） */
     private static final int DEF_STATUS_PUBLISHED = 1;
 
+    /** 自定义操作按钮中文名 → 流程操作标识（actionType=2 的动作 key） */
+    private static final Map<String, String> FLOW_OP_MAP = new HashMap<>();
+
+    static {
+        FLOW_OP_MAP.put("提交", "submit");
+        FLOW_OP_MAP.put("保存草稿", "saveDraft");
+        FLOW_OP_MAP.put("审批通过", "approve");
+        FLOW_OP_MAP.put("驳回", "reject");
+        FLOW_OP_MAP.put("转办", "transfer");
+        FLOW_OP_MAP.put("征询", "consult");
+        FLOW_OP_MAP.put("重新提交", "resubmit");
+    }
+
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
     private final WfNodeLinkMapper linkMapper;
@@ -101,6 +128,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final IFormmodeClient formmodeClient;
     /** 流程实例（删除前保护校验：参考 Weaver「有实例禁止删」） */
     private final WfInstanceMapper instanceMapper;
+
+    /** 自定义操作（按钮 + 动作 + 权限矩阵）服务：复用其覆盖式删插，保证 op→action/right 外键一致 */
+    private final IWfCustomOperationService customOperationService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -606,6 +636,295 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         log.info("[blade-workflow] BPMN 已保存并解析. defId={}, procKey={}, nodeCount={}, linkCount={}",
             defId, def.getProcKey(), seenNodeKeys.size(), seenLinkKeys.size());
         return defId;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Long importNewDefinition(DefinitionImportDTO dto) {
+        if (dto == null || dto.getBpmnXml() == null || dto.getBpmnXml().isBlank()) {
+            throw new ServiceException("BPMN 内容不能为空");
+        }
+        // 新建版本=1 的草稿定义（procKey 由 importBpmnXml 内部按 BPMN process id 校正）
+        WfProcessDefinition def = new WfProcessDefinition();
+        def.setName(dto.getName() != null && !dto.getName().isBlank() ? dto.getName() : "未命名流程");
+        def.setFormId(dto.getFormId());
+        def.setType(dto.getType());
+        def.setVersion(1);
+        def.setStatus(0);
+        def.setActiveVersionId(null);
+        defMapper.insert(def);
+        Long defId = def.getId();
+        importBpmnXml(defId, dto.getBpmnXml());
+        return defId;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Long importBpmnXml(Long defId, String bpmnXml) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        // 1) 复用 saveBpmn：落库 BPMN、按节点/出口 upsert（节点信息 / 出口信息），procKey 校正
+        saveBpmn(defId, bpmnXml);
+        // 2) 重新读取已解码落库的 XML，解析 wf: 扩展并填充三张表
+        WfProcessDefinition saved = defMapper.selectById(defId);
+        String xml = saved.getBpmnXml();
+        if (xml != null && !xml.isBlank()) {
+            parseAndSaveWfExtensions(defId, xml);
+        }
+        return defId;
+    }
+
+    /**
+     * 解析 BPMN XML 中的 {@code wf:} 扩展并自动配置节点操作者 / 自定义操作 / 字段权限。
+     *
+     * <p>关键点：直接用 DOM 解析<b>原始 XML 字符串</b>（而非 Flowable 的
+     * {@code BpmnModel.getExtensionElements()}），避免依赖 Flowable 对自定义命名空间的
+     * 解析细节；{@code wf:} 容器写在各任务元素的 {@code extensionElements} 内。解析结果以
+     * 节点 id（= nodeKey）为锚点写入三张表，对<b>每个含 wf: 扩展的节点</b>采用「先删后插」
+     * 的覆盖式写入，保证重复导入幂等。</p>
+     */
+    private void parseAndSaveWfExtensions(Long defId, String xml) {
+        // nodeKey → 节点 DB id（操作者表以 nodeId 外键关联）
+        Map<String, Long> nodeKey2Id = new LinkedHashMap<>();
+        for (WfProcessNode n : nodes(defId)) {
+            if (n.getNodeKey() != null) {
+                nodeKey2Id.put(n.getNodeKey(), n.getId());
+            }
+        }
+
+        Document doc;
+        try {
+            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+            dbf.setNamespaceAware(false);
+            dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            dbf.setExpandEntityReferences(false);
+            DocumentBuilder db = dbf.newDocumentBuilder();
+            doc = db.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 解析 wf: 扩展失败（跳过自动配置）: {}", e.getMessage());
+            return;
+        }
+
+        NodeList all = doc.getElementsByTagName("*");
+        for (int i = 0; i < all.getLength(); i++) {
+            Node node = all.item(i);
+            if (!(node instanceof Element el)) {
+                continue;
+            }
+            // wf: 容器嵌套在 extensionElements 内，先下钻
+            Element ext = firstChildElement(el, "extensionElements");
+            if (ext == null) {
+                continue;
+            }
+            Element wfOps = firstChildElement(ext, "wf:operators");
+            Element wfCustom = firstChildElement(ext, "wf:customOperations");
+            Element wfPerm = firstChildElement(ext, "wf:fieldPerms");
+            if (wfOps == null && wfCustom == null && wfPerm == null) {
+                continue;
+            }
+            String nodeKey = el.getAttribute("id");
+            Long nodeId = nodeKey2Id.get(nodeKey);
+            if (nodeId == null) {
+                log.warn("[blade-workflow] importBpmn 节点在流程中不存在，跳过 wf 扩展: nodeKey={}", nodeKey);
+                continue;
+            }
+
+            // —— 节点操作者：wf:operators/wf:operator（type/person|role|dept|all, value, signOrder）——
+            if (wfOps != null) {
+                operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+                    .eq(WfNodeOperator::getNodeId, nodeId));
+                for (Element opEl : childElements(wfOps, "wf:operator")) {
+                    WfNodeOperator op = new WfNodeOperator();
+                    op.setNodeId(nodeId);
+                    String type = attr(opEl, "type", "person");
+                    op.setOpType(opTypeOf(type));
+                    op.setObjId(attr(opEl, "value", null));
+                    op.setGroupNo(1);
+                    op.setSignOrder(parseIntSafe(attr(opEl, "signOrder", null), 1));
+                    op.setBatchNo(1);
+                    op.setCanView(1);
+                    op.setGroupName(opTypeName(type));
+                    operatorMapper.insert(op);
+                }
+            }
+
+            // —— 自定义操作：wf:customOperations/wf:operation（按钮 + 动作 + 权限矩阵）——
+            if (wfCustom != null) {
+                List<WfCustomOperationFull> fulls = new ArrayList<>();
+                for (Element opEl : childElements(wfCustom, "wf:operation")) {
+                    WfCustomOperationFull full = new WfCustomOperationFull();
+                    WfCustomOperation op = new WfCustomOperation();
+                    op.setBtnName(attr(opEl, "btnName", null));
+                    op.setBtnOrder(parseIntSafe(attr(opEl, "btnOrder", null), 0));
+                    op.setActionType(parseIntSafe(attr(opEl, "actionType", null), 2));
+                    op.setEnabled(parseIntSafe(attr(opEl, "enabled", null), 1));
+                    WfCustomOperationAction action = new WfCustomOperationAction();
+                    action.setFlowOperation(flowOperationOf(op.getBtnName()));
+                    action.setOpinion(op.getBtnName());
+                    full.setOp(op);
+                    full.setAction(action);
+                    List<WfCustomOperationRight> rights = new ArrayList<>();
+                    for (Element rEl : childElements(opEl, "wf:right")) {
+                        WfCustomOperationRight r = new WfCustomOperationRight();
+                        r.setRightType(attr(rEl, "rightType", null));
+                        r.setRightValue(attr(rEl, "rightValue", null));
+                        rights.add(r);
+                    }
+                    full.setRights(rights);
+                    fulls.add(full);
+                }
+                // saveBatch 内部按 defId+nodeKey 覆盖式删插（含 action/right 级联），保证外键一致
+                customOperationService.saveBatch(defId, nodeKey, fulls);
+            }
+
+            // —— 字段权限：wf:fieldPerms/wf:fieldPerm（scope/fieldName/perm）——
+            if (wfPerm != null) {
+                fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+                    .eq(WfNodeFieldPerm::getDefId, defId)
+                    .eq(WfNodeFieldPerm::getNodeKey, nodeKey));
+                for (Element pEl : childElements(wfPerm, "wf:fieldPerm")) {
+                    WfNodeFieldPerm p = new WfNodeFieldPerm();
+                    p.setDefId(defId);
+                    p.setNodeKey(nodeKey);
+                    p.setScope(attr(pEl, "scope", "main"));
+                    p.setFieldName(attr(pEl, "fieldName", null));
+                    int perm = parseIntSafe(attr(pEl, "perm", null), 1);
+                    p.setPerm(perm);
+                    applyThreeDim(p, perm);
+                    fieldPermMapper.insert(p);
+                }
+            }
+        }
+    }
+
+    /** 节点内首个指定名的子元素（非递归） */
+    private Element firstChildElement(Element parent, String name) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node c = children.item(i);
+            if (c instanceof Element && name.equals(c.getNodeName())) {
+                return (Element) c;
+            }
+        }
+        return null;
+    }
+
+    /** 节点内全部指定名的子元素（非递归） */
+    private List<Element> childElements(Element parent, String name) {
+        List<Element> result = new ArrayList<>();
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node c = children.item(i);
+            if (c instanceof Element && name.equals(c.getNodeName())) {
+                result.add((Element) c);
+            }
+        }
+        return result;
+    }
+
+    private String attr(Element el, String name, String def) {
+        String v = el.getAttribute(name);
+        return (v == null || v.isEmpty()) ? def : v;
+    }
+
+    private int parseIntSafe(String s, int def) {
+        if (s == null || s.isBlank()) {
+            return def;
+        }
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    /** wf:operator type → opType（对齐 OperatorDBType：3人员 1部门 2角色 4所有人） */
+    private int opTypeOf(String type) {
+        if (type == null) {
+            return 3;
+        }
+        switch (type) {
+            case "dept":
+                return 1;
+            case "role":
+                return 2;
+            case "person":
+                return 3;
+            case "all":
+            case "everyone":
+                return 4;
+            default:
+                return 3;
+        }
+    }
+
+    private String opTypeName(String type) {
+        if (type == null) {
+            return "人员";
+        }
+        switch (type) {
+            case "dept":
+                return "部门";
+            case "role":
+                return "角色";
+            case "person":
+                return "人员";
+            case "all":
+            case "everyone":
+                return "所有人";
+            default:
+                return "人员";
+        }
+    }
+
+    /** 按钮中文名 → 流程操作标识（actionType=2 的动作 key）；未知则按名生成 slug */
+    private String flowOperationOf(String btnName) {
+        if (btnName == null) {
+            return "custom";
+        }
+        String key = FLOW_OP_MAP.get(btnName);
+        if (key != null) {
+            return key;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (char c : btnName.toCharArray()) {
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.length() > 0 ? sb.toString() : "custom";
+    }
+
+    /** 由 perm（0隐藏 1只读 2可编辑 3必填）推导三维度列（is_visible/is_editable/is_required） */
+    private void applyThreeDim(WfNodeFieldPerm p, int perm) {
+        switch (perm) {
+            case 0:
+                p.setIsVisible(0);
+                p.setIsEditable(0);
+                p.setIsRequired(0);
+                break;
+            case 1:
+                p.setIsVisible(1);
+                p.setIsEditable(0);
+                p.setIsRequired(0);
+                break;
+            case 2:
+                p.setIsVisible(1);
+                p.setIsEditable(1);
+                p.setIsRequired(0);
+                break;
+            case 3:
+                p.setIsVisible(1);
+                p.setIsEditable(1);
+                p.setIsRequired(1);
+                break;
+            default:
+                p.setIsVisible(1);
+                p.setIsEditable(0);
+                p.setIsRequired(0);
+        }
     }
 
     @Override

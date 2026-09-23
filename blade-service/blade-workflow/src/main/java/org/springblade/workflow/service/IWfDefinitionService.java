@@ -1,5 +1,6 @@
 package org.springblade.workflow.service;
 
+import org.springblade.workflow.dto.DefinitionImportDTO;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
 import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
@@ -101,6 +102,31 @@ public interface IWfDefinitionService {
      * 获取已保存的 BPMN 2.0 定义 XML
      */
     String getBpmn(Long defId);
+
+    /**
+     * 从 BPMN 2.0 XML 导入并自动配置节点操作者 / 自定义操作 / 字段权限。
+     *
+     * <p>先复用 {@link #saveBpmn} 落库 BPMN 并按节点/出口 upsert，再从 XML 中解析
+     * {@code wf:} 扩展（写在 {@code extensionElements} 内）自动写入三张表：
+     * {@code wf_node_operator}、{@code wf_custom_operation}(含 action/right)、
+     * {@code wf_node_field_perm}。</p>
+     *
+     * @param defId   目标流程定义ID（草稿）
+     * @param bpmnXml 含 wf: 扩展的 BPMN XML（base64 或原文均可）
+     * @return 流程定义ID
+     */
+    Long importBpmnXml(Long defId, String bpmnXml);
+
+    /**
+     * 新建草稿定义并从 BPMN XML 导入（含 wf: 扩展自动配置）。
+     *
+     * <p>用于「一次性把一份导出的流程文件灌入系统」：先建版本=1 的草稿定义，
+     * 再调用 {@link #importBpmnXml} 落节点/出口并填充操作者/操作菜单/字段权限。</p>
+     *
+     * @param dto 名称/表单/类型 + 含 wf: 扩展的 BPMN XML
+     * @return 新流程定义ID
+     */
+    Long importNewDefinition(DefinitionImportDTO dto);
 
     /**
      * 另存为新版本

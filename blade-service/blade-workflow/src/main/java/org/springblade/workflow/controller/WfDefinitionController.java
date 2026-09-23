@@ -10,6 +10,7 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.BpmnSaveDTO;
+import org.springblade.workflow.dto.DefinitionImportDTO;
 import org.springblade.workflow.dto.DefinitionSaveDTO;
 import org.springblade.workflow.dto.NodeOperatorSaveDTO;
 import org.springblade.workflow.entity.WfNodeLink;
@@ -96,6 +97,18 @@ public class WfDefinitionController {
     @Operation(summary = "保存 BPMN（画布产出）", description = "持久化 bpmn-js 画布 XML 并解析节点、出口")
     public R<String> saveBpmn(@PathVariable("id") Long id, @RequestBody BpmnSaveDTO body) {
         return R.data(String.valueOf(definitionService.saveBpmn(id, body.getBpmnXml())), "保存成功");
+    }
+
+    @PostMapping("/import")
+    @Operation(summary = "从 BPMN XML 导入并自动配置流程", description = "新建草稿定义、落库 BPMN，并解析 wf: 扩展自动创建节点操作者/自定义操作/字段权限，返回新定义ID")
+    public R<String> importNew(@RequestBody DefinitionImportDTO dto) {
+        return R.data(String.valueOf(definitionService.importNewDefinition(dto)), "导入成功");
+    }
+
+    @PostMapping("/{id}/import-bpmn")
+    @Operation(summary = "向已有流程导入 BPMN 并自动配置", description = "复用 saveBpmn 落节点/出口，并解析 wf: 扩展填充节点操作者/自定义操作/字段权限")
+    public R<String> importBpmn(@PathVariable("id") Long id, @RequestBody BpmnSaveDTO body) {
+        return R.data(String.valueOf(definitionService.importBpmnXml(id, body.getBpmnXml())), "导入成功");
     }
 
     @GetMapping("/{id}/bpmn")
