@@ -44,6 +44,10 @@ public class ApprovalLogVO implements Serializable {
     @Schema(description = "下一节点办理人用户ID（逗号分隔；按流程出口解析，部门/角色/人员等已展开为具体用户ID）")
     private String nextHandlerIds;
 
+    @Schema(description = "下一节点接收人姓名（逗号分隔）。当下一节点为归档/结束节点时，为其节点名（如「归档」）；"
+        + "前端优先展示该字段，缺失时再按 nextHandlerIds 配人员字典兜底")
+    private String nextHandlerNames;
+
     @JsonFormat(pattern = DateUtil.PATTERN_DATETIME)
     @Schema(description = "操作时间")
     private Date operateTime;

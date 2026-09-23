@@ -23,6 +23,7 @@ import org.springblade.workflow.entity.WfDefinitionGray;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeLink;
+import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
@@ -31,6 +32,7 @@ import org.springblade.workflow.mapper.WfDefinitionGrayMapper;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
+import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
@@ -87,6 +89,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final IProcessService processService;
     private final WfOperatorResolver operatorResolver;
     private final WfNodeLinkMapper linkMapper;
+    /** 节点操作组：用于判定会签/依次（{@code wf_node_operator.sign_order}） */
+    private final WfNodeOperatorMapper operatorMapper;
     private final NodeActionExecutor nodeActionExecutor;
     private final IFormmodeClient formmodeClient;
 
@@ -105,6 +109,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Lazy
     @Autowired
     private IWfTimeoutService timeoutService;
+
+    /** 或签：任一人处理即推进引擎 */
+    private static final int SIGN_ANY = 0;
+    /** 会签：全部处理人办完后才推进引擎 */
+    private static final int SIGN_ALL = 1;
+    /** 依次：按批次逐个激活，最后一人处理完才推进引擎 */
+    private static final int SIGN_SEQUENCE = 2;
 
     /**
      * 表单直发（发起流程页）时创建业务数据行，返回其 id 作为 dataId。
@@ -649,6 +660,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 预取「出口 from→to」一次，用于算每条日志的「下一节点办理人」（接收人）。
         // 聚合所有出口；网关多出口时合并各目标节点的办理人（近似，避免逐条走运行时网关分支）。
         Map<String, List<String>> fromTo = new LinkedHashMap<>();
+        // 节点 → 类型：用于「接收人」聚合时跳过非审批类节点（开始/归档等），只展示「下一个审批人」
+        Map<String, Integer> nodeTypeMap = new HashMap<>();
+        // 节点 → 节点对象：用于判定「会签/依次」（本节点未签完时接收人＝本节点待签人）
+        Map<String, WfProcessNode> nodeMap = new HashMap<>();
         if (inst != null) {
             for (WfNodeLink lk : linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
                 .eq(WfNodeLink::getDefId, inst.getDefId()))) {
@@ -657,8 +672,19 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 }
                 fromTo.computeIfAbsent(lk.getFromNodeKey(), k -> new ArrayList<>()).add(lk.getToNodeKey());
             }
+            for (WfProcessNode n : nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, inst.getDefId()))) {
+                if (n.getNodeKey() != null) {
+                    nodeTypeMap.put(n.getNodeKey(), n.getNodeType());
+                    nodeMap.put(n.getNodeKey(), n);
+                }
+            }
         }
         Long starter = (inst != null) ? inst.getStarter() : null;
+        // 各节点「已签的人」（正常流转仅 提交/通过 计入）：升序遍历累计，供会签节点算「还有谁没签」
+        Map<String, Set<Long>> nodeSigned = new HashMap<>();
+        // 节点签法缓存（0 或签 / 1 会签 / 2 依次）：避免每条日志都查一次 wf_node_operator
+        Map<String, Integer> signOrderCache = new HashMap<>();
 
         // 开始节点（nodeType=0）的「提交」日志：仅当流程**确实离开过**开始节点后，才算一次「流转意见」。
         // 判据：流程仍停在开始节点、且这条就是最新一条日志 —— 说明这是本轮「尚未提交出去的填表动作」，
@@ -700,14 +726,61 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             vo.setLogType(l.getLogType());
             vo.setOpinion(l.getOpinion());
             vo.setOperateTime(l.getOperateTime());
-            // 「接收人」＝本节点出口指向的下一节点的操作者（聚合；网关多出口合并）。
-            // 用已有的 WfOperatorResolver 把部门/角色/人员/创建人等配置解析成具体的办理人用户ID，
-            // 交由前端用人员字典显示姓名（后端只给 ID，避免额外批量查姓名）。
+            // 正常流转仅 提交(2)/通过(0) 视为一次「签」：先累计本条操作人，供会签节点算「还有谁没签」
+            if (l.getNodeKey() != null && l.getOperator() != null
+                && (WfApprovalLog.LOG_SUBMIT.equals(l.getLogType())
+                    || WfApprovalLog.LOG_APPROVE.equals(l.getLogType()))) {
+                nodeSigned.computeIfAbsent(l.getNodeKey(), k -> new LinkedHashSet<>()).add(l.getOperator());
+            }
+
             Set<Long> handlerIds = new LinkedHashSet<>();
-            if (inst != null) {
+            List<String> archiveNames = new ArrayList<>();
+
+            // ① 会签/依次节点：接收人＝本节点「还没签的人」（对齐 ecology：会签逐人审批时，
+            //    每条通过记录的接收人是本节点其余待签人，而非下一个节点的人）；
+            //    本节点全部签完（无可签人）才回落到 ② 的「下一个节点办理人」。
+            boolean selfPending = false;
+            if (inst != null && l.getNodeKey() != null) {
+                int selfSignOrder = signOrderCache.computeIfAbsent(l.getNodeKey(),
+                    k -> resolveSignOrder(nodeMap.get(k)));
+                if (selfSignOrder == SIGN_ALL || selfSignOrder == SIGN_SEQUENCE) {
+                    List<Long> nodeHandlers = resolveHandlers(inst.getDefId(), l.getNodeKey(),
+                        instId, starter, l.getOperator());
+                    Set<Long> signed = nodeSigned.get(l.getNodeKey());
+                    for (Long uid : nodeHandlers) {
+                        if (uid != null && (signed == null || !signed.contains(uid))) {
+                            handlerIds.add(uid);
+                        }
+                    }
+                    selfPending = !handlerIds.isEmpty();
+                }
+            }
+
+            // ② 本节点已签完（或本身非会签）→ 「接收人」＝本节点出口指向的【下一个审批节点】的操作者
+            //    （聚合；网关多出口合并）。开始(0)跳过；归档(3)/结束节点不显示其办理人（常为「创建人本人」，
+            //    会误显为接收人），改为显示节点名（如「归档」），因为它不是「接收审批的人」。
+            //    用已有的 WfOperatorResolver 把部门/角色/人员/创建人等配置解析成具体的办理人用户ID，
+            //    交由前端用人员字典显示姓名（后端只给 ID，避免额外批量查姓名）。
+            if (!selfPending && inst != null) {
                 List<String> tos = fromTo.get(l.getNodeKey());
                 if (tos != null) {
                     for (String to : tos) {
+                        Integer toType = nodeTypeMap.get(to);
+                        if (toType != null && toType == 0) {
+                            continue; // 开始节点不是接收人
+                        }
+                        if (toType != null && toType == 3) {
+                            // 归档/结束节点：优先取该节点「节点信息 → 操作者」里配置的办理人；
+                            // 未配置操作者时才回退显示节点名（如「归档」），避免完全空白
+                            List<Long> endIds = resolveHandlers(inst.getDefId(), to, instId, starter, l.getOperator());
+                            if (!endIds.isEmpty()) {
+                                handlerIds.addAll(endIds);
+                            } else {
+                                String nm = resolveNodeName(inst.getDefId(), to);
+                                archiveNames.add((nm != null && !nm.trim().isEmpty()) ? nm.trim() : "归档");
+                            }
+                            continue;
+                        }
                         try {
                             List<Long> ids = operatorResolver.resolve(
                                 inst.getDefId(), to, instId, starter, l.getOperator());
@@ -720,11 +793,62 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     }
                 }
             }
+            // 有具体办理人时清掉节点名兜底：前端优先展示 nextHandlerNames，
+            // 若两者并存会把办理人盖掉（网关多出口中「既有结束节点又有审批节点」的场景）
+            if (!handlerIds.isEmpty()) {
+                archiveNames.clear();
+            }
             vo.setNextHandlerIds(handlerIds.isEmpty() ? "" :
                 handlerIds.stream().map(String::valueOf).collect(Collectors.joining(",")));
+            vo.setNextHandlerNames(archiveNames.isEmpty() ? null : String.join(",", archiveNames));
             result.add(vo);
         }
         return result;
+    }
+
+    /**
+     * 解析节点的签批方式（{@link #SIGN_ANY 或签} / {@link #SIGN_ALL 会签} / {@link #SIGN_SEQUENCE 依次}）。
+     *
+     * <p>与 {@code WfTaskServiceImpl#resolveSignOrder} 同口径：节点级
+     * {@code wf_process_node.sign_order} 与操作组级 {@code wf_node_operator.sign_order} 两层取更严格者
+     * —— 「节点信息 → 操作者 → 添加操作组」里选的会签/依次只写 wf_node_operator，节点级往往仍是默认 0。</p>
+     */
+    private int resolveSignOrder(WfProcessNode node) {
+        int nodeLevel = (node == null || node.getSignOrder() == null) ? SIGN_ANY : node.getSignOrder();
+        boolean all = nodeLevel == SIGN_ALL;
+        boolean sequence = nodeLevel == SIGN_SEQUENCE;
+        if (node != null && node.getId() != null) {
+            List<WfNodeOperator> ops = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+                .eq(WfNodeOperator::getNodeId, node.getId()));
+            if (ops != null) {
+                for (WfNodeOperator op : ops) {
+                    Integer so = op.getSignOrder();
+                    if (so == null) {
+                        continue;
+                    }
+                    if (so == SIGN_ALL) {
+                        all = true;
+                    } else if (so == SIGN_SEQUENCE) {
+                        sequence = true;
+                    }
+                }
+            }
+        }
+        if (all) {
+            return SIGN_ALL;
+        }
+        return sequence ? SIGN_SEQUENCE : SIGN_ANY;
+    }
+
+    /** 解析节点配置的办理人（部门/角色/人员/创建人等展开为用户ID）；异常返回空，不影响流转记录展示 */
+    private List<Long> resolveHandlers(Long defId, String nodeKey, Long instId, Long starter, Long currentOperator) {
+        try {
+            List<Long> ids = operatorResolver.resolve(defId, nodeKey, instId, starter, currentOperator);
+            return ids == null ? List.of() : ids;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 解析节点办理人失败，已跳过. nodeKey={}", nodeKey, e);
+            return List.of();
+        }
     }
 
     @Override
