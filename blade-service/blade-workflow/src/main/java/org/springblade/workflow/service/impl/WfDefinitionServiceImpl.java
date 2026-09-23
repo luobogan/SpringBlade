@@ -85,7 +85,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     /** 表单绑定提示中最多展示的流程名称数量 */
     private static final int MAX_BINDING_NAME = 10;
 
-    /** 流程定义状态：0草稿 1已发布 2停用（对齐 ecology {@code workflow_base}） */
+    /** 流程定义状态：0草稿 1已发布 3测试（三态；2停用已废除，仅存量数据可能残留） */
     private static final int DEF_STATUS_PUBLISHED = 1;
 
     private final WfProcessDefinitionMapper defMapper;
@@ -109,6 +109,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             throw new ServiceException("流程定义不能为空");
         }
         WfProcessDefinition def = dto.getDefinition();
+        // 三态归一（草稿/测试/已发布）：「停用(2)」已废除，旧缓存表单或存量数据仍可能提交 2，
+        // 服务端统一按草稿落库，杜绝已废除状态被写回（服务端不依赖前端选项收口）
+        if (def.getStatus() != null && def.getStatus() == 2) {
+            def.setStatus(0);
+        }
         if (def.getId() == null) {
             def.setVersion(def.getVersion() == null ? 1 : def.getVersion());
             defMapper.insert(def);
@@ -692,13 +697,50 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     }
 
     @Override
-    public boolean enable(Long defId, boolean enabled) {
+    @Transactional(rollbackFor = Exception.class)
+    public boolean testDeploy(Long defId) {
         WfProcessDefinition def = defMapper.selectById(defId);
         if (def == null) {
             throw new ServiceException("流程定义不存在");
         }
-        def.setStatus(enabled ? 1 : 2);
+        if (def.getBpmnXml() == null || def.getBpmnXml().isBlank()) {
+            throw new ServiceException("尚无 BPMN 定义，请先在「流程画布」中设计并保存");
+        }
+        if (def.getProcKey() == null || def.getProcKey().isBlank()) {
+            throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
+        }
+        // 先确保已部署到测试引擎（独立 __test key，不顶正式版本、不激活版本）
+        deployForTest(defId);
+        // 置为「测试」态：已部署测试引擎，可发起测试单，但不可正式发起
+        def.setStatus(3);
         defMapper.updateById(def);
+        log.info("[blade-workflow] 流程定义已标记为测试态（部署到测试引擎）. defId={}, procKey={}",
+            defId, def.getProcKey());
+        return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean withdraw(Long defId) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            throw new ServiceException("流程定义不存在");
+        }
+        int status = def.getStatus() == null ? 0 : def.getStatus();
+        if (status != 1 && status != 3) {
+            throw new ServiceException("仅「已发布 / 测试」状态可撤回为草稿");
+        }
+        // 挂起引擎部署：正式态挂起正式 procDefId；测试态挂起 __test 最新 procDefId
+        if (status == 1) {
+            processService.suspendProcessDefinition(def.getProcDefId());
+        } else {
+            processService.suspendProcessDefinition(
+                processService.latestProcDefId(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX));
+        }
+        def.setStatus(0);
+        defMapper.updateById(def);
+        log.info("[blade-workflow] 流程定义已撤回为草稿并挂起引擎部署. defId={}, procKey={}, 原状态={}",
+            defId, def.getProcKey(), status);
         return true;
     }
 
@@ -810,15 +852,10 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
     }
 
-    /** 发布即激活：组内锚点统一切到本版本；同组其它已发布版本转停用 */
+    /** 发布即激活：组内锚点统一切到本版本。旧版本保持各自 status 不变（已发布即一直为已发布，
+     *  当前生效版本由 activeVersionId 锚点决定，不再用「停用(2)」态表达，三态模型：草稿/测试/已发布） */
     private void promoteActiveVersion(WfProcessDefinition def) {
         setGroupAnchor(def);
-        for (WfProcessDefinition g : versionGroup(def.getId())) {
-            if (!g.getId().equals(def.getId()) && Integer.valueOf(1).equals(g.getStatus())) {
-                g.setStatus(2);
-                defMapper.updateById(g);
-            }
-        }
     }
 
     private VersionDiffVO.NodeDiff toNodeDiff(WfProcessNode s, WfProcessNode t) {
@@ -1549,14 +1586,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         desc.setRules("stringLength:1000");
         fields.add(desc);
 
-        // 5. 流程状态 —— 0草稿 1已发布 2停用 3测试（测试态流程：仅 /formmode/test 可选，不进正式发起页 /workflow/create）
-        //   注：ecology getWorkflowStatusItem 用（0无效/1有效/2测试），本项目 2 已用作「停用」，故测试态顺延为 3
+        // 5. 流程状态 —— 三态：0草稿 1已发布 3测试（已发布/测试均已部署到引擎，不变式由
+        //   deploy/deployForTest 构造保证；「停用(2)」已废除，下线统一走「撤回」→ 草稿并挂起引擎。
+        //   测试态流程：仅 /formmode/test 可选，不进正式发起页 /workflow/create）
         FormFieldVO status = field("status", "流程状态", "select", false);
         status.setDefaultValue(0);
         status.setOptions(Arrays.asList(
             option(0, "草稿"),
             option(1, "已发布"),
-            option(2, "停用"),
             option(3, "测试")
         ));
         fields.add(status);

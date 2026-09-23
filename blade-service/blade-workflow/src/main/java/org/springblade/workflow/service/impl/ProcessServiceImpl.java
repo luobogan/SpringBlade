@@ -218,6 +218,20 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public void suspendProcessDefinition(String procDefId) {
+        if (procDefId == null || procDefId.isBlank()) {
+            return;
+        }
+        try {
+            repositoryService.suspendProcessDefinitionById(procDefId);
+            log.info("[blade-workflow] 已挂起引擎流程定义. procDefId={}", procDefId);
+        } catch (org.flowable.common.engine.api.FlowableObjectNotFoundException ex) {
+            // 引擎中已无该定义（如测试部署被清理）：忽略，撤回仍能正常回退业务状态
+            log.warn("[blade-workflow] 挂起流程定义时未找到（已不存在），忽略. procDefId={}", procDefId);
+        }
+    }
+
+    @Override
     public List<String> deploymentIdsByKeyLike(String keyLike) {
         if (keyLike == null || keyLike.isBlank()) {
             return new ArrayList<>();

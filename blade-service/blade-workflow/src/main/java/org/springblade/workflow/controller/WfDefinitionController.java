@@ -159,22 +159,22 @@ public class WfDefinitionController {
         return R.data(definitionService.formBinding(formId));
     }
 
-    @PostMapping("/{id}/enable")
-    @Operation(summary = "启用")
-    public R<Boolean> enable(@PathVariable("id") Long id) {
-        Boolean ok = definitionService.enable(id, true);
-        log.info("[blade-workflow][审计] 启用流程定义. defId={}, 结果={}, operator={}",
+    @PostMapping("/{id}/deploy-test")
+    @Operation(summary = "测试发布", description = "部署到测试引擎并置为测试态（status=3）")
+    public R<Boolean> deployTest(@PathVariable("id") Long id) {
+        Boolean ok = definitionService.testDeploy(id);
+        log.info("[blade-workflow][审计] 测试发布流程定义. defId={}, 结果={}, operator={}",
             id, ok, SecureUtil.getUserId());
-        return R.data(ok, "已启用");
+        return R.data(ok, "已设为测试态");
     }
 
-    @PostMapping("/{id}/disable")
-    @Operation(summary = "停用")
-    public R<Boolean> disable(@PathVariable("id") Long id) {
-        Boolean ok = definitionService.enable(id, false);
-        log.info("[blade-workflow][审计] 停用流程定义. defId={}, 结果={}, operator={}",
+    @PostMapping("/{id}/withdraw")
+    @Operation(summary = "撤回", description = "已发布/测试 → 草稿，并挂起引擎部署")
+    public R<Boolean> withdraw(@PathVariable("id") Long id) {
+        Boolean ok = definitionService.withdraw(id);
+        log.info("[blade-workflow][审计] 撤回流程定义. defId={}, 结果={}, operator={}",
             id, ok, SecureUtil.getUserId());
-        return R.data(ok, "已停用");
+        return R.data(ok, "已撤回为草稿");
     }
 
     @DeleteMapping("/{id}")

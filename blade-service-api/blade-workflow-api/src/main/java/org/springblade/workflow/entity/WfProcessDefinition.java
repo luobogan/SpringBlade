@@ -11,7 +11,7 @@ import org.springblade.core.mp.base.TenantEntity;
 /**
  * 流程定义实体
  *
- * <p>对齐 ecology {@code workflow_base}；status：0草稿 1已发布 2停用。</p>
+ * <p>对齐 ecology {@code workflow_base}；status 三态：0草稿 1已发布 3测试（2停用已废除，仅存量数据）。</p>
  */
 @Data
 @EqualsAndHashCode(callSuper = true)

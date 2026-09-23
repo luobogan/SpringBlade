@@ -80,6 +80,17 @@ public interface IWfDefinitionService {
     String deployForTest(Long defId);
 
     /**
+     * 测试态发布：部署到测试引擎（独立 {@code __test} key）并置 status=3（测试）。
+     *
+     * <p>与 {@link #deploy} 的区别：不改正式部署、不激活版本、不影响生产发起；
+     * 仅让该定义进入「测试态」——已部署测试引擎、可发起测试单，但不可正式发起。</p>
+     *
+     * @param defId 流程定义ID
+     * @return 是否成功
+     */
+    boolean testDeploy(Long defId);
+
+    /**
      * 保存 BPMN 2.0 定义（bpmn-js 画布产出）
      *
      * <p>持久化 XML，并解析其中的 userTask 重建流程节点，以 BPMN process id 校正 procKey。</p>
@@ -128,9 +139,13 @@ public interface IWfDefinitionService {
     boolean activateVersion(Long defId);
 
     /**
-     * 启用 / 停用
+     * 撤回：已发布（status=1）/ 测试（status=3）→ 草稿（status=0），并挂起对应引擎部署，
+     * 实现可控下线。正式态挂起正式 procDefId；测试态挂起 {@code __test} 最新 procDefId。
+     *
+     * @param defId 流程定义ID
+     * @return 是否成功
      */
-    boolean enable(Long defId, boolean enabled);
+    boolean withdraw(Long defId);
 
     /**
      * 删除流程定义（级联清理节点 / 出口 / 操作者 / 权限 / 布局）

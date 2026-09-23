@@ -162,6 +162,16 @@ public interface IProcessService {
     void deleteDeployment(String deploymentId);
 
     /**
+     * 挂起（暂停）指定流程定义：挂起后该定义不可再发起新实例（Flowable 直接拒绝）。
+     *
+     * <p>用于「撤回」动作的可控下线：发布/测试态的流程定义被撤回为草稿时，
+     * 把其在引擎中的最新部署挂起，避免「状态已是草稿但引擎还能发起」的撕裂。</p>
+     *
+     * @param procDefId 引擎流程定义ID（ACT_RE_PROCDEF.ID_）；为空则跳过
+     */
+    void suspendProcessDefinition(String procDefId);
+
+    /**
      * 列出引擎中 <b>procKey 匹配给定模式</b> 的所有部署ID（去重）。
      *
      * <p>用途：清理「孤儿测试部署」（方案 §6.4 C9/C10 / S12）。测试部署走
