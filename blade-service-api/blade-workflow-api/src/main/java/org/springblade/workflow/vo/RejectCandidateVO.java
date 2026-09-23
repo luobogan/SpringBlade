@@ -23,4 +23,7 @@ public class RejectCandidateVO implements Serializable {
     @Schema(description = "节点类型 0创建 1审批 2提交 3归档 5等待 6自动处理 7网关")
     private Integer nodeType;
 
+    @Schema(description = "节点当前操作者姓名（顿号分隔；创建节点=发起人；解析失败为 null，前端显示 -）")
+    private String operators;
+
 }

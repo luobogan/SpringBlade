@@ -298,6 +298,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             validateForDeploy(def);
             // 部署前把「出口条件」注入到对应 sequenceFlow，保证 Flowable 运行时按条件流转
             String deployXml = injectLinkConditions(def.getBpmnXml(), links(defId));
+            // 再归一化「引擎无法执行 / 本平台未实现」的元素（如画布「发送通知」sendTask）为自动通过，
+            // 否则 Flowable 语义校验在部署期直接拒绝（发送任务缺 flowable:type/operation → 500）
+            deployXml = neutralizeForDeploy(deployXml);
             // 落库 deployment_id：此前 deployProcess 的返回值被丢弃，导致无法精确比对
             // 「引擎 latest == 正式部署」（只能靠部署时间与消毒标记间接判读，见巡检 ⑥）。
             // 落库后：① 巡检可直接 JOIN 比对；② 发起自检可给出 engineDeploymentMatched 标志。
@@ -1327,6 +1330,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                         fe.getClass().getSimpleName(), fe.getId());
                 }
             }
+            // 发送任务（画布「发送通知」sendTask）本平台未实现、引擎无实现不可执行：
+            // 与正式部署同规则降级为自动通过，保证测试/正式行为一致（详见 downgradeUnexecutableTasks）
+            if (downgradeUnexecutableTasks(process, "测试态")) {
+                changed = true;
+            }
             if (!changed) {
                 return bpmnXml;
             }
@@ -1368,6 +1376,64 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     }
 
     /**
+     * 把「本平台未实现、引擎无实现不可执行」的自动任务降级为 manualTask（自动通过）。
+     *
+     * <p>Flowable 对 {@code <sendTask>}（画布「发送通知」）强制要求 {@code flowable:type} 或
+     * {@code operation}：不配置则<b>正式部署</b>被语义校验直接拒绝
+     * （{@code flowable-sendtask-invalid-implementation}）；测试态虽关校验能部署，
+     * 但运行到该节点同样无实现可执行。本平台把这类节点视为「自动处理」(nodeType=6)，
+     * 故统一降级为自动通过的 manualTask——正式部署可过，且测试/正式行为一致。</p>
+     *
+     * <p>降级只改「部署用的 XML」，元素 id 原样保留，故不影响 {@code wf_process_node}
+     * 的节点配置与按 nodeKey 的匹配。</p>
+     *
+     * @return 是否发生了降级（供调用方决定是否需要重新序列化）
+     */
+    private boolean downgradeUnexecutableTasks(Process process, String scene) {
+        boolean changed = false;
+        for (FlowElement fe : new ArrayList<>(process.getFlowElements())) {
+            if (fe instanceof SendTask) {
+                ManualTask task = new ManualTask();
+                task.setId(fe.getId());
+                task.setName(fe.getName());
+                process.removeFlowElement(fe.getId());
+                process.addFlowElement(task);
+                changed = true;
+                log.info("[blade-workflow] {}：发送任务降级为自动通过 manualTask. id={}, name={}",
+                    scene, fe.getId(), fe.getName());
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * 正式部署前的 BPMN 归一化：把「引擎无法执行、本平台又未实现」的元素降级为自动通过，
+     * 避免 Flowable 语义校验在部署期直接抛 500（如 {@code <sendTask>} 缺 flowable:type/operation）。
+     *
+     * <p>与 {@link #neutralizeForTest} 复用同一套降级规则（{@link #downgradeUnexecutableTasks}），
+     * 使正式/测试行为一致，杜绝「测试绿灯、正式跑不了」。归一化失败时回退原 XML，保证部署不中断。</p>
+     */
+    private String neutralizeForDeploy(String bpmnXml) {
+        if (bpmnXml == null || bpmnXml.isBlank()) {
+            return bpmnXml;
+        }
+        try {
+            BpmnXMLConverter converter = new BpmnXMLConverter();
+            BpmnModel model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
+            Process process = model.getMainProcess();
+            if (!downgradeUnexecutableTasks(process, "正式部署")) {
+                return bpmnXml;
+            }
+            byte[] out = converter.convertToXML(model);
+            return new String(out, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 正式部署 BPMN 归一化失败，使用原 BPMN 部署: {}", e.getMessage());
+            return bpmnXml;
+        }
+    }
+
+    /**
      * 发布门禁（正式部署前）：测试态靠「关闭校验 + {@link #neutralizeForTest 消毒}」才能跑通，
      * 正式部署保留完整校验，故必须在这里把「测试过、正式跑不了」的情况拦住。
      *
@@ -1401,6 +1467,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             if (fe instanceof BusinessRuleTask) {
                 // 与测试态降级清单一致：正式环境无 Drools，部署期即失败
                 hardBlock.add(label);
+            } else if (fe instanceof SendTask) {
+                // 发送任务（画布「发送通知」）：本平台未实现发送，部署前会被 neutralizeForDeploy 降级为「自动通过」
+                warn.add(label + " 发送任务：本平台未实现发送，部署时自动降级为「自动通过」");
             } else if (fe instanceof ThrowEvent) {
                 warn.add(label + " 抛出事件：正式环境未配置则运行期失败");
             } else if (fe instanceof IntermediateCatchEvent ice) {

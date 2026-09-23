@@ -94,6 +94,33 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public Object getVariable(String engineInstId, String name) {
+        if (engineInstId == null || name == null || name.isBlank()) {
+            return null;
+        }
+        try {
+            return runtimeService.getVariable(engineInstId, name);
+        } catch (Exception e) {
+            // 实例可能已结束（历史态），变量读不到属正常，按 null 处理
+            return null;
+        }
+    }
+
+    @Override
+    public void removeVariables(String engineInstId, List<String> names) {
+        if (engineInstId == null || names == null || names.isEmpty()) {
+            return;
+        }
+        try {
+            for (String name : names) {
+                runtimeService.removeVariable(engineInstId, name);
+            }
+        } catch (Exception e) {
+            // 实例已结束时删变量无意义，忽略
+        }
+    }
+
+    @Override
     public String deployProcess(String procKey, String bpmnXml) {
         if (procKey == null || procKey.isBlank() || bpmnXml == null || bpmnXml.isBlank()) {
             throw new IllegalArgumentException("部署 BPMN 失败：procKey 与 bpmnXml 均不能为空");

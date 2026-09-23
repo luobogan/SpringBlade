@@ -58,6 +58,16 @@ public interface IProcessService {
     void completeTask(String taskId, Map<String, Object> variables);
 
     /**
+     * 读取引擎流程变量（不存在返回 {@code null}）
+     */
+    Object getVariable(String engineInstId, String name);
+
+    /**
+     * 删除引擎流程变量（忽略不存在的变量，绝不抛异常）
+     */
+    void removeVariables(String engineInstId, List<String> names);
+
+    /**
      * 部署 BPMN 2.0 定义到引擎
      *
      * @param procKey  流程定义Key（BPMN process id，作为部署资源名前缀）

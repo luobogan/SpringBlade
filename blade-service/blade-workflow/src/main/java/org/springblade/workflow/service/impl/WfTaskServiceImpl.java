@@ -31,6 +31,7 @@ import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
@@ -87,6 +88,18 @@ public class WfTaskServiceImpl implements IWfTaskService {
     /** 超时自动通过的默认意见 */
     private static final String AUTO_OPINION = "超时自动通过";
 
+    /** 退回后再提交的处理方式：逐级审批（缺省） */
+    private static final int RESUBMIT_SEQUENTIAL = 1;
+    /** 退回后再提交的处理方式：直达本节点（重新提交时跳过中间节点，直接回到执行退回的节点） */
+    private static final int RESUBMIT_DIRECT = 2;
+    /**
+     * 「直达本节点」引擎变量：值 = 执行退回的节点Key。退回时写入，
+     * 退回目标节点重新提交时消费（跳过中间节点直达）并清除。
+     */
+    private static final String VAR_RESUBMIT_DIRECT_NODE = "wf_resubmit_direct_node";
+    /** 退回弹窗操作者列最多展示的姓名数量（超出以「等N人」收尾） */
+    private static final int MAX_OPERATOR_NAMES = 3;
+
     private final WfTaskMapper taskMapper;
     private final WfInstanceMapper instanceMapper;
     private final WfProcessNodeMapper nodeMapper;
@@ -99,6 +112,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfFormSnapshotMapper snapshotMapper;
     private final WfRejectManager rejectManager;
     private final WfSubflowRequestMapper subflowRequestMapper;
+    /** 节点操作者解析（退回弹窗「操作者」列展示用，解析失败不阻塞） */
+    private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
 
     @Override
     public List<WfTaskVO> todo(Long assignee) {
@@ -301,7 +316,11 @@ public class WfTaskServiceImpl implements IWfTaskService {
             }
         } else {
             processService.completeTask(task.getEngineTaskId(), vars);
-            instanceService.advance(inst.getId(), operator);
+            // 「直达本节点」退回后的重新提交：token 已随 complete 流到下一节点，
+            // 这里直接跳回执行退回的节点（跳过中间节点）；跳转失败/不适用则降级逐级审批
+            if (!jumpDirectIfMarked(inst, operator)) {
+                instanceService.advance(inst.getId(), operator);
+            }
         }
 
         // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（异常策略由 NodeActionExecutor 吸收）
@@ -367,6 +386,15 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
         // 引擎回退：把当前节点 token 移动到目标节点（保持实例运行，不终止）
         Map<String, Object> vars = new HashMap<>(4);
+        // 「退回后再提交的处理方式」：直达本节点 → 写引擎变量，供退回目标节点重新提交时
+        // 跳过中间节点直达本次执行退回的节点（见 jumpDirectIfMarked）；逐级审批则清残留标记
+        int resubmitMode = (dto != null && dto.getResubmitMode() != null)
+            ? dto.getResubmitMode() : RESUBMIT_SEQUENTIAL;
+        if (resubmitMode == RESUBMIT_DIRECT) {
+            vars.put(VAR_RESUBMIT_DIRECT_NODE, task.getNodeKey());
+        } else {
+            processService.removeVariables(inst.getEngineInstId(), List.of(VAR_RESUBMIT_DIRECT_NODE));
+        }
         WfProcessNode targetNode = loadNode(inst.getDefId(), targetNodeKey);
         if (targetNode != null && targetNode.getNodeType() != null && targetNode.getNodeType() == 0) {
             // 退回创建节点 = 退回发起人：创建节点在引擎里是 startEvent（非等待态），token 停不住，
@@ -421,10 +449,60 @@ public class WfTaskServiceImpl implements IWfTaskService {
             c.setNodeKey(n.getNodeKey());
             c.setNodeName(n.getNodeName());
             c.setNodeType(n.getNodeType());
+            c.setOperators(resolveOperatorNames(inst, n, task.getAssignee()));
             nodes.add(c);
         }
         vo.setNodes(nodes);
         return vo;
+    }
+
+    /**
+     * 解析候选节点的当前操作者姓名（退回弹窗「操作者」列展示用）。
+     *
+     * <p>创建节点(0) = 发起人本人；其余节点走 {@link WfOperatorResolver#resolve}
+     * （与流转 {@code advance} 生成待办同一解析口径）。姓名经 {@code IUserClient#userInfo}
+     * 换取，最多展示 {@link #MAX_OPERATOR_NAMES} 个（超出以「等N人」收尾）。</p>
+     *
+     * <p>解析失败 / 为空返回 {@code null}（前端显示 -）：<b>绝不抛异常阻塞退回弹窗</b> ——
+     * 操作者列是展示性信息，退回的权限与目标校验由 reject 主流程负责。</p>
+     */
+    private String resolveOperatorNames(WfInstance inst, WfProcessNode node, Long currentOperator) {
+        try {
+            List<Long> ids;
+            if (node.getNodeType() != null && node.getNodeType() == 0) {
+                ids = inst.getStarter() == null ? List.of() : List.of(inst.getStarter());
+            } else {
+                ids = operatorResolver.resolve(inst.getDefId(), node.getNodeKey(), inst.getId(),
+                    inst.getStarter(), currentOperator);
+            }
+            if (ids == null || ids.isEmpty()) {
+                return null;
+            }
+            List<String> names = new ArrayList<>();
+            for (Long id : ids) {
+                if (id == null || id <= 0 || names.size() >= MAX_OPERATOR_NAMES) {
+                    continue;
+                }
+                try {
+                    R<UserInfo> r = userClient.userInfo(id);
+                    if (r != null && r.getData() != null && r.getData().getUser() != null
+                        && r.getData().getUser().getRealName() != null) {
+                        names.add(r.getData().getUser().getRealName());
+                    }
+                } catch (Exception ignore) {
+                    // 单个用户查询失败不影响整列展示
+                }
+            }
+            if (names.isEmpty()) {
+                return null;
+            }
+            String joined = String.join("、", names);
+            return ids.size() > MAX_OPERATOR_NAMES ? joined + " 等" + ids.size() + "人" : joined;
+        } catch (Exception e) {
+            log.debug("[blade-workflow] 解析退回候选节点操作者失败. defId={}, nodeKey={}",
+                inst.getDefId(), node.getNodeKey(), e);
+            return null;
+        }
     }
 
     @Override
@@ -789,9 +867,59 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (!creatorNode.getNodeKey().equals(parkedKey)) {
             processService.moveActivity(inst.getEngineInstId(), parkedKey, creatorNode.getNodeKey(), vars);
         }
+        // 「直达本节点」：发起人重新提交后不重新逐级走，直接跳回执行退回的节点
+        if (jumpDirectIfMarked(inst, operator)) {
+            log.info("[blade-workflow] 退回发起人后重新提交（直达模式）. instId={}, operator={}",
+                inst.getId(), operator);
+            return;
+        }
         instanceService.advance(inst.getId(), operator);
         log.info("[blade-workflow] 退回发起人后重新提交. instId={}, creatorNode={}, operator={}",
             inst.getId(), creatorNode.getNodeKey(), operator);
+    }
+
+    /**
+     * 「直达本节点」退回的重新提交跳转：实例带有退回标记（引擎变量
+     * {@link #VAR_RESUBMIT_DIRECT_NODE} = 执行退回的节点Key）时，把引擎当前节点
+     * 的 token 直接移动到该节点（跳过中间节点），并清除标记。
+     *
+     * <p>与 {@link #reject} 的回退同一机制（{@code moveActivity} + {@code advance}），
+     * 中间节点不产生待办、不触发附加操作 —— 即 ecology「退回后提交直达本节点」语义。</p>
+     *
+     * @return true=已执行直达跳转（调用方跳过常规 advance）；false=无标记或不适用（逐级审批）
+     */
+    private boolean jumpDirectIfMarked(WfInstance inst, Long operator) {
+        Object mark = processService.getVariable(inst.getEngineInstId(), VAR_RESUBMIT_DIRECT_NODE);
+        if (mark == null || String.valueOf(mark).isBlank()) {
+            return false;
+        }
+        String directNodeKey = String.valueOf(mark);
+        // 先清标记再跳转：无论后续是否成功，绝不让标记残留到再下一次提交
+        processService.removeVariables(inst.getEngineInstId(), List.of(VAR_RESUBMIT_DIRECT_NODE));
+        if (loadNode(inst.getDefId(), directNodeKey) == null) {
+            log.warn("[blade-workflow] 直达本节点跳转失败：目标节点已不存在，降级为逐级审批. "
+                + "instId={}, directNodeKey={}", inst.getId(), directNodeKey);
+            return false;
+        }
+        // complete 之后 token 落在下一节点；多 token（并行网关）或已到终点时无法安全直达，
+        // 一律降级为逐级审批（标记已清，不会影响后续提交）
+        List<TaskVO> current = processService.currentTasks(inst.getEngineInstId());
+        if (current.size() != 1) {
+            log.info("[blade-workflow] 直达本节点不适用（当前引擎活动任务数={}），按逐级审批继续. instId={}",
+                current.size(), inst.getId());
+            return false;
+        }
+        String fromKey = current.get(0).getTaskDefinitionKey();
+        if (directNodeKey.equals(fromKey)) {
+            // 已直达目标节点（如退回目标就是下一节点），无需跳转
+            return false;
+        }
+        // 与退回同口径：moveActivity + advance(REJECT)（退回链路不做「流程异常处理」兜底）
+        processService.moveActivity(inst.getEngineInstId(), fromKey, directNodeKey, null);
+        instanceService.advance(inst.getId(), operator, null, null, AdvanceSrc.REJECT);
+        log.info("[blade-workflow] 退回后重新提交直达原节点. instId={}, from={}, to={}, operator={}",
+            inst.getId(), fromKey, directNodeKey, operator);
+        return true;
     }
 
     /**

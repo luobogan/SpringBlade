@@ -27,4 +27,8 @@ public class RejectDTO implements Serializable {
     @Schema(description = "需提醒的已走过节点Key列表（退回时一并提醒，对应 ecology isrejectremind）")
     private List<String> remindNodeKeys;
 
+    @Schema(description = "退回后再提交的处理方式：1=逐级审批（缺省，重新按顺序经过各节点） "
+        + "2=直达本节点（重新提交时跳过中间节点，直接回到本次执行退回的节点）")
+    private Integer resubmitMode;
+
 }
