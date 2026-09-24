@@ -80,7 +80,10 @@ CREATE TABLE IF NOT EXISTS `wf_process_definition` (
     `status`        INT          NOT NULL DEFAULT 0      COMMENT '0草稿 1已发布 2停用',
     `is_deleted`    INT          NOT NULL DEFAULT 0      COMMENT '逻辑删除:1已删 0未删',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_proc_key_version` (`proc_key`, `version`),
+    -- 唯一键纳入 is_deleted：removeDefinition 为逻辑删除（物理行仍在），
+    -- 若不含 is_deleted，删后重导相同 proc_key+version 会撞 Duplicate entry。
+    -- 活跃行(is_deleted=0)仍互斥防真重复；软删行(is_deleted=1)可与活跃行共存。
+    UNIQUE KEY `uk_proc_key_version` (`proc_key`, `version`, `is_deleted`),
     KEY `idx_form_status` (`form_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='流程定义';
 

@@ -656,18 +656,55 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (dto == null || dto.getBpmnXml() == null || dto.getBpmnXml().isBlank()) {
             throw new ServiceException("BPMN 内容不能为空");
         }
-        // 新建版本=1 的草稿定义（procKey 由 importBpmnXml 内部按 BPMN process id 校正）
+        // 新建版本=1 的草稿定义。
+        // ⚠️ 数据库 wf_process_definition.proc_key 为 NOT NULL 且无默认值，必须在 insert 前赋值，
+        // 否则报「Field 'proc_key' doesn't have a default value」导致导入 500。
+        // 优先取 BPMN process id（与 saveBpmn 内部校正一致），缺失时退化为唯一占位值。
+        String procKey = extractProcKey(dto.getBpmnXml());
+
+        // 方案1：导入前物理清掉同 proc_key+version(=1) 的旧记录（含逻辑删除的幽灵行），
+        // 彻底免疫「逻辑删除 + 唯一键冲突」与「连续软删两次」的边界；也让重复导入幂等。
+        // 占位 key（import_ 开头）不会命中既有行，无需清理。
+        if (procKey != null && !procKey.isBlank()) {
+            List<WfProcessDefinition> olds = defMapper.selectAllByProcKeyVersion(procKey, 1);
+            for (WfProcessDefinition old : olds) {
+                physicalRemoveDefinition(old.getId());
+            }
+        }
+
         WfProcessDefinition def = new WfProcessDefinition();
         def.setName(dto.getName() != null && !dto.getName().isBlank() ? dto.getName() : "未命名流程");
         def.setFormId(dto.getFormId());
         def.setType(dto.getType());
         def.setVersion(1);
         def.setStatus(0);
-        def.setActiveVersionId(null);
+        // 注意：这里先不设 activeVersionId（保持 null），原因见下方自锚定。
+        def.setProcKey(procKey != null && !procKey.isBlank() ? procKey : ("import_" + System.currentTimeMillis()));
         defMapper.insert(def);
         Long defId = def.getId();
+        // 自锚定：version=1 的草稿为「单版本流程」，锚点应为自身 id（对齐 createDefinition / saveBpmn）。
+        // 不能直接 setActiveVersionId(null) 后就完事：MyBatis-Plus 插入策略会跳过 null 字段，
+        // 落到库列默认值 -1，导致前端「版本组仅显示激活版本」过滤把该草稿整行丢弃、列表看不到。
+        def.setActiveVersionId(defId);
+        defMapper.updateById(def);
         importBpmnXml(defId, dto.getBpmnXml());
         return defId;
+    }
+
+    /** 从 BPMN XML（base64 或原文）解析 <process id="...">，作为 proc_key 初值 */
+    private String extractProcKey(String bpmnXml) {
+        if (bpmnXml == null || bpmnXml.isBlank()) {
+            return null;
+        }
+        String xml = bpmnXml.indexOf('<') >= 0 ? bpmnXml
+            : new String(java.util.Base64.getDecoder().decode(bpmnXml), java.nio.charset.StandardCharsets.UTF_8);
+        int idx = xml.indexOf("<process");
+        if (idx < 0) {
+            return null;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("id\\s*=\\s*\"([^\"]+)\"").matcher(xml.substring(idx));
+        return m.find() ? m.group(1) : null;
     }
 
     @Override
@@ -1421,8 +1458,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         Long anchor = anchorOf(def);
         List<WfProcessDefinition> group = versionGroup(anchor);
         List<Long> groupIds = group.stream().map(WfProcessDefinition::getId).collect(Collectors.toList());
+        // 版本组可能因 @TableLogic 过滤为空（如正在物理清理的「幽灵行」本身被排除），
+        // 此时退化为只检查本定义，既避免 def_id IN () 的非法 SQL，也保留「在用则禁止删除」保护。
+        List<Long> checkIds = groupIds.isEmpty() ? List.of(id) : groupIds;
         Long used = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
-            .in(WfInstance::getDefId, groupIds)
+            .in(WfInstance::getDefId, checkIds)
             .eq(WfInstance::getIsTest, 0)
             .eq(WfInstance::getIsDeleted, 0));
         if (used != null && used > 0) {
@@ -1456,6 +1496,64 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         // ⑥ 删除定义本身（逻辑删除或物理删除取决于实体 @TableLogic 配置；均会从列表消失）
         defMapper.deleteById(id);
+        return true;
+    }
+
+    /**
+     * 物理删除流程定义（含子表级联），绕过 @TableLogic。
+     * <p>用于导入时清掉同 proc_key+version 的旧记录（含逻辑删除的「幽灵行」），
+     * 彻底避免「逻辑删除 + 唯一键冲突」以及「连续软删两次」的边界；让重复导入幂等。
+     * 子表清理逻辑与 {@link #removeDefinition(Long)} 一致（节点/操作者/权限/出口/布局）。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean physicalRemoveDefinition(Long id) {
+        // 用原生查询读行（绕过 @TableLogic，幽灵行也能读到），用于清理前取 form_id 与版本组
+        WfProcessDefinition def = defMapper.selectByIdIgnoreLogic(id);
+        if (def == null) {
+            return false;
+        }
+        // 删除前保护：同版本组内存在正式（非测试）且在用（未删除）的流程实例则禁止删除
+        Long anchor = anchorOf(def);
+        List<WfProcessDefinition> group = versionGroup(anchor);
+        List<Long> groupIds = group.stream().map(WfProcessDefinition::getId).collect(Collectors.toList());
+        // 版本组可能因 @TableLogic 过滤为空（如正在物理清理的「幽灵行」本身被排除），
+        // 此时退化为只检查本定义，既避免 def_id IN () 的非法 SQL，也保留「在用则禁止删除」保护。
+        List<Long> checkIds = groupIds.isEmpty() ? List.of(id) : groupIds;
+        Long used = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .in(WfInstance::getDefId, checkIds)
+            .eq(WfInstance::getIsTest, 0)
+            .eq(WfInstance::getIsDeleted, 0));
+        if (used != null && used > 0) {
+            throw new ServiceException("该流程正在使用中（存在流程实例），无法删除");
+        }
+        // ① 节点列表（用于级联清理操作者 / 布局）
+        List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, id));
+        List<Long> nodeIds = nodes.stream().map(WfProcessNode::getId)
+            .filter(Objects::nonNull).collect(Collectors.toList());
+        // ② 操作者（按 node_id 批量）
+        if (!nodeIds.isEmpty()) {
+            operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+                .in(WfNodeOperator::getNodeId, nodeIds));
+        }
+        // ③ 字段权限 / 明细权限 / 出口连线（按 def_id 整定义清理）
+        fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery().eq(WfNodeFieldPerm::getDefId, id));
+        detailPermMapper.delete(Wrappers.<WfNodeDetailPerm>lambdaQuery().eq(WfNodeDetailPerm::getDefId, id));
+        linkMapper.delete(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, id));
+        // ④ 节点本身
+        nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, id));
+        // ⑤ 表单布局（best-effort，跨服务）
+        try {
+            if (def.getFormId() != null && formmodeClient != null) {
+                for (WfProcessNode n : nodes) {
+                    formmodeClient.deleteFormLayoutByNode(def.getFormId(), n.getNodeKey());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 清理流程布局失败（定义已移除）. defId={}", id, e);
+        }
+        // ⑥ 物理删除定义本身（绕过 @TableLogic，彻底移除行，解除唯一键占用）
+        defMapper.physicalDeleteById(id);
         return true;
     }
 
