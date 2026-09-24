@@ -9,9 +9,9 @@
     <packaging>pom</packaging>
 
     <properties>
-        <revision>5.0.1</revision>
+        <revision>5.0.2</revision>
 
-        <blade.tool.version>5.0.1</blade.tool.version>
+        <blade.tool.version>5.0.2</blade.tool.version>
 
         <!-- Flowable 流程引擎版本（Apache-2.0，自行集成） -->
         <flowable.version>7.1.0</flowable.version>
