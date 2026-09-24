@@ -28,6 +28,9 @@ public class SimulateResultVO {
     @Schema(description = "可读摘要")
     private String summary;
 
+    @Schema(description = "可读流转时间线（带时间戳的叙述式走查日志，逐事件一行）：到达节点/节点前附加操作/开始自动测试/操作者提交/通过节点/执行出口/生成流程编号…")
+    private List<String> logLines;
+
     @Data
     @Schema(description = "流转路径中的一段")
     public static class PathStep {

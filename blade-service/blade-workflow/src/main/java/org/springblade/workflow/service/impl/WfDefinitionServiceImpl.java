@@ -87,6 +87,12 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.springblade.core.tool.api.R;
+import org.springblade.system.user.entity.UserInfo;
+import org.springblade.system.user.feign.IUserClient;
+import org.springblade.workflow.resolver.WfOperatorResolver;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * 流程定义服务实现
@@ -131,6 +137,12 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     /** 自定义操作（按钮 + 动作 + 权限矩阵）服务：复用其覆盖式删插，保证 op→action/right 外键一致 */
     private final IWfCustomOperationService customOperationService;
+
+    /** 节点操作者解析：把配置（人员/部门/角色/岗位/创建人…）展开成具体办理人ID（模拟日志展示用） */
+    private final WfOperatorResolver operatorResolver;
+
+    /** 用户中心：模拟日志按用户ID换真实姓名（与「退回候选」展示同源） */
+    private final IUserClient userClient;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -2105,8 +2117,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         Set<String> visitedNodes = new HashSet<>();
         int[] steps = {0};
         final int MAX_STEPS = 500;
-        WalkCtx ctx = new WalkCtx(nodeMap, outLinks, formData, nodeStatus, nodeMsg, path, full,
-            fieldPermNodeKeys);
+        List<String> logLines = new ArrayList<>();
+        LocalDateTime base = LocalDateTime.now().withNano(0);
+        DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        long[] clock = {0};
+        Map<Long, String> nameCache = new HashMap<>();
+        boolean[] billGenerated = {false};
+        boolean[] firstSubmitDone = {false};
+        WalkCtx ctx = new WalkCtx(defId, nodeMap, outLinks, formData, nodeStatus, nodeMsg, path, full,
+            fieldPermNodeKeys, logLines, base, dtf, clock, nameCache, billGenerated, firstSubmitDone);
         if (startKey != null) {
             walkNode(startKey, visitedNodes, steps, MAX_STEPS, ctx);
         }
@@ -2153,6 +2172,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         result.setAllPassed(allPassed && !path.isEmpty());
         result.setNodes(nodeResults);
         result.setPath(path);
+        result.setLogLines(ctx.log);
         if (allPassed && !path.isEmpty()) {
             result.setSummary("流程图走通：所有节点均从起点可达且能到达终点。");
         } else {
@@ -2171,6 +2191,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     /** 走查上下文（避免方法参数过长） */
     private static class WalkCtx {
+        final Long defId;
         final Map<String, WfProcessNode> nodeMap;
         final Map<String, List<WfNodeLink>> outLinks;
         final Map<String, Object> formData;
@@ -2181,11 +2202,27 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         final boolean full;
         /** 已配置「表单内容（字段权限）」的节点 key 集合（创建/归档节点据此校验） */
         final Set<String> fieldPermNodeKeys;
+        /** 可读时间线日志（逐事件一行，带时间戳） */
+        final List<String> log;
+        /** 模拟开始基准时刻（纳秒清零） */
+        final LocalDateTime base;
+        final DateTimeFormatter dtf;
+        /** 事件时钟：每产生一条日志 +1 秒，使时间线单调递增 */
+        final long[] clock;
+        /** 用户ID → 姓名 缓存（避免同一用户重复调 feign） */
+        final Map<Long, String> nameCache;
+        /** 流程编号是否已生成（离开创建节点时仅一次） */
+        final boolean[] billGenerated;
+        /** 「开始自动测试」是否已输出（全局仅一次） */
+        final boolean[] firstSubmitDone;
 
-        WalkCtx(Map<String, WfProcessNode> nodeMap, Map<String, List<WfNodeLink>> outLinks,
+        WalkCtx(Long defId, Map<String, WfProcessNode> nodeMap, Map<String, List<WfNodeLink>> outLinks,
                 Map<String, Object> formData, Map<String, Integer> nodeStatus,
                 Map<String, String> nodeMsg, List<SimulateResultVO.PathStep> path, boolean full,
-                Set<String> fieldPermNodeKeys) {
+                Set<String> fieldPermNodeKeys, List<String> log, LocalDateTime base,
+                DateTimeFormatter dtf, long[] clock, Map<Long, String> nameCache,
+                boolean[] billGenerated, boolean[] firstSubmitDone) {
+            this.defId = defId;
             this.fieldPermNodeKeys = fieldPermNodeKeys;
             this.nodeMap = nodeMap;
             this.outLinks = outLinks;
@@ -2194,10 +2231,17 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             this.nodeMsg = nodeMsg;
             this.path = path;
             this.full = full;
+            this.log = log;
+            this.base = base;
+            this.dtf = dtf;
+            this.clock = clock;
+            this.nameCache = nameCache;
+            this.billGenerated = billGenerated;
+            this.firstSubmitDone = firstSubmitDone;
         }
     }
 
-    /** 递归走查单个节点：校验 + 选分支 + 记录路径 */
+    /** 递归走查单个节点：校验 + 选分支 + 记录路径 + 生成可读时间线日志 */
     private void walkNode(String nodeKey, Set<String> visitedNodes, int[] steps, int maxSteps, WalkCtx ctx) {
         if (nodeKey == null || steps[0] >= maxSteps) {
             return;
@@ -2217,8 +2261,24 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 ctx.nodeMsg.put(nodeKey, problem);
             }
         }
+        String nodeName = node.getNodeName() == null ? nodeKey : node.getNodeName();
+        Integer nodeType = node.getNodeType();
+        // —— 到达节点 + 操作者 ——
+        ctx.log.add(fmtTs(ctx) + " 到达节点\"" + nodeName + "\"，操作者\"" + operatorDisplay(ctx, nodeKey) + "\"");
+        // —— 节点前附加操作 ——
+        ctx.log.add(fmtTs(ctx) + " 执行节点\"" + nodeName + "\"的节点前附加操作");
+        // —— 开始自动测试（全局仅一次）——
+        if (!ctx.firstSubmitDone[0]) {
+            ctx.firstSubmitDone[0] = true;
+            ctx.log.add(fmtTs(ctx) + " 开始自动测试");
+        }
+        // —— 操作者提交 ——
+        ctx.log.add(fmtTs(ctx) + " 操作者\"" + submitterDisplay(ctx, nodeKey) + "\"提交");
+        // —— 通过节点 ——
+        ctx.log.add(fmtTs(ctx) + " 通过节点\"" + nodeName + "\"");
+
         // 归档节点：终点
-        if (node.getNodeType() != null && node.getNodeType() == 3) {
+        if (nodeType != null && nodeType == 3) {
             return;
         }
         List<WfNodeLink> outs = ctx.outLinks.getOrDefault(nodeKey, Collections.emptyList());
@@ -2242,24 +2302,96 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         if (taken.isEmpty()) {
             // 非归档节点却无后续出口 → 死路（线可能画错，或漏连出口）
-            if (node.getNodeType() != null && node.getNodeType() != 3) {
+            if (nodeType != null && nodeType != 3) {
                 ctx.nodeStatus.put(nodeKey, 2);
                 ctx.nodeMsg.put(nodeKey, "非归档节点却无后续出口，流程走不通（连线可能画错或漏连）");
+                ctx.log.add(fmtTs(ctx) + " 节点\"" + nodeName + "\"无后续出口，流程走不通（连线可能画错或漏连）");
             }
             return;
         }
+        boolean isCreate = nodeType != null && nodeType == 0;
         for (WfNodeLink l : taken) {
             SimulateResultVO.PathStep step = new SimulateResultVO.PathStep();
             step.setFromNodeKey(l.getFromNodeKey());
             step.setToNodeKey(l.getToNodeKey());
             step.setConditionCn(l.getConditionCn());
             ctx.path.add(step);
+            String condCn = (l.getConditionCn() == null || l.getConditionCn().isBlank())
+                ? "默认出口" : l.getConditionCn();
+            // —— 执行出口 ——
+            ctx.log.add(fmtTs(ctx) + " 执行出口\"" + condCn + "\"");
+            // —— 生成流程编号（离开创建节点时仅一次）——
+            if (isCreate && !ctx.billGenerated[0]) {
+                ctx.billGenerated[0] = true;
+                ctx.log.add(fmtTs(ctx) + " 出口\"" + condCn + "\"生成流程编号");
+            }
             String next = l.getToNodeKey();
             if (!visitedNodes.contains(next)) {
                 visitedNodes.add(next);
                 walkNode(next, visitedNodes, steps, maxSteps, ctx);
             }
         }
+    }
+
+    /** 时间戳：基于模拟开始时刻，每事件递增 1 秒，格式 yyyy-MM-dd HH:mm:ss */
+    private String fmtTs(WalkCtx ctx) {
+        return ctx.base.plusSeconds(ctx.clock[0]++).format(ctx.dtf);
+    }
+
+    /** 节点全部操作者展示：「姓名（ID）」，多操作者以「，」分隔；无配置时返回「未配置操作者」 */
+    private String operatorDisplay(WalkCtx ctx, String nodeKey) {
+        return joinOperatorNames(ctx, safeResolve(ctx, nodeKey));
+    }
+
+    /** 提交人展示：取首个解析出的操作者「姓名（ID）」，无人时返回「系统」 */
+    private String submitterDisplay(WalkCtx ctx, String nodeKey) {
+        List<Long> ids = safeResolve(ctx, nodeKey);
+        if (ids.isEmpty()) {
+            return "系统";
+        }
+        Long first = ids.get(0);
+        String name = ctx.nameCache.computeIfAbsent(first, this::fetchName);
+        return name != null ? name + "（" + first + "）" : "（" + first + "）";
+    }
+
+    /** 调 WfOperatorResolver 解析节点办理人（设计期无实例，starter/currentOperator 传 null；失败降级为空） */
+    private List<Long> safeResolve(WalkCtx ctx, String nodeKey) {
+        try {
+            return operatorResolver.resolveWithForm(ctx.defId, nodeKey, ctx.formData, null, null);
+        } catch (Exception e) {
+            log.debug("[blade-workflow] 模拟日志解析操作者失败. defId={}, nodeKey={}", ctx.defId, nodeKey, e);
+            return List.of();
+        }
+    }
+
+    /** 把用户ID集合拼成「姓名（ID）」并用「，」连接；空时返回「未配置操作者」 */
+    private String joinOperatorNames(WalkCtx ctx, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return "未配置操作者";
+        }
+        List<String> parts = new ArrayList<>();
+        for (Long id : ids) {
+            if (id == null || id <= 0) {
+                continue;
+            }
+            String name = ctx.nameCache.computeIfAbsent(id, this::fetchName);
+            parts.add(name != null ? name + "（" + id + "）" : "（" + id + "）");
+        }
+        return parts.isEmpty() ? "未配置操作者" : String.join("，", parts);
+    }
+
+    /** 按用户ID换真实姓名（失败降级为 null，不抛异常阻塞模拟） */
+    private String fetchName(Long id) {
+        try {
+            R<UserInfo> r = userClient.userInfo(id);
+            if (r != null && r.getData() != null && r.getData().getUser() != null) {
+                String n = r.getData().getUser().getRealName();
+                return n != null ? n : null;
+            }
+        } catch (Exception ignore) {
+            // 单个用户查询失败不影响整条日志
+        }
+        return null;
     }
 
     /**

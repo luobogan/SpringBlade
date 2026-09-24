@@ -199,7 +199,7 @@ public class WfTestServiceImpl implements IWfTestService {
             int idx = 0;
             for (Scenario sc : scenarios) {
                 idx++;
-                SingleRun sr = runSingle(def, deploymentId, testUserId, sc, fmt, logLines, idx);
+                SingleRun sr = runSingle(def, deploymentId, testUserId, sc, fmt, logLines, idx, nodeList, links);
                 sr.nodeTimes.forEach((k, v) -> nodeTimesUnion.merge(k, v, Integer::sum));
                 visitedUnion.addAll(sr.visitedNodes);
                 sr.linkTimes.forEach((k, v) -> linkTimesUnion.merge(k, v, Integer::sum));
@@ -249,7 +249,8 @@ public class WfTestServiceImpl implements IWfTestService {
 
     /** 单个场景：真实发起一个测试态实例并自动驱动到结束，返回该场景的覆盖数据 */
     private SingleRun runSingle(WfProcessDefinition def, String deploymentId, Long testUserId,
-            Scenario sc, SimpleDateFormat fmt, List<String> logLines, int idx) {
+            Scenario sc, SimpleDateFormat fmt, List<String> logLines, int idx,
+            List<WfProcessNode> nodeList, List<WfNodeLink> links) {
         SingleRun sr = new SingleRun();
         Long defId = def.getId();
         try {
@@ -290,6 +291,26 @@ public class WfTestServiceImpl implements IWfTestService {
             logLines.add(fmt.format(new Date()) + " [场景" + idx + "] 已真实发起测试实例 instId=" + instId
                 + "（engineInstId=" + (inst == null ? "" : inst.getEngineInstId()) + "）");
 
+            // 叙述：创建（开始）节点（引擎在 start 时已自动办结，不在待办循环里）
+            WfProcessNode createNode = null;
+            for (WfProcessNode n : nodeList) {
+                if (n.getNodeType() != null && n.getNodeType() == 0) {
+                    createNode = n;
+                    break;
+                }
+            }
+            String lastNodeKey = null;
+            boolean[] started = { false };
+            if (createNode != null) {
+                List<Long> createOps = new ArrayList<>();
+                createOps.add(testUserId);
+                appendArrival(logLines, fmt, new Date(),
+                    nodeName(nodeList, createNode.getNodeKey()), createOps, started);
+                appendNodeSubmit(logLines, fmt, new Date(),
+                    nodeName(nodeList, createNode.getNodeKey()), createOps);
+                lastNodeKey = createNode.getNodeKey();
+            }
+
             int steps = 0;
             while (inst != null && WfInstance.STATUS_RUNNING == inst.getStatus() && steps < MAX_STEPS) {
                 steps++;
@@ -306,6 +327,30 @@ public class WfTestServiceImpl implements IWfTestService {
                     }
                     continue;
                 }
+                String curNodeKey = todos.get(0).getNodeKey();
+                // 执行出口（离开上一节点）
+                if (lastNodeKey != null && !lastNodeKey.equals(curNodeKey)) {
+                    String condCn = findCondCn(links, nodeList, lastNodeKey, curNodeKey);
+                    logLines.add(fmt.format(new Date()) + " 执行出口\"" + condCn + "\"");
+                    if (isCreateNode(nodeList, lastNodeKey)) {
+                        logLines.add(fmt.format(new Date()) + " 出口\"" + condCn + "\"生成流程编号");
+                    }
+                }
+                // 聚合本节点办理人（会签 / 多任务时合并展示，用于「到达节点」列出完整名单）
+                List<Long> ops = new ArrayList<>();
+                for (WfTask t : todos) {
+                    if (t.getAssignee() != null && !ops.contains(t.getAssignee())) {
+                        ops.add(t.getAssignee());
+                    }
+                }
+                // 本次实际办理人（while 每轮只 approve 掉 todos 的第一人，避免会签其余人被重复列出）
+                List<Long> approvedOps = new ArrayList<>();
+                if (todos.get(0).getAssignee() != null) {
+                    approvedOps.add(todos.get(0).getAssignee());
+                }
+                appendArrival(logLines, fmt, new Date(), nodeName(nodeList, curNodeKey), ops, started);
+                appendNodeSubmit(logLines, fmt, new Date(), nodeName(nodeList, curNodeKey), approvedOps);
+                lastNodeKey = curNodeKey;
                 for (WfTask t : todos) {
                     try {
                         // 模拟真实审批提交：节点必填矩阵校验（与 ExcelPreviewPage 提交前 validateForm 同款口径）。
@@ -338,8 +383,6 @@ public class WfTestServiceImpl implements IWfTestService {
                         }
                         // 一键测试的自动通过意见同样加统一前缀（C15）
                         taskService.autoApprove(t.getId(), testOpinion("测试自动通过"), t.getAssignee());
-                        logLines.add(fmt.format(new Date()) + " 节点【" + t.getNodeKey() + "】已自动通过（办理人="
-                            + t.getAssignee() + "）");
                     } catch (Exception e) {
                         // 节点配置/引擎执行异常：记入问题节点，优雅终止（不再向外抛原始异常）
                         String msg = "节点配置或引擎执行异常，已中断测试：" + e.getMessage();
@@ -1252,7 +1295,7 @@ public class WfTestServiceImpl implements IWfTestService {
         boolean aborted = running && todos.isEmpty();
 
         long begin = inst.getStartTime() == null ? System.currentTimeMillis() : inst.getStartTime().getTime();
-        List<String> logLines = buildProgressLog(inst, nodeList);
+        List<String> logLines = buildProgressLog(inst, nodeList, links);
 
         WfTestResultVO result = buildResult(nodeList, new LinkedHashMap<>(), instId,
             cov.nodeTimes, cov.visitedNodes, logLines, begin, reachedEnd, aborted);
@@ -1823,8 +1866,101 @@ public class WfTestServiceImpl implements IWfTestService {
         return cov;
     }
 
-    /** 由审批日志还原「测试进度日志」（交互式测试逐次提交的痕迹） */
-    private List<String> buildProgressLog(WfInstance inst, List<WfProcessNode> nodeList) {
+    /** 操作者标签：「姓名（ID）」；解析失败或 ID 非法时返回 null（由调用方降级为「系统」） */
+    private String opLabel(Long id) {
+        if (id == null || id <= 0) {
+            return null;
+        }
+        String name = resolveName(id);
+        if (name != null && !name.equals(String.valueOf(id))) {
+            return name + "（" + id + "）";
+        }
+        return "（" + id + "）";
+    }
+
+    /** 把用户ID集合拼成「姓名（ID）」并用「，」连接；空时返回「系统」 */
+    private String joinOpNames(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return "系统";
+        }
+        List<String> parts = new ArrayList<>();
+        for (Long id : ids) {
+            String s = opLabel(id);
+            if (s != null) {
+                parts.add(s);
+            }
+        }
+        return parts.isEmpty() ? "系统" : String.join("，", parts);
+    }
+
+    /** 取出口中文名：优先 conditionCn，缺失时用目标节点名兜底 */
+    private String findCondCn(List<WfNodeLink> links, List<WfProcessNode> nodeList, String fromKey, String toKey) {
+        if (links != null) {
+            for (WfNodeLink l : links) {
+                if (fromKey != null && fromKey.equals(l.getFromNodeKey())
+                        && toKey != null && toKey.equals(l.getToNodeKey())) {
+                    if (l.getConditionCn() != null && !l.getConditionCn().isBlank()) {
+                        return l.getConditionCn();
+                    }
+                }
+            }
+        }
+        return nodeName(nodeList, toKey);
+    }
+
+    /** 是否为创建（开始）节点：nodeType == 0 */
+    private boolean isCreateNode(List<WfProcessNode> nodeList, String nodeKey) {
+        if (nodeList == null || nodeKey == null) {
+            return false;
+        }
+        for (WfProcessNode n : nodeList) {
+            if (nodeKey.equals(n.getNodeKey()) && n.getNodeType() != null && n.getNodeType() == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 追加单个节点的「到达」叙述：到达节点 / 节点前附加操作 / 开始自动测试(仅首节点) */
+    private void appendArrival(List<String> lines, SimpleDateFormat fmt, Date ts,
+            String nodeName, List<Long> operators, boolean[] started) {
+        String tsStr = fmt.format(ts == null ? new Date() : ts);
+        String opDisplay = joinOpNames(operators);
+        lines.add(tsStr + " 到达节点\"" + nodeName + "\"，操作者\"" + opDisplay + "\"");
+        lines.add(tsStr + " 执行节点\"" + nodeName + "\"的节点前附加操作");
+        if (!started[0]) {
+            lines.add(tsStr + " 开始自动测试");
+            started[0] = true;
+        }
+    }
+
+    /**
+     * 追加单个节点的「办理」叙述：逐操作者提交 + 节点整体通过。
+     *
+     * <p><b>会签 / 并行节点</b>：{@code operators} 含多人，每人各生成一条「操作者"姓名（ID）"提交」，
+     * 这样测试日志能清楚列出<b>每个会签审批人的审批记录</b>（不再只显示第一个）。
+     * 单人节点即一条；节点整体通过（会签=最后一人提交后节点才通过）放在所有提交记录之后。</p>
+     */
+    private void appendNodeSubmit(List<String> lines, SimpleDateFormat fmt, Date ts,
+            String nodeName, List<Long> operators) {
+        String tsStr = fmt.format(ts == null ? new Date() : ts);
+        if (operators != null) {
+            for (Long op : operators) {
+                String who = opLabel(op);
+                if (who != null) {
+                    lines.add(tsStr + " 操作者\"" + who + "\"提交");
+                }
+            }
+        }
+        lines.add(tsStr + " 通过节点\"" + nodeName + "\"");
+    }
+
+    /**
+     * 由审批日志还原「测试进度日志」为可读流转时间线（对齐 formmode 测试日志观感）：
+     * 到达节点 / 节点前附加操作 / 开始自动测试 / 操作者提交 / 通过节点 / 执行出口 / 生成流程编号 / 流程已结束。
+     * 真实运行中同一节点可能产生多条审批记录（会签 / 重复提交），这里按节点去重、聚合操作者，保证时间线清晰易读。
+     */
+    private List<String> buildProgressLog(WfInstance inst, List<WfProcessNode> nodeList, List<WfNodeLink> links) {
         List<String> lines = new ArrayList<>();
         if (inst == null || inst.getId() == null) {
             return lines;
@@ -1834,11 +1970,53 @@ public class WfTestServiceImpl implements IWfTestService {
             .eq(WfApprovalLog::getInstId, inst.getId())
             .orderByAsc(WfApprovalLog::getOperateTime)
             .orderByAsc(WfApprovalLog::getId));
+        // 按出现顺序收集去重节点 + 每节点聚合操作者
+        LinkedHashMap<String, List<Long>> byNode = new LinkedHashMap<>();
+        List<String> orderedKeys = new ArrayList<>();
         for (WfApprovalLog l : logs) {
-            String op = stripHtml(l.getOpinion());
-            lines.add(fmt.format(l.getOperateTime() == null ? new Date() : l.getOperateTime())
-                + " 节点【" + nodeName(nodeList, l.getNodeKey()) + "】" + logTypeCn(l.getLogType())
-                + (StringUtil.isBlank(op) ? "" : "：" + op));
+            String key = l.getNodeKey();
+            if (key == null) {
+                continue;
+            }
+            byNode.computeIfAbsent(key, k -> new ArrayList<>());
+            if (l.getOperator() != null && !byNode.get(key).contains(l.getOperator())) {
+                byNode.get(key).add(l.getOperator());
+            }
+            if (!orderedKeys.contains(key)) {
+                orderedKeys.add(key);
+            }
+        }
+        boolean[] started = { false };
+        int prevIdx = -1;
+        for (int i = 0; i < orderedKeys.size(); i++) {
+            String nodeKey = orderedKeys.get(i);
+            String nm = nodeName(nodeList, nodeKey);
+            Date ts = null;
+            for (WfApprovalLog l : logs) {
+                if (nodeKey.equals(l.getNodeKey()) && l.getOperateTime() != null) {
+                    ts = l.getOperateTime();
+                    break;
+                }
+            }
+            // 执行出口（离开上一节点）
+            if (prevIdx >= 0) {
+                String prevKey = orderedKeys.get(prevIdx);
+                String condCn = findCondCn(links, nodeList, prevKey, nodeKey);
+                String tsStr = fmt.format(ts == null ? new Date() : ts);
+                lines.add(tsStr + " 执行出口\"" + condCn + "\"");
+                if (prevIdx == 0) {
+                    lines.add(tsStr + " 出口\"" + condCn + "\"生成流程编号");
+                }
+            }
+            // 到达节点：列出该节点全部办理人（会签/并行取完整名单，来源=测试态待办，避免漏列任一会签人）
+            List<Long> fullOps = new ArrayList<>();
+            for (WfTestResultVO.TestOperatorVO v : toOperatorVos(inst.getId(), nodeKey)) {
+                fullOps.add(v.getUserId());
+            }
+            appendArrival(lines, fmt, ts, nm, fullOps, started);
+            // 逐操作者提交：会签/并行每人一条审批记录，单人节点即一条（来源=审批日志实际提交人）
+            appendNodeSubmit(lines, fmt, ts, nm, byNode.get(nodeKey));
+            prevIdx = i;
         }
         if (inst.getStatus() != null && WfInstance.STATUS_RUNNING != inst.getStatus()) {
             lines.add(fmt.format(inst.getEndTime() == null ? new Date() : inst.getEndTime())
@@ -1916,24 +2094,6 @@ public class WfTestServiceImpl implements IWfTestService {
         snapshotMapper.insert(snap);
     }
 
-    private String logTypeCn(String type) {
-        if (type == null) {
-            return "已办理";
-        }
-        switch (type) {
-            case WfApprovalLog.LOG_APPROVE: return "已批准";
-            case WfApprovalLog.LOG_SUBMIT: return "已提交";
-            case WfApprovalLog.LOG_REJECT: return "已退回";
-            case WfApprovalLog.LOG_FORWARD: return "已转发";
-            case WfApprovalLog.LOG_COMMENT: return "已批注";
-            case WfApprovalLog.LOG_TRANSFER: return "已转办";
-            case WfApprovalLog.LOG_SUPERVISE: return "已督办";
-            case WfApprovalLog.LOG_CIRCULATE: return "已抄送";
-            case WfApprovalLog.LOG_INSTRUCTION: return "已批示";
-            default: return "已办理";
-        }
-    }
-
     private String instanceStatusCn(Integer status) {
         if (status == null) {
             return "未知";
@@ -1946,17 +2106,6 @@ public class WfTestServiceImpl implements IWfTestService {
             case WfInstance.STATUS_SUSPENDED: return "已暂停";
             default: return "状态" + status;
         }
-    }
-
-    /** 去掉富文本标签，用于日志单行展示 */
-    private String stripHtml(String html) {
-        if (StringUtil.isBlank(html)) {
-            return "";
-        }
-        return html.replaceAll("<[^>]+>", "")
-            .replace("&nbsp;", " ").replace("&amp;", "&")
-            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
-            .trim();
     }
 
     /** 一次测试的覆盖采集结果 */
