@@ -13,8 +13,10 @@
 
         <blade.tool.version>5.0.2</blade.tool.version>
 
-        <!-- Flowable 流程引擎版本（Apache-2.0，自行集成） -->
-        <flowable.version>7.1.0</flowable.version>
+        <!-- Flowable 流程引擎版本（Apache-2.0，自行集成）
+             8.0.0 已 GA（2026-02-27，Maven Central release），基线 Boot 4.0.2 / Spring Framework 7.0.3。
+             升级需手工执行 MySQL 脚本：7.1.0→7.2.0→8.0.0（见 docs/Flowable7→8升级评估.md） -->
+        <flowable.version>8.0.0</flowable.version>
 
         <java.version>21</java.version>
         <maven.plugin.version>3.15.0</maven.plugin.version>
