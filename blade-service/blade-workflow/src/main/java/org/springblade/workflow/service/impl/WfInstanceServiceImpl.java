@@ -41,6 +41,7 @@ import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfSubflowService;
 import org.springblade.workflow.service.IWfTimeoutService;
+import org.springblade.workflow.service.helper.WfWriteHelper;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfInstanceService;
@@ -87,6 +88,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
     private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
+    /**
+     * 双写收口器：生命周期类操作（终结 / 暂停 / 恢复）的「台账 + 引擎」同写入口。
+     *
+     * <p>引擎调用被固化在收口器方法内部（非可选参数），调用方无法再「只写一边」，
+     * 从结构上杜绝历史 P0（撤销/撤回/终止漏调引擎导致的持久漂移）复发。
+     * 鉴权与测试态守卫仍在本类，不随之下沉。</p>
+     */
+    private final WfWriteHelper writeHelper;
     private final WfOperatorResolver operatorResolver;
     private final WfNodeLinkMapper linkMapper;
     /** 节点操作组：用于判定会签/依次（{@code wf_node_operator.sign_order}） */
@@ -1034,10 +1043,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 记录级鉴权：只有发起人本人（或流程管理员）能终止自己的申请
         WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "终止");
         assertNotTestInst(inst, "终止");
-        inst.setStatus(WfInstance.STATUS_SUSPENDED);
-        instanceMapper.updateById(inst);
-        appendLog(instId, null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
-            WfApprovalLog.LOG_SUPERVISE, "暂停流程");
+        // 双写收口：台账置暂停 + 流转日志 + 引擎挂起，三者同事务、不可只写其一
+        writeHelper.suspend(inst);
         return true;
     }
 
@@ -1052,10 +1059,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 属越权 —— 补齐为与 stop 同口径（见方案 V15 / C19）
         WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "恢复");
         assertNotTestInst(inst, "恢复");
-        inst.setStatus(WfInstance.STATUS_RUNNING);
-        instanceMapper.updateById(inst);
-        appendLog(instId, null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
-            WfApprovalLog.LOG_SUPERVISE, "恢复流程");
+        // 双写收口：台账置运行中 + 流转日志 + 引擎激活，三者同事务、不可只写其一
+        writeHelper.activate(inst);
         return true;
     }
 
@@ -1570,22 +1575,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         // 测试态：撤回 / 撤销 会终结实例并关闭其全部待办 —— 测试实例不走这条收尾路径（C19）
         assertNotTestInst(inst, action);
-        inst.setStatus(status);
-        inst.setEndTime(new Date());
-        instanceMapper.updateById(inst);
-
-        // 关闭所有未完成任务（含协办/征询待办：实例终止时一并清掉，避免孤儿待办）
-        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
-        for (WfTask t : tasks) {
-            t.setStatus(WfTask.STATUS_FINISHED);
-            t.setOperateTime(new Date());
-            taskMapper.updateById(t);
-        }
-        appendLog(instId, null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
-            WfApprovalLog.LOG_SUPERVISE, action + "：" + (opinion == null ? "" : opinion));
-        return true;
+        // 双写收口：台账置终态 + 关待办 + 流转日志 + 引擎终结，四者同事务、不可只写其一
+        return writeHelper.terminate(inst, status, opinion, action);
     }
 
     private WfProcessDefinition resolveDefinition(StartProcessDTO dto) {
@@ -1781,15 +1772,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     private void appendLog(Long instId, Long taskId, String nodeKey, Long operator,
-                           String logType, String opinion) {        WfApprovalLog log = new WfApprovalLog();
-        log.setInstId(instId);
-        log.setTaskId(taskId);
-        log.setNodeKey(nodeKey == null ? "" : nodeKey);
-        log.setOperator(operator);
-        log.setLogType(logType);
-        log.setOpinion(opinion == null ? "" : opinion);
-        log.setOperateTime(new Date());
-        logMapper.insert(log);
+                           String logType, String opinion) {
+        // 唯一实现收敛在 WfWriteHelper，避免同名日志写入逻辑在多处分散
+        writeHelper.appendLog(instId, taskId, nodeKey, operator, logType, opinion);
     }
 
     @Override

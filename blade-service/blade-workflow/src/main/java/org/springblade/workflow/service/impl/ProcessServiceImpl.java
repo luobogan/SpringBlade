@@ -259,6 +259,49 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public void deleteProcessInstance(String engineInstId, String reason) {
+        if (engineInstId == null || engineInstId.isBlank()) {
+            return;
+        }
+        try {
+            runtimeService.deleteProcessInstance(engineInstId, reason);
+            log.info("[blade-workflow] 已删除引擎流程实例. engineInstId={}, reason={}", engineInstId, reason);
+        } catch (org.flowable.common.engine.api.FlowableException ex) {
+            // 引擎实例已结束/不存在（如已自动完成、或弱关联实例已清理）：忽略，
+            // 业务终态仍生效，不让引擎异常把业务事务一起回滚（消除 ACT_RU_* 孤儿漂移）
+            log.warn("[blade-workflow] 删除引擎流程实例时未找到（已不存在），忽略. engineInstId={}", engineInstId);
+        }
+    }
+
+    @Override
+    public void suspendProcessInstance(String engineInstId) {
+        if (engineInstId == null || engineInstId.isBlank()) {
+            return;
+        }
+        try {
+            runtimeService.suspendProcessInstanceById(engineInstId);
+            log.info("[blade-workflow] 已挂起引擎流程实例. engineInstId={}", engineInstId);
+        } catch (org.flowable.common.engine.api.FlowableException ex) {
+            // 实例缺失或已挂起：忽略，业务「已暂停」状态仍生效
+            log.warn("[blade-workflow] 挂起引擎流程实例失败（已不存在/已挂起），忽略. engineInstId={}", engineInstId);
+        }
+    }
+
+    @Override
+    public void activateProcessInstance(String engineInstId) {
+        if (engineInstId == null || engineInstId.isBlank()) {
+            return;
+        }
+        try {
+            runtimeService.activateProcessInstanceById(engineInstId);
+            log.info("[blade-workflow] 已激活引擎流程实例. engineInstId={}", engineInstId);
+        } catch (org.flowable.common.engine.api.FlowableException ex) {
+            // 实例缺失或已激活：忽略，业务「运行中」状态仍生效
+            log.warn("[blade-workflow] 激活引擎流程实例失败（已不存在/已激活），忽略. engineInstId={}", engineInstId);
+        }
+    }
+
+    @Override
     public List<String> deploymentIdsByKeyLike(String keyLike) {
         if (keyLike == null || keyLike.isBlank()) {
             return new ArrayList<>();

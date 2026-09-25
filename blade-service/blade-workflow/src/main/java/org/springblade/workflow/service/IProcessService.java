@@ -182,6 +182,39 @@ public interface IProcessService {
     void suspendProcessDefinition(String procDefId);
 
     /**
+     * 删除（终结）指定<b>运行态</b>引擎流程实例。
+     *
+     * <p>用于「撤销 / 撤回」动作的引擎收尾：业务把 {@code wf_instance} 置终态、
+     * 关闭全部待办后，必须把引擎里仍运行着的 {@code ACT_RU_EXECUTION/ACT_RU_TASK}
+     * 一并删除，否则会出现「业务已结束、引擎却还挂着运行中任务」的持久漂移。</p>
+     *
+     * <p>本方法是<b>尽力而为</b>：实例在引擎中已不存在（已结束 / 弱关联实例已清理）时
+     * 捕获 {@code FlowableException} 忽略，不让引擎异常把业务事务一起回滚。</p>
+     *
+     * @param engineInstId 引擎实例ID（PROC_INST_ID_）；为空则跳过
+     * @param reason       终结原因（写入 ACT_HI_PROCINST.DELETE_REASON_）
+     */
+    void deleteProcessInstance(String engineInstId, String reason);
+
+    /**
+     * 挂起（暂停）指定<b>运行态</b>引擎流程实例：实例及其任务一并暂停，不能再流转。
+     *
+     * <p>用于「终止（暂停流程）」动作的引擎收尾，使引擎与 {@code wf_instance.status=已暂停}
+     * 对齐。尽力而为：实例缺失或已挂起时捕获 {@code FlowableException} 忽略。</p>
+     *
+     * @param engineInstId 引擎实例ID；为空则跳过
+     */
+    void suspendProcessInstance(String engineInstId);
+
+    /**
+     * 激活（恢复）指定引擎流程实例：与 {@link #suspendProcessInstance} 配对，
+     * 用于「恢复流程」动作的引擎收尾，使引擎与 {@code wf_instance.status=运行中} 对齐。
+     *
+     * @param engineInstId 引擎实例ID；为空则跳过
+     */
+    void activateProcessInstance(String engineInstId);
+
+    /**
      * 列出引擎中 <b>procKey 匹配给定模式</b> 的所有部署ID（去重）。
      *
      * <p>用途：清理「孤儿测试部署」（方案 §6.4 C9/C10 / S12）。测试部署走
