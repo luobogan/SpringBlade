@@ -98,6 +98,17 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+            <!-- Boot 4.1 的 repackage 按 @SpringBootApplication 注解探测启动类，
+                 识别不了 SpringBlade 的组合注解 @BladeCloudApplication（9 个服务都用该注解），
+                 故显式声明 mainClass，否则报 "Unable to find main class"。 -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>org.springblade.workflow.WorkflowApplication</mainClass>
+                    <finalName>${project.name}</finalName>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

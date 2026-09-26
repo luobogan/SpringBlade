@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="http://springblade.workflow"
+             id="definitions_customApprovalWorkflow">
+
+    <!--
+        自定义审批流程（customApprovalWorkflow）
+        ============================================================
+        语义约定（与需求对齐）：
+        1. 流程「入口」明确为【申请人填写】节点（startEvent 之后的首个 userTask）；
+           流程「出口」明确为【归档】节点（endEvent）。
+        2. 相邻节点之间的连线同时具备两种能力：
+             · 继续向下流转（forward）：审批通过时流转到下一节点；
+             · 驳回上一节点（reject）：审批不通过时回退到上一节点重新处理。
+           由各审批节点完成时写入的流程变量 outcome（approve / reject）驱动条件连线。
+        3. 每个审批节点的「向下连线」设为 default，保证 outcome 缺省/异常时安全向下；
+           「驳回连线」为条件连线（outcome == 'reject'），指向其上一节点。
+        4. 申请人填写为首个节点，无「上一节点」，故只有向下连线；归档为终态 endEvent。
+        5. assignee 表达式（${applicant} / ${supervisor} / ${deptApprover}）为占位，
+           实际由项目 WfOperatorResolver 在发起/推进时按组织数据解析并写入流程变量。
+    -->
+
+    <process id="customApprovalWorkflow" name="自定义审批流程" isExecutable="true">
+
+        <!-- 流程开始 -->
+        <startEvent id="startEvent" name="开始"/>
+
+        <!-- ① 申请人填写（流程入口节点） -->
+        <userTask id="fillTask" name="申请人填写" flowable:assignee="${applicant}">
+            <documentation>流程入口：申请人填写表单并提交，随后流转至主管审批。作为首个节点无驳回目标。</documentation>
+        </userTask>
+
+        <!-- ② 主管审批 -->
+        <userTask id="supervisorApprove" name="主管审批" flowable:assignee="${supervisor}"
+                  default="flow_supervisor_dept">
+            <documentation>审批通过→流转至部门审批；驳回→回退至申请人填写重新提交。</documentation>
+        </userTask>
+
+        <!-- ③ 部门审批 -->
+        <userTask id="deptApprove" name="部门审批" flowable:assignee="${deptApprover}"
+                  default="flow_dept_archive">
+            <documentation>审批通过→流转至归档；驳回→回退至主管审批重新审批。</documentation>
+        </userTask>
+
+        <!-- 流程归档（流程出口节点） -->
+        <endEvent id="archiveEnd" name="归档"/>
+
+        <!-- ============ 相邻节点连线：向下流转 + 驳回上一节点 ============ -->
+
+        <!-- 开始 → 申请人填写 -->
+        <sequenceFlow id="flow_start_fill" sourceRef="startEvent" targetRef="fillTask"/>
+
+        <!-- 申请人填写 → 主管审批（首个节点，仅向下，无条件） -->
+        <sequenceFlow id="flow_fill_supervisor" sourceRef="fillTask" targetRef="supervisorApprove"/>
+
+        <!-- 主管审批 → 部门审批（向下流转，default） -->
+        <sequenceFlow id="flow_supervisor_dept" sourceRef="supervisorApprove" targetRef="deptApprove">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${outcome == 'approve'}]]></conditionExpression>
+        </sequenceFlow>
+        <!-- 主管审批 → 申请人填写（驳回上一节点） -->
+        <sequenceFlow id="flow_supervisor_reject_fill" sourceRef="supervisorApprove" targetRef="fillTask">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${outcome == 'reject'}]]></conditionExpression>
+        </sequenceFlow>
+
+        <!-- 部门审批 → 归档（向下流转，default） -->
+        <sequenceFlow id="flow_dept_archive" sourceRef="deptApprove" targetRef="archiveEnd">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${outcome == 'approve'}]]></conditionExpression>
+        </sequenceFlow>
+        <!-- 部门审批 → 主管审批（驳回上一节点） -->
+        <sequenceFlow id="flow_dept_reject_supervisor" sourceRef="deptApprove" targetRef="supervisorApprove">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${outcome == 'reject'}]]></conditionExpression>
+        </sequenceFlow>
+
+    </process>
+
+</definitions>

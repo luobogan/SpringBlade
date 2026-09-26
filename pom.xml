@@ -14,9 +14,13 @@
         <blade.tool.version>5.0.2</blade.tool.version>
 
         <!-- Flowable 流程引擎版本（Apache-2.0，自行集成）
-             8.0.0 已 GA（2026-02-27，Maven Central release），基线 Boot 4.0.2 / Spring Framework 7.0.3。
-             升级需手工执行 MySQL 脚本：7.1.0→7.2.0→8.0.0（见 docs/Flowable7→8升级评估.md） -->
-        <flowable.version>8.0.0</flowable.version>
+             当前指向【本地源码构建】的 8.1.0-SNAPSHOT：源码 D:\workproject\springbladeandreact\flowable-engine，
+             已安装到 E:\project\mavenLib，构建需加 -Dmaven.repo.local=E:\project\mavenLib。
+             ⚠ 风险：8.1.0-SNAPSHOT 的 CURRENT_VERSION=8.1.0.1，而库内 schema.version=8.0.0.0；
+               官方尚无 8.0.0→8.1.0 升级脚本，且 databaseSchemaUpdate=none 会【跳过版本校验】，
+               可启动但存在静默 schema 不一致风险（见 docs/Flowable8升级执行记录.md）。
+             回退 GA：改回 8.0.0 即可 —— 库已升级至 8.0.0.0，版本一致。 -->
+        <flowable.version>8.1.0-SNAPSHOT</flowable.version>
 
         <java.version>21</java.version>
         <maven.plugin.version>3.15.0</maven.plugin.version>

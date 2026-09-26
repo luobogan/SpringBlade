@@ -116,6 +116,86 @@ mvn -pl blade-service/blade-workflow -am test -B
 
 ---
 
+## 5.2 切换为「本地源码构建」的 8.1.0-SNAPSHOT（2026-09-26）
+
+按需求把 `pom.xml` 的 `<flowable.version>` 从 GA `8.0.0` 改为本地构建的 **`8.1.0-SNAPSHOT`**
+（源码 `D:\workproject\springbladeandreact\flowable-engine`，已安装到 `E:\project\mavenLib`）。
+
+### 5.2.1 构建命令（须记录，后续重建用）
+
+`flowable-spring` 不在根 reactor 的默认模块里，而在 **`deploy` profile** 下，且该 profile 启用 GPG 签名。
+
+```powershell
+cd D:\workproject\springbladeandreact\flowable-engine
+mvn install -Pdeploy -pl modules/flowable-spring -am "-Dmaven.test.skip=true" "-Dgpg.skip=true" -B "-Dmaven.repo.local=E:\project\mavenLib"
+```
+
+> `-Dmaven.repo.local=E:\project\mavenLib` 必需：SNAPSHOT 装在 `E:\project\mavenLib`，
+> 而默认仓库 `C:\Users\Administrator\.m2\repository` 里没有它（本机无 settings.xml）。
+> `-Dgpg.skip=true` 必需：否则 `maven-gpg-plugin` 报 `Could not determine gpg version`。
+> 实测耗时约 3 分 48 秒（含 Spring Common / IDM Spring / Event Registry Spring 整条链）。
+
+### 5.2.2 项目侧命令
+
+```powershell
+cd D:\workproject\springbladeandreact\springBlade
+mvn -pl blade-service/blade-workflow -am test -B "-Dmaven.repo.local=E:\project\mavenLib"
+→ BUILD SUCCESS / Tests run: 8, Failures: 0, Errors: 0, Skipped: 1（业务代码 0 改动）
+```
+
+### 5.2.3 schema 是否需要 8.0.0 → 8.1.0 升级？——**不需要（已实证）**
+
+**结论：8.0.0.0 与 8.1.0.1 的 BPMN 引擎 schema 完全一致，无需结构升级。**
+
+实证方法（不靠猜）：用 8.1.0-SNAPSHOT 的
+`distro/sql/create/all/flowable.mysql.all.create.sql` 建一个**临时对照库** `blade_workflow_81_probe`，
+再与现库 `blade_workflow` 做 `information_schema` 级 diff（比对完已 `DROP` 该对照库）。
+
+| 比对项 | 结果 |
+|---|---|
+| 两边都存在的表 —— **列差异** | **无**（双向 diff 均为空） |
+| 两边都存在的表 —— **索引差异** | 仅 `flw_event_resource.FLW_IDX_EVENT_RSRC_DPL`<br>→ 属 **event-registry 引擎**表，本项目不使用，**无需处理** |
+| 官方 `8.0.0 → 8.1.0` 升级脚本 | **不存在**（MySQL 升级脚本最高只到 `7.2.0.to.8.0.0`，`*upgradestep.8*` 搜索为 0） |
+
+> 即：8.1.0-SNAPSHOT 把 `FlowableVersions.CURRENT_VERSION` 提到 **8.1.0.1** 属**前瞻性标记**，
+> 当前尚未伴随 BPMN 引擎的结构变更。
+
+### 5.2.4 已执行：把版本标记对齐到 8.1.0.1
+
+虽然 `databaseSchemaUpdate=none` 会**跳过版本校验**（见下），但为防后续有人改成 `false`（会走 `schemaCheckVersion()`），
+已把版本标记对齐：
+
+```sql
+UPDATE ACT_GE_PROPERTY SET VALUE_='8.1.0.1' WHERE NAME_ LIKE '%schema.version';
+UPDATE ACT_ID_PROPERTY SET VALUE_='8.1.0.1' WHERE NAME_='schema.version';
+```
+
+执行后：`common.schema.version` / `schema.version` / `eventregistry.schema.version` / `ACT_ID_PROPERTY.schema.version` 均为 **8.1.0.1**。
+
+> 回退：若改回 `flowable.version=8.0.0`，需同步把上述值改回 `8.0.0.0`。
+
+### 5.2.5 关于 `databaseSchemaUpdate=none` 的行为（须知）
+
+依据 `SchemaOperationsEngineBuild.executeSchemaUpdate()`：仅处理
+`create` / `false`(schemaCheckVersion) / `true` / `drop-create` / `create-drop`，
+**`none` 不匹配任何分支** → 既不建表、也**不做版本校验**。
+
+- 好处：不会因版本不符而启动失败
+- 风险：将来若真出现 schema 变更，**也不会有任何提示**，可能直到运行时才暴露为 SQL 错误
+
+> 另注：§5.1 的测试走 H2（引擎自建 schema），**不会覆盖 MySQL schema 的兼容性**；
+> 本次 §5.2.3 的列级 diff 才是 MySQL 侧的直接证据。
+
+### 5.2.4 建议的处置（三选一）
+
+| 方案 | 做法 | 适用 |
+|---|---|---|
+| **A（最稳）** | 改回 `<flowable.version>8.0.0</flowable.version>` —— 库已升到 8.0.0.0，版本一致且已验证 | 生产 / 求稳 |
+| **B（验证用）** | 保留 SNAPSHOT，但**新建空库**让引擎自建 schema（`databaseSchemaUpdate=create`），验证 8.1.0 行为 | 想试 8.1 新能力 |
+| **C（进阶）** | 对比 Flowable 8.0.0 与 8.1.0 的 create 脚本，手工补齐差异后再切 | 必须上 8.1 |
+
+---
+
 ## 6. 回滚方式
 
 结构变更均为 `ADD COLUMN` / `CREATE INDEX`，可回滚：
