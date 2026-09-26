@@ -21,6 +21,7 @@ import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
+import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.EventDefinition;
 import org.flowable.bpmn.model.ManualTask;
 import org.flowable.bpmn.model.TimerEventDefinition;
@@ -33,6 +34,7 @@ import org.springblade.workflow.entity.WfNodeDetailPerm;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
 import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
+import org.springframework.beans.factory.annotation.Value;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
@@ -130,6 +132,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final WfWorkflowTypeMapper wfWorkflowTypeMapper;
     private final IWfInstanceService instanceService;
     private final IProcessService processService;
+    /**
+     * 会签/或签/依次下沉 BPMN 多实例的总开关（下沉迁移方案 §1.1 A 档 + E9 对比 §4.1）。
+     * 默认关闭：部署期不注入多实例，沿用既有「单 userTask + wf_task 多条待办」自研会签，
+     * 不影响任何线上流程。开启前须先完成运行时会签门禁（WfTaskServiceImpl#doApprove）与
+     * wf_task 同步（方案 C 事件驱动）的改造，否则多实例节点进入时缺少集合变量会运行期失败。
+     */
+    @Value("${blade.workflow.engine-multi-instance.enabled:false}")
+    private boolean multiInstanceEnabled;
     /** 跨服务清理节点布局（form_layout）用 */
     private final IFormmodeClient formmodeClient;
     /** 流程实例（删除前保护校验：参考 Weaver「有实例禁止删」） */
@@ -343,6 +353,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             // 再归一化「引擎无法执行 / 本平台未实现」的元素（如画布「发送通知」sendTask）为自动通过，
             // 否则 Flowable 语义校验在部署期直接拒绝（发送任务缺 flowable:type/operation → 500）
             deployXml = neutralizeForDeploy(deployXml);
+            // 会签/或签/依次下沉多实例（开关默认关闭，见 multiInstanceEnabled）
+            deployXml = applyMultiInstanceIfEnabled(deployXml, defId);
             // 落库 deployment_id：此前 deployProcess 的返回值被丢弃，导致无法精确比对
             // 「引擎 latest == 正式部署」（只能靠部署时间与消毒标记间接判读，见巡检 ⑥）。
             // 落库后：① 巡检可直接 JOIN 比对；② 发起自检可给出 engineDeploymentMatched 标志。
@@ -384,6 +396,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         // ⚠️ 必须把 BPMN 的 <process id> 一并改成 testKey（见 neutralizeForTest(_, testKey)），
         //    否则引擎里不存在 __test 这个流程 key，测试发起会报 no process definition。
         String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)), testKey);
+        // 会签/或签/依次下沉多实例（开关默认关闭，与正式部署同口径）
+        deployXml = applyMultiInstanceIfEnabled(deployXml, defId);
         String deploymentId = processService.deployProcessForTest(testKey, deployXml);
         log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态，独立 key 不顶正式版本）. "
             + "defId={}, testKey={}, deploymentId={}", defId, testKey, deploymentId);
@@ -1858,6 +1872,73 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             return new String(out, StandardCharsets.UTF_8);
         } catch (Exception e) {
             log.warn("[blade-workflow] 正式部署 BPMN 归一化失败，使用原 BPMN 部署: {}", e.getMessage());
+            return bpmnXml;
+        }
+    }
+
+    /**
+     * 会签/或签/依次下沉为 Flowable 多实例（下沉迁移方案 §1.1 A 档 + E9 对比 §4.1）。
+     * 仅在开关 {@link #multiInstanceEnabled} 开启时生效；默认关闭，不影响既有流程。
+     *
+     * <p>做法：部署期在 BPMN 的 userTask 上注入 {@code multiInstanceLoopCharacteristics}，
+     * 由引擎统一负责「分叉 / 汇聚 / 放行」，替代 WfTaskServiceImpl#doApprove 里基于
+     * wf_task.status 的自研计数（countPending / closeSiblings / nextPending）。</p>
+     *
+     * <p>集合变量名固定为 {@code wfMiAssignees_<nodeKey>}，须在运行期进入该节点前由调用方写入
+     * （见 WfInstanceServiceImpl 推进逻辑 / 方案C 事件驱动台账同步）；元素变量为 {@code wfMiAssignee}。</p>
+     *
+     * <p>约定：仅对 {@code wf_process_node.nodeType ∈ {1审批, 2提交}} 且存在于流程节点表中的节点注入；
+     * signOrder 由「节点级 + 操作组级取更严格者」合并（见 WfNodeSettingsUtil#combineSignOrder）。</p>
+     */
+    private String applyMultiInstanceIfEnabled(String bpmnXml, Long defId) {
+        if (!multiInstanceEnabled || bpmnXml == null || bpmnXml.isBlank()) {
+            return bpmnXml;
+        }
+        try {
+            BpmnXMLConverter converter = new BpmnXMLConverter();
+            BpmnModel model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
+            Process process = model.getMainProcess();
+            for (FlowElement fe : process.getFlowElements()) {
+                if (!(fe instanceof UserTask userTask)) {
+                    continue;
+                }
+                String nodeKey = userTask.getId();
+                WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                    .eq(WfProcessNode::getDefId, defId).eq(WfProcessNode::getNodeKey, nodeKey));
+                if (node == null || !(Integer.valueOf(1).equals(node.getNodeType())
+                    || Integer.valueOf(2).equals(node.getNodeType()))) {
+                    continue;
+                }
+                int nodeSign = node.getSignOrder() == null ? 0 : node.getSignOrder();
+                List<WfNodeOperator> ops = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+                    .eq(WfNodeOperator::getNodeId, node.getId()));
+                List<Integer> opSigns = ops.stream().map(WfNodeOperator::getSignOrder).toList();
+                int signOrder = WfNodeSettingsUtil.combineSignOrder(nodeSign, opSigns);
+                WfNodeSettingsUtil.SignMiConfig mi = WfNodeSettingsUtil.signToMultiInstance(signOrder);
+                if (mi == null) {
+                    continue;
+                }
+                MultiInstanceLoopCharacteristics miChar = new MultiInstanceLoopCharacteristics();
+                miChar.setSequential(mi.sequential());
+                if (mi.completionCondition() != null) {
+                    miChar.setCompletionCondition(mi.completionCondition());
+                }
+                miChar.setInputDataItem("wfMiAssignees_" + nodeKey);
+                miChar.setElementVariable("wfMiAssignee");
+                userTask.setLoopCharacteristics(miChar);
+                // 多实例任务须按集合元素「逐人分配」：把 userTask.assignee 接成元素变量，
+                // 并清空候选用户（否则每人任务会重复挂全员候选，且引擎不会按人拆分）。
+                // 元素值（办理人ID）由运行期进入节点前写入的集合变量 wfMiAssignees_<nodeKey> 提供。
+                userTask.setAssignee("${wfMiAssignee}");
+                userTask.setCandidateUsers(new java.util.ArrayList<>());
+                log.info("[blade-workflow] 注入多实例: defId={}, nodeKey={}, signOrder={}, sequential={}",
+                    defId, nodeKey, signOrder, mi.sequential());
+            }
+            byte[] out = converter.convertToXML(model);
+            return new String(out, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 多实例注入失败，使用原 BPMN 部署: {}", e.getMessage());
             return bpmnXml;
         }
     }

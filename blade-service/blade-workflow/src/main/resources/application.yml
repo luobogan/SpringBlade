@@ -35,12 +35,16 @@ spring:
     password: ${blade.datasource.workflow.password}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+# Flowable ACT_* 表结构策略：true=启动时按版本自动升级（自愈 schema 漂移，仅缺失时建表）。
+# 若不显式配置，FlowableConfig 的 @Value 默认值也是 true。
 # 流程模板内部表（节点/操作者/出口）属于流程定义的一部分，不按部门做数据权限。
 # 这些 mapper 的 selectList 等方法名含 "list"，会被 DataScopeInterceptor 默认拦截，
 # 但库中没有对应数据权限配置，导致 DataScopeCache 对 null 调 getResourceCode() 抛 NPE。
 # 这里显式排除（保留框架默认的 FlowMapper 排除项）。若其它 *Mapper 的 list/page 方法
 # 也出现同样的 500，请把对应 Mapper 短名加入此列表（或加一个共同前缀如 "Wf"）。
 blade:
+  flowable:
+    database-schema-update: true
   data-scope:
     mapper-exclude:
       - FlowMapper

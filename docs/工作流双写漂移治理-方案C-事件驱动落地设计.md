@@ -247,3 +247,26 @@ C 逐步接管后，`WfWriteHelper` **保留**：继续承载 OA 独占写与兜
 5. `wf_instance.engine_inst_id` / `wf_task.engine_task_id` 唯一索引（幂等兜底）。
 6. `drift_check.sql` 复核记录。
 7. **（开启 async executor / 定时器时必需，§3.4）** 常驻定时对账修复任务 + `ACT_RU_DEADLETTER_JOB` 告警。
+
+---
+
+## 10. 实现进度（骨架已落地）
+
+> 记录于 2026-09-26：按阶段 1「影子模式」先落地接线骨架，默认关闭，不写库。
+
+### 10.1 已落地
+- `org.springblade.workflow.listener.WfEngineEventListener`：全局 `FlowableEventListener`，`@ConditionalOnProperty(name="blade.workflow.ledger-listener.enabled", havingValue="true", matchIfMissing=false)` 控制，**默认 false**。
+  - `onEvent` 提取 `processInstanceId` / taskId / assignee，按类型派发给 `WfStateProjector`；内部 try-catch，**永不抛异常影响引擎事务**（影子模式）。
+  - 实现本版本（Flowable 8.1.0-SNAPSHOT）接口三方法：`isFailOnException()=false`、`isFireOnTransactionLifecycleEvent()=false`、`getOnTransaction()=null`。
+- `org.springblade.workflow.service.helper.WfStateProjector`：影子模式，**只记日志不写库**；逐事件输出「期望的 wf_* 状态映射」（对齐 §2.3 状态码）。
+- `FlowableConfig#processEngineConfiguration`：通过 `ObjectProvider<WfEngineEventListener>` 在开关开启时 `setEventListeners(List.of(listener))` 注册（§2.2 方式一：监听仅依赖 wf_* Mapper，无引擎 Service 依赖，避免循环依赖）。
+
+### 10.2 校验结论
+- lint 通过（无 ERROR）。
+- 事件类型常量全部存在：`PROCESS_STARTED/COMPLETED/CANCELLED`、`ENTITY_SUSPENDED/ACTIVATED`、`TASK_CREATED/ASSIGNED/COMPLETED`。
+- 任务事件为 `FlowableEntityEvent`（entity 为 `org.flowable.task.api.Task`）；`PROCESS_CANCELLED` 经 `FlowableCancelledEvent extends FlowableEngineEvent` 取 `getProcessInstanceId()`。
+
+### 10.3 下一步（仍未做）
+- 阶段 1 实测：开启开关跑一段时间，确认影子日志的「期望映射」与库内 wf_* 实际值一致、差异计数=0。
+- 阶段 2/3：在 `WfStateProjector` 注入 `WfInstanceMapper`/`WfTaskMapper`，按 `engine_inst_id`/`engine_task_id` 幂等反写（§4.4），`isFailOnException()` 切为 C1 强一致；逐项摘掉业务代码里的状态显式写。
+- 步骤 2（会签多实例）运行时门禁**已完成**（见《下沉迁移方案》§6.2）：`doApprove` 在引擎多实例节点跳过自研发散计数、`advance` 按「每条引擎任务=一人」生成 wf_task、`FlowableEventListener` 的 task 事件即可正确关联 wf_task。方案C 真实反写的前置已打通。

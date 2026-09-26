@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.jackson.JsonUtil;
@@ -2169,8 +2170,219 @@ public class WfTestServiceImpl implements IWfTestService {
         return String.valueOf(id);
     }
 
-    private String buildSummary(int passed, int total, boolean reachedEnd, boolean aborted) {
-        if (aborted) {
+    /**
+     * 会签/或签/依次「引擎多实例」门禁的 <b>wf_task 侧</b>集成验证（对应《下沉迁移方案》§6.5）。
+     *
+     * <p>程序化造三条「单 MI 节点」流程定义（nodeType=1 + 不同 signOrder），经与正式部署同口径的
+     * {@code deployForTest}（开关 {@code blade.workflow.engine-multi-instance.enabled=true} 时注入多实例）
+     * 部署，真实发起测试实例，用 {@code IWfTaskService#autoApprove(system=true)} 逐人驱动门禁，
+     * 断言 wf_task 行为：</p>
+     * <ul>
+     *   <li>会签：进入即有 3 条引擎任务 / 3 条 wf_task；逐人办，pending 序列 [2,1,0]，末办才结束；</li>
+     *   <li>或签：进入即 3 条引擎任务 / 3 条 wf_task；首办即过，剩余兄弟待办被对账关闭，pending→0 且结束；</li>
+     *   <li>依次：进入仅 1 条引擎任务（串行）；逐人办，pending 序列 [1,1,0]，末办才结束。</li>
+     * </ul>
+     *
+     * <p>⚠️ 前置：{@code blade.workflow.engine-multi-instance.enabled} 必须开启，否则注入不发生，
+     * 断言（尤其进入时引擎任务数、或签兄弟待办对账）会暴露「未下沉」。每条定义/实例/部署在方法内自清理。</p>
+     *
+     * @param formId 复用既有表单ID（nullable；测试态不建业务行，仅用于满足入参契约）
+     * @return 各模式断言结果与总结论
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> miCounterSignScenario(Long formId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        int[] signOrders = {WfNodeSettingsUtil.SIGN_AND, WfNodeSettingsUtil.SIGN_OR, WfNodeSettingsUtil.SIGN_SEQ};
+        String[] labels = {"会签(all)", "或签(or)", "依次(seq)"};
+        List<Map<String, Object>> details = new ArrayList<>();
+        boolean allPassed = true;
+        for (int i = 0; i < signOrders.length; i++) {
+            Map<String, Object> d = runMiMode(labels[i], signOrders[i], formId);
+            details.add(d);
+            if (!(Boolean) d.get("passed")) {
+                allPassed = false;
+            }
+        }
+        result.put("allPassed", allPassed);
+        result.put("modes", details);
+        return result;
+    }
+
+    /**
+     * 单模式 MI 场景：造定义→部署→发起→逐人驱动→断言→清理。
+     * 异常被捕获并记为未通过，不污染其它模式（方法级自清理，见 finally）。
+     */
+    private Map<String, Object> runMiMode(String label, int signOrder, Long formId) {
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put("mode", label);
+        d.put("signOrder", signOrder);
+        String procKey = "miScenario_" + System.nanoTime() + "_" + signOrder;
+        Long defId = null;
+        Long instId = null;
+        String deploymentId = null;
+        List<Long> nodeIds = new ArrayList<>();
+        try {
+            // 1) 程序化造「单 MI 节点」流程定义（BPMN + 节点 + 操作者）
+            WfProcessDefinition def = new WfProcessDefinition();
+            def.setProcKey(procKey);
+            def.setName("MI场景-" + label);
+            def.setBpmnXml(miBpmn(procKey));
+            def.setVersion(1);
+            def.setStatus(0);
+            def.setFormId(formId);
+            defMapper.insert(def);
+            defId = def.getId();
+
+            WfProcessNode startNode = new WfProcessNode();
+            startNode.setDefId(defId);
+            startNode.setNodeKey("startEvent");
+            startNode.setNodeName("开始");
+            startNode.setNodeType(0);
+            startNode.setSortOrder(0);
+            nodeMapper.insert(startNode);
+            nodeIds.add(startNode.getId());
+
+            WfProcessNode miNode = new WfProcessNode();
+            miNode.setDefId(defId);
+            miNode.setNodeKey("miNode");
+            miNode.setNodeName("会签节点");
+            miNode.setNodeType(1);
+            miNode.setSignOrder(signOrder);
+            miNode.setSortOrder(1);
+            nodeMapper.insert(miNode);
+            nodeIds.add(miNode.getId());
+
+            for (String uid : new String[] {"1001", "1002", "1003"}) {
+                WfNodeOperator op = new WfNodeOperator();
+                op.setNodeId(miNode.getId());
+                op.setOpType(3); // 人员
+                op.setObjId(uid);
+                op.setSignOrder(null); // 由节点 signOrder 决定
+                operatorMapper.insert(op);
+            }
+
+            // 2) 与正式部署同口径的测试部署（开关开启时注入多实例）
+            deploymentId = definitionService.deployForTest(defId);
+
+            // 3) 真实发起测试实例（测试态：不建业务行、is_test=1）
+            StartProcessDTO startDto = new StartProcessDTO();
+            startDto.setDefId(defId);
+            startDto.setFormId(formId);
+            startDto.setStarter(1L);
+            startDto.setTestFlag(true);
+            startDto.setTestDeploymentId(deploymentId);
+            startDto.setEngineKey(procKey + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX);
+            startDto.setProcDefId(processService.latestProcDefId(
+                procKey + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX));
+            startDto.setTitle("【测试】MI场景-" + label);
+            startDto.setDataId(IdWorker.getId());
+            instId = instanceService.start(startDto);
+
+            WfInstance inst = instanceMapper.selectById(instId);
+
+            // 4) 进入时断言：引擎多实例是否已按人拆分（并行=3 / 串行=1）
+            long initialEngineTasks = processService.currentTasks(inst.getEngineInstId()).stream()
+                .filter(t -> "miNode".equals(t.getTaskDefinitionKey())).count();
+            long expectedInitial = (signOrder == WfNodeSettingsUtil.SIGN_SEQ) ? 1 : 3;
+            d.put("initialEngineTasks", initialEngineTasks);
+            d.put("expectedInitialEngineTasks", expectedInitial);
+
+            // 5) 逐人驱动门禁（system=true 绕过鉴权与菜单校验），记录每步后 pending / 是否结束
+            List<Long> pendingAfter = new ArrayList<>();
+            List<Boolean> endedAfter = new ArrayList<>();
+            int guard = 0;
+            while (guard++ < 20) {
+                List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                    .eq(WfTask::getInstId, instId)
+                    .eq(WfTask::getNodeKey, "miNode")
+                    .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+                if (todos.isEmpty()) {
+                    break;
+                }
+                WfTask t = todos.get(0);
+                taskService.autoApprove(t.getId(), "同意", new LinkedHashMap<>(), t.getAssignee());
+                long pending = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+                    .eq(WfTask::getInstId, instId)
+                    .eq(WfTask::getNodeKey, "miNode")
+                    .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+                pendingAfter.add(pending);
+                HistoricProcessInstance hp = processService.historicProcess(inst.getEngineInstId());
+                endedAfter.add(hp != null && hp.getEndTime() != null);
+            }
+
+            // 6) 断言（编码正确预期；若当前实现缺对账等，测试会如实暴露）
+            List<Long> expectedPending;
+            if (signOrder == WfNodeSettingsUtil.SIGN_AND) {
+                expectedPending = List.of(2L, 1L, 0L);
+            } else if (signOrder == WfNodeSettingsUtil.SIGN_OR) {
+                expectedPending = List.of(0L);
+            } else {
+                expectedPending = List.of(1L, 1L, 0L);
+            }
+            boolean ended = !endedAfter.isEmpty()
+                && Boolean.TRUE.equals(endedAfter.get(endedAfter.size() - 1));
+            boolean ok = (initialEngineTasks == expectedInitial)
+                && pendingAfter.equals(expectedPending) && ended;
+            d.put("pendingAfter", pendingAfter);
+            d.put("expectedPendingAfter", expectedPending);
+            d.put("endedAfter", endedAfter);
+            d.put("passed", ok);
+            if (!ok) {
+                d.put("failReason", "initialEngineTasks=" + initialEngineTasks + "/" + expectedInitial
+                    + ", pendingAfter=" + pendingAfter + ", expected=" + expectedPending);
+            }
+        } catch (Exception e) {
+            d.put("passed", false);
+            d.put("error", e.getMessage());
+            log.warn("[blade-workflow][MI场景] 模式[{}]执行异常: {}", label, e.getMessage());
+        } finally {
+            // 引擎部署在独立事务，必须显式卸载；业务行在本 @Transactional 内删除（异常时随回滚撤销）
+            if (deploymentId != null) {
+                try {
+                    processService.deleteDeployment(deploymentId);
+                } catch (Exception ignore) {
+                    log.warn("[blade-workflow][MI场景] 卸载部署失败（可能已结束）: {}", deploymentId);
+                }
+            }
+            if (instId != null) {
+                taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, instId));
+                approvalLogMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, instId));
+                snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, instId));
+                instanceMapper.deleteById(instId);
+            }
+            if (defId != null) {
+                if (!nodeIds.isEmpty()) {
+                    operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+                        .in(WfNodeOperator::getNodeId, nodeIds));
+                }
+                nodeMapper.delete(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+                defMapper.deleteById(defId);
+            }
+        }
+        return d;
+    }
+
+    /** 单 MI 节点 BPMN（process id 会被 deployForTest 改名为测试 key）；assignee 占位，部署期被多实例元素变量覆盖。 */
+    private static String miBpmn(String procKey) {
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                         xmlns:flowable="http://flowable.org/bpmn"
+                         targetNamespace="http://springblade.workflow" id="def_%s">
+                <process id="%s" name="MI Scenario" isExecutable="true">
+                    <startEvent id="startEvent" name="开始"/>
+                    <userTask id="miNode" name="会签节点" flowable:assignee="placeholder"/>
+                    <endEvent id="endEvent" name="结束"/>
+                    <sequenceFlow id="f1" sourceRef="startEvent" targetRef="miNode"/>
+                    <sequenceFlow id="f2" sourceRef="miNode" targetRef="endEvent"/>
+                </process>
+            </definitions>
+            """.formatted(procKey, procKey);
+    }
+
+    private String buildSummary(int passed, int total, boolean reachedEnd, boolean aborted) {        if (aborted) {
             return "测试中断：自动驱动步数达到上限或流程仍停留在运行中（可能存在未同步节点/成环），请检查流程配置。";
         }
         if (reachedEnd && passed == total) {

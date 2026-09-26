@@ -42,6 +42,7 @@ import org.springblade.workflow.vo.RejectCandidateVO;
 import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfTaskVO;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -114,6 +115,27 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfSubflowRequestMapper subflowRequestMapper;
     /** 节点操作者解析（退回弹窗「操作者」列展示用，解析失败不阻塞） */
     private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
+
+    /**
+     * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
+     * 复用同一 engineTaskId 调 addUserIdentityLink(..., "circulate")，把抄送关系落到引擎身份关联。默认 false。
+     * <p>identity link 不产生可办任务（符合迁移目标）；但 Flowable 的 ACT_RU_IDENTITYLINK 在任务完成后会被清理，
+     * 历史抄送仍以 wf_task 行作为权威存储，故开启本开关仅做引擎侧关联预热，读侧抄送列表暂仍走 wf_task，
+     * 后续如需引擎侧实时查询再切到 identityLink 查询（需运行时回归）。</p>
+     */
+    @Value("${blade.workflow.cc-identity-link.enabled:false}")
+    private boolean ccIdentityLinkEnabled;
+
+    /**
+     * 会签/或签/依次下沉引擎多实例总开关（下沉迁移方案 §1.1 A 档，与 WfDefinitionServiceImpl 同源）。
+     * 默认 false：沿用自研「单 userTask + wf_task 多条待办」会签。
+     * <p>开启后：① 部署期已在 userTask 注入 multiInstanceLoopCharacteristics（按人拆分引擎任务）；
+     * ② 本类的运行时会签门禁（{@link #doApprove} 的 countPending/closeSiblings/激活下批）须让位给引擎完成条件，
+     * 即「同意」只 completeTask 当前引擎任务，放行交由引擎；③ 进入节点前的集合变量 wfMiAssignees_&lt;nodeKey&gt;
+     * 由 {@link #injectMiCollectionVars} 在每个流转点注入。</p>
+     */
+    @Value("${blade.workflow.engine-multi-instance.enabled:false}")
+    private boolean multiInstanceEnabled;
 
     @Override
     public List<WfTaskVO> todo(Long assignee) {
@@ -200,28 +222,32 @@ public class WfTaskServiceImpl implements IWfTaskService {
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), operator,
             WfApprovalLog.LOG_APPROVE, opinion);
 
-        // 2. 按节点审批方式判定是否推进引擎
-        int signOrder = resolveSignOrder(inst.getDefId(), task.getNodeKey());
-        if (signOrder == SIGN_ALL) {
-            // 会签：仍有同节点待办则不推进
-            if (countPending(inst.getId(), task.getNodeKey()) > 0) {
-                log.info("[blade-workflow] 会签节点仍有待办，暂不推进. instId={}, nodeKey={}",
-                    inst.getId(), task.getNodeKey());
-                return true;
+        // 2. 按节点审批方式判定是否推进引擎。
+        //    引擎多实例模式下放行由 Flowable 完成条件驱动，跳过自研发散计数（运行时会签门禁让位引擎）：
+        //    「同意」只 completeTask 当前引擎任务，是否推进/关闭兄弟任务由引擎决定。
+        if (!isEngineMultiInstance(inst, task.getNodeKey())) {
+            int signOrder = resolveSignOrder(inst.getDefId(), task.getNodeKey());
+            if (signOrder == SIGN_ALL) {
+                // 会签：仍有同节点待办则不推进
+                if (countPending(inst.getId(), task.getNodeKey()) > 0) {
+                    log.info("[blade-workflow] 会签节点仍有待办，暂不推进. instId={}, nodeKey={}",
+                        inst.getId(), task.getNodeKey());
+                    return true;
+                }
+            } else if (signOrder == SIGN_SEQUENCE) {
+                // 依次：激活下一批次，未到最后一人则不推进
+                WfTask next = nextPending(inst.getId(), task.getNodeKey());
+                if (next != null) {
+                    next.setReceiveTime(new Date());
+                    taskMapper.updateById(next);
+                    log.info("[blade-workflow] 依次审批激活下一处理人. instId={}, nextTaskId={}",
+                        inst.getId(), next.getId());
+                    return true;
+                }
+            } else {
+                // 或签：办结同节点其余待办
+                closeSiblings(inst.getId(), task.getNodeKey(), task.getId());
             }
-        } else if (signOrder == SIGN_SEQUENCE) {
-            // 依次：激活下一批次，未到最后一人则不推进
-            WfTask next = nextPending(inst.getId(), task.getNodeKey());
-            if (next != null) {
-                next.setReceiveTime(new Date());
-                taskMapper.updateById(next);
-                log.info("[blade-workflow] 依次审批激活下一处理人. instId={}, nextTaskId={}",
-                    inst.getId(), next.getId());
-                return true;
-            }
-        } else {
-            // 或签：办结同节点其余待办
-            closeSiblings(inst.getId(), task.getNodeKey(), task.getId());
         }
 
         // 节点信息 → 运行时消费：子流程「全部归档才能提交」—— 本次提交前若本节点仍有未归档子流程，拒绝提交
@@ -240,6 +266,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (dto != null && dto.getVariables() != null) {
             vars.putAll(dto.getVariables());
         }
+        // 引擎多实例：把全部 MI 节点的集合变量 wfMiAssignees_<nodeKey> 注入流转变量，
+        // 保证进入该节点前集合已就绪（引擎据此逐人展开）。幂等、持久。
+        injectMiCollectionVars(inst.getDefId(), inst, vars, operator);
 
         // 2.6 「退回发起人」后的重新提交：发起人的待办是合成任务（无引擎任务），
         //     其提交 = 让流程重新从创建节点入流（重新生成第一个审批节点的待办），
@@ -386,6 +415,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
         // 引擎回退：把当前节点 token 移动到目标节点（保持实例运行，不终止）
         Map<String, Object> vars = new HashMap<>(4);
+        // 引擎多实例：退回目标节点可能是多实例，注入集合变量保证进入前就绪
+        injectMiCollectionVars(inst.getDefId(), inst, vars, task.getAssignee());
         // 「退回后再提交的处理方式」：直达本节点 → 写引擎变量，供退回目标节点重新提交时
         // 跳过中间节点直达本次执行退回的节点（见 jumpDirectIfMarked）；逐级审批则清残留标记
         int resubmitMode = (dto != null && dto.getResubmitMode() != null)
@@ -599,6 +630,15 @@ public class WfTaskServiceImpl implements IWfTaskService {
             // 标记继承：同 forward（V10 / C2）—— 抄送任务会进入被抄送人的「已办」（V9）
             cc.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
             taskMapper.insert(cc);
+            // 迁移阶段3 双写校验：复用同一 engineTaskId 把抄送关系落到引擎身份关联（不产生可办任务）。
+            // 失败仅记日志、不阻断业务；读侧抄送列表仍走 wf_task，本调用仅做引擎侧关联预热。
+            if (ccIdentityLinkEnabled && task.getEngineTaskId() != null) {
+                try {
+                    processService.addUserIdentityLink(task.getEngineTaskId(), String.valueOf(assignee), "circulate");
+                } catch (Exception e) {
+                    log.warn("[WfTaskServiceImpl] 抄送 identity link 写入引擎失败（忽略）: {}", e.getMessage());
+                }
+            }
         }
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_CIRCULATE, dto.getOpinion());
@@ -1027,6 +1067,55 @@ public class WfTaskServiceImpl implements IWfTaskService {
      *
      * <p>合并规则（两层取更严格者）：任一层为会签 → 会签；否则任一层为依次 → 依次；否则或签。</p>
      */
+    /**
+     * 判定某节点在运行期是否由引擎多实例驱动（与 WfDefinitionServiceImpl 部署期注入口径一致）。
+     * 开关关闭 → 永不；开关开启 → 仅审批/提交类节点（nodeType ∈ {1,2}）走引擎多实例。
+     */
+    private boolean isEngineMultiInstance(WfInstance inst, String nodeKey) {
+        if (!multiInstanceEnabled || inst == null || inst.getDefId() == null || nodeKey == null) {
+            return false;
+        }
+        WfProcessNode node = loadNode(inst.getDefId(), nodeKey);
+        if (node == null || node.getNodeType() == null) {
+            return false;
+        }
+        return Integer.valueOf(1).equals(node.getNodeType()) || Integer.valueOf(2).equals(node.getNodeType());
+    }
+
+    /**
+     * 把全部 MI 节点的集合变量 {@code wfMiAssignees_<nodeKey> = List<Long>} 注入流转变量，
+     * 保证进入任一多实例节点前集合已就绪（引擎据此逐人展开并行/串行循环）。
+     * 幂等、持久（流程变量跨节点保留），每个流转点重算一次即可覆盖后续所有 MI 节点。
+     *
+     * <p>⚠️ 首节点即多实例且操作者依赖实例上下文（instId）时，发起阶段 instId 可能尚为空，
+     * 此时按静态节点配置解析（多数场景足够）；动态（依赖表单/实例）首节点多实例为边界情况，需回归验证。</p>
+     */
+    private void injectMiCollectionVars(Long defId, WfInstance inst, Map<String, Object> vars, Long currentOperator) {
+        if (!multiInstanceEnabled || vars == null || defId == null) {
+            return;
+        }
+        try {
+            List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .in(WfProcessNode::getNodeType, 1, 2));
+            for (WfProcessNode n : nodes) {
+                String nk = n.getNodeKey();
+                if (nk == null || nk.isBlank()) {
+                    continue;
+                }
+                Long instId = (inst == null) ? null : inst.getId();
+                Long starter = (inst == null) ? null : inst.getStarter();
+                List<Long> assignees = operatorResolver.resolve(defId, nk, instId, starter, currentOperator);
+                if (assignees == null) {
+                    assignees = List.of();
+                }
+                vars.put("wfMiAssignees_" + nk, new ArrayList<>(assignees));
+            }
+        } catch (Exception e) {
+            log.warn("[WfTaskServiceImpl] 注入多实例集合变量失败（忽略，节点进入时可能缺集合而失败）: {}", e.getMessage());
+        }
+    }
+
     private int resolveSignOrder(Long defId, String nodeKey) {
         WfProcessNode node = loadNode(defId, nodeKey);
         int nodeLevel = (node == null || node.getSignOrder() == null) ? SIGN_ANY : node.getSignOrder();

@@ -153,6 +153,16 @@ public class WfTestController {
         return R.data(testService.detail(id));
     }
 
+    @PostMapping("/mi-scenario")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @Operation(summary = "多实例会签/或签/依次 wf_task 侧集成验证",
+        description = "程序化造三条「单 MI 节点」流程定义（会签/或签/依次），经与正式部署同口径的测试部署"
+            + "（依赖 blade.workflow.engine-multi-instance.enabled=true）发起真实测试实例，逐人驱动门禁并断言 wf_task 行为；"
+            + "返回各模式断言结果与总结论（allPassed）。详情见《下沉迁移方案》§6.5.1")
+    public R<Map<String, Object>> miScenario(@RequestParam(value = "formId", required = false) Long formId) {
+        return R.data(testService.miCounterSignScenario(formId), "MI 场景验证完成");
+    }
+
     @DeleteMapping
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     @Operation(summary = "删除测试记录")

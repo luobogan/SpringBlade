@@ -126,4 +126,16 @@ public interface IWfTestService {
      * @param ids 主键列表
      */
     boolean remove(List<Long> ids);
+
+    /**
+     * 会签/或签/依次「引擎多实例」门禁的 <b>wf_task 侧</b>集成验证（对应《下沉迁移方案》§6.5）。
+     *
+     * <p>程序化造三条「单 MI 节点」流程定义（nodeType=1 + 不同 signOrder），经与正式部署同口径的测试部署
+     * （开关 {@code blade.workflow.engine-multi-instance.enabled=true} 时注入多实例）发起真实测试实例，
+     * 逐人驱动门禁并断言 wf_task 行为（进入时引擎任务数、或签兄弟待办对账、依次逐人、会签全办才推进）。</p>
+     *
+     * @param formId 复用既有表单ID（nullable；测试态不建业务行）
+     * @return 各模式断言结果与总结论（{@code allPassed} / {@code modes}）
+     */
+    Map<String, Object> miCounterSignScenario(Long formId);
 }

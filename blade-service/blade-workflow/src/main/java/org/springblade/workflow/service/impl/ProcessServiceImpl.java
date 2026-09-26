@@ -121,6 +121,19 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public void setProcessVariable(String engineInstId, String name, Object value) {
+        if (engineInstId == null || engineInstId.isBlank() || name == null || name.isBlank()) {
+            return;
+        }
+        try {
+            runtimeService.setVariable(engineInstId, name, value);
+        } catch (Exception e) {
+            // 实例已结束时写变量无意义，忽略（不影响业务主链路）
+            log.debug("[blade-workflow] 写入流程变量失败（实例可能已结束）: {}", e.getMessage());
+        }
+    }
+
+    @Override
     public String deployProcess(String procKey, String bpmnXml) {
         if (procKey == null || procKey.isBlank() || bpmnXml == null || bpmnXml.isBlank()) {
             throw new IllegalArgumentException("部署 BPMN 失败：procKey 与 bpmnXml 均不能为空");
@@ -192,6 +205,33 @@ public class ProcessServiceImpl implements IProcessService {
         }
         log.info("[blade-workflow] 引擎指定流转（多目标）跳转. engineInstId={}, {} -> {}",
             engineInstId, fromActivityKey, String.join(",", toActivityKeys));
+    }
+
+    @Override
+    public void addComment(String taskId, String procInstId, String type, String message) {
+        if (procInstId == null || message == null) {
+            return;
+        }
+        try {
+            // 引擎原生审批/流转意见：落 ACT_HI_COMMENT（history ≥ audit，见 FlowableConfig）
+            taskService.addComment(taskId, procInstId, type, message);
+        } catch (Exception e) {
+            // 实例/任务已结束时写意见无意义，忽略（不影响业务主链路）
+            log.debug("[blade-workflow] 写入审批意见失败（实例可能已结束）: {}", e.getMessage());
+        }
+    }
+
+    @Override
+    public void addUserIdentityLink(String taskId, String userId, String identityLinkType) {
+        if (taskId == null || userId == null || identityLinkType == null) {
+            return;
+        }
+        try {
+            // 引擎原生身份关联：抄送/传阅复用同一 engineTaskId，不产生新的可办任务行
+            taskService.addUserIdentityLink(taskId, userId, identityLinkType);
+        } catch (Exception e) {
+            log.debug("[blade-workflow] 添加身份关联失败（任务可能已结束）: {}", e.getMessage());
+        }
     }
 
     private static List<TaskVO> toTaskVO(List<Task> tasks) {

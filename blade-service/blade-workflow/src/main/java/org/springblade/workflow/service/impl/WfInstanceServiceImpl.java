@@ -51,6 +51,7 @@ import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -98,6 +99,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfWriteHelper writeHelper;
     private final WfOperatorResolver operatorResolver;
     private final WfNodeLinkMapper linkMapper;
+    /**
+     * 会签/或签/依次下沉引擎多实例总开关（与 WfTaskServiceImpl / WfDefinitionServiceImpl 同源）。
+     * 默认 false。开启后：部署期已注入多实例；本类 advance 须按「每条引擎任务=一人」生成 wf_task，
+     * 并关闭被引擎完成条件取消的兄弟待办（对齐 WfTaskServiceImpl#doApprove 运行时会签门禁）。
+     */
+    @Value("${blade.workflow.engine-multi-instance.enabled:false}")
+    private boolean multiInstanceEnabled;
     /** 节点操作组：用于判定会签/依次（{@code wf_node_operator.sign_order}） */
     private final WfNodeOperatorMapper operatorMapper;
     private final NodeActionExecutor nodeActionExecutor;
@@ -307,6 +315,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (dto.getVariables() != null) {
             vars.putAll(dto.getVariables());
         }
+        // 引擎多实例：进入任一 MI 节点前集合变量须就绪，发起即注入（覆盖首节点即为多实例的场景）。
+        injectMiCollectionVars(def.getId(), inst, vars, starter);
 
         // 引擎 key：默认用定义的 procKey；测试态由 WfTestServiceImpl 传 procKey + "__test"
         // （测试部署独立 key，见 WfDefinitionServiceImpl#deployForTest）
@@ -1179,6 +1189,21 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
         for (TaskVO t : engineTasks) {
             String tk = t.getTaskDefinitionKey();
+            // 引擎多实例节点：每条引擎任务 = 一人，直接生成一条 wf_task（取引擎 assignee），
+            // 避免再按「节点操作者」展开导致 N×N 重复。完成条件驱动的放行由引擎负责。
+            if (isEngineMultiInstance(inst, tk)) {
+                Long a = parseAssignee(t.getAssignee());
+                if (a != null && a != 0L) {
+                    if (!existsTask(instId, t.getTaskId(), a)) {
+                        insertTask(inst, t, a, tk);
+                    }
+                } else if (!existsTask(instId, t.getTaskId(), null)) {
+                    // 引擎未给办理人（异常兜底情形）：保持原有单条占位行为
+                    insertTask(inst, t, null, tk);
+                }
+                createCoadjutantTasks(inst, t, tk);
+                continue;
+            }
             // ⓪ 「指定流转」：用户手工指定的下一节点，其操作者以用户选择为准（模式1）；
             //    多目标模式（模式3）下按节点Key指定操作者（overrideAssignees）。
             Long override = overrideAssignee;
@@ -1227,6 +1252,73 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             // ③ 协办/征询意见人：本节点解析到办理人时，非阻塞地给协办人生成「协办」待办（知会，不门禁流转）
             createCoadjutantTasks(inst, t, tk);
         }
+        // 引擎多实例对账：关闭被完成条件取消的兄弟待办（如或签首办即过，引擎取消其余 MI 任务，
+        // 这些任务的引擎行已消失，advance 不会再生成，但其 wf_task 残留待办须在此收口）。
+        if (multiInstanceEnabled) {
+            java.util.Map<String, java.util.Set<String>> activeByNode = engineTasks.stream()
+                .filter(t -> isEngineMultiInstance(inst, t.getTaskDefinitionKey()))
+                .collect(java.util.stream.Collectors.groupingBy(
+                    TaskVO::getTaskDefinitionKey,
+                    java.util.stream.Collectors.mapping(TaskVO::getTaskId, java.util.stream.Collectors.toSet())));
+            for (java.util.Map.Entry<String, java.util.Set<String>> e : activeByNode.entrySet()) {
+                List<WfTask> pendings = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                    .eq(WfTask::getInstId, instId)
+                    .eq(WfTask::getNodeKey, e.getKey())
+                    .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+                for (WfTask tk2 : pendings) {
+                    if (tk2.getEngineTaskId() != null && !e.getValue().contains(tk2.getEngineTaskId())) {
+                        tk2.setStatus(WfTask.STATUS_DONE);
+                        tk2.setOperateTime(new Date());
+                        taskMapper.updateById(tk2);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 判定某节点是否由引擎多实例驱动（与 WfDefinitionServiceImpl 部署期注入口径一致）。
+     * 开关关闭 → 永不；开关开启 → 仅审批/提交类节点（nodeType ∈ {1,2}）走引擎多实例。
+     */
+    private boolean isEngineMultiInstance(WfInstance inst, String nodeKey) {
+        if (!multiInstanceEnabled || inst == null || inst.getDefId() == null || nodeKey == null) {
+            return false;
+        }
+        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, inst.getDefId()).eq(WfProcessNode::getNodeKey, nodeKey));
+        if (node == null || node.getNodeType() == null) {
+            return false;
+        }
+        return Integer.valueOf(1).equals(node.getNodeType()) || Integer.valueOf(2).equals(node.getNodeType());
+    }
+
+    /**
+     * 把全部 MI 节点的集合变量 {@code wfMiAssignees_<nodeKey> = List<Long>} 注入流转变量，
+     * 保证进入任一多实例节点前集合已就绪（引擎据此逐人展开）。幂等、持久。
+     */
+    private void injectMiCollectionVars(Long defId, WfInstance inst, Map<String, Object> vars, Long currentOperator) {
+        if (!multiInstanceEnabled || vars == null || defId == null) {
+            return;
+        }
+        try {
+            List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId).in(WfProcessNode::getNodeType, 1, 2));
+            for (WfProcessNode n : nodes) {
+                String nk = n.getNodeKey();
+                if (nk == null || nk.isBlank()) {
+                    continue;
+                }
+                Long instId = (inst == null) ? null : inst.getId();
+                Long starter = (inst == null) ? null : inst.getStarter();
+                List<Long> assignees = operatorResolver.resolve(defId, nk, instId, starter, currentOperator);
+                if (assignees == null) {
+                    assignees = List.of();
+                }
+                vars.put("wfMiAssignees_" + nk, new ArrayList<>(assignees));
+            }
+        } catch (Exception e) {
+            log.warn("[WfInstanceServiceImpl] 注入多实例集合变量失败（忽略）: {}", e.getMessage());
+        }
     }
 
     /** 给本节点的协办/征询意见人生成「协办」待办（status=7，非阻塞；测试态跳过） */
@@ -1239,7 +1331,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             if (uid == null || uid <= 0) {
                 continue;
             }
-            if (existsTask(inst.getId(), t.getTaskId(), uid, WfTask.STATUS_COADJUTANT)) {
+            // 按（实例+节点+协办人）去重，而非按引擎任务去重 —— 引擎多实例下同一节点有多条引擎任务，
+            // 若按引擎任务去重会产生重复协办待办；按节点去重保证每个协办人每节点仅一条。
+            long coadExists = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, inst.getId())
+                .eq(WfTask::getNodeKey, nodeKey)
+                .eq(WfTask::getAssignee, uid)
+                .eq(WfTask::getStatus, WfTask.STATUS_COADJUTANT));
+            if (coadExists > 0) {
                 continue;
             }
             WfTask task = new WfTask();

@@ -701,6 +701,66 @@ public final class WfNodeSettingsUtil {
     }
 
     /**
+     * 会签关系常量（与 {@code WfProcessNode.signOrder} / {@code WfNodeOperator.signOrder} 同义）。
+     * 0=或签（一人通过即过）/ 1=会签（全部通过）/ 2=依次（逐个处理）。
+     */
+    public static final int SIGN_OR = 0;
+    public static final int SIGN_AND = 1;
+    public static final int SIGN_SEQ = 2;
+
+    /**
+     * 节点级 + 操作组级会签关系取更严格者（口径与 {@code WfTaskServiceImpl#resolveSignOrder} 一致）：
+     * 任一层次为「会签(1)」→ 会签；否则任一层次为「依次(2)」→ 依次；否则「或签(0)」。
+     *
+     * @param nodeSignOrder 节点级 signOrder（{@code WfProcessNode.signOrder}，null/缺省按或签）
+     * @param opSignOrders  操作组级 signOrder 集合（{@code WfNodeOperator.signOrder}）
+     */
+    public static int combineSignOrder(int nodeSignOrder, List<Integer> opSignOrders) {
+        int result = nodeSignOrder;
+        if (opSignOrders != null) {
+            for (Integer o : opSignOrders) {
+                if (o == null) {
+                    continue;
+                }
+                if (o == SIGN_AND) {
+                    result = SIGN_AND;
+                } else if (o == SIGN_SEQ && result != SIGN_AND) {
+                    result = SIGN_SEQ;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 会签语义 → Flowable 多实例参数（下沉迁移用，仅部署期开关开启时调用）。
+     * 返回 null 表示该节点无需多实例（非会签/或签/依次，如抄送等）。
+     *
+     * <p>映射（对齐 E9 对比评估 §4.1）：
+     * 或签(0) → 并行 + {@code completionCondition=${nrOfCompletedInstances >= 1}}（一人通过即过）；
+     * 会签(1) → 并行 + 无完成条件（全部完成）；
+     * 依次(2) → 串行（{@code isSequential=true}）。</p>
+     *
+     * @param signOrder 合并后的会签关系（{@link #combineSignOrder} 结果）
+     */
+    public static SignMiConfig signToMultiInstance(int signOrder) {
+        if (signOrder == SIGN_SEQ) {
+            return new SignMiConfig(true, null);
+        } else if (signOrder == SIGN_AND) {
+            return new SignMiConfig(false, null);
+        } else if (signOrder == SIGN_OR) {
+            return new SignMiConfig(false, "${nrOfCompletedInstances >= 1}");
+        }
+        return null;
+    }
+
+    /**
+     * 多实例参数载体：{@code sequential}=是否串行；{@code completionCondition}=完成条件表达式
+     * （null 表示默认「全部实例完成」）。
+     */
+    public record SignMiConfig(boolean sequential, String completionCondition) {}
+
+    /**
      * 二次认证：处理该节点前是否要求重新校验密码（对齐 E9 {@code hasSecondAuth}）。
      *
      * @return true=需要二次认证

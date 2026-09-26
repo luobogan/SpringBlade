@@ -8,15 +8,21 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.spring.ProcessEngineFactoryBean;
 import org.flowable.spring.SpringProcessEngineConfiguration;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import org.springblade.workflow.listener.WfEngineEventListener;
+
 import javax.sql.DataSource;
 import java.io.IOException;
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,24 +41,28 @@ public class FlowableConfig {
     private static final Logger log = LoggerFactory.getLogger(FlowableConfig.class);
 
     /**
-     * ACT_* 表结构处理策略。默认 none：不建表、不校验、不升级，启动时完全不碰 schema。
-     * 库里 39 张 ACT_* 表已存在时务必保持 none，否则 create 会在每次重启执行建表脚本，
-     * 撞上已存在的表导致 ProcessEngine 装配失败（表现为 processEngineFactory 抛异常）。
-     * 换新库首次初始化时才在配置里临时改成 create，起来后再改回 none。
+     * ACT_* 表结构处理策略。默认 true：启动时若 ACT_GE_PROPERTY 记录的 schema 版本低于
+     * 引擎期望版本，则自动执行升级脚本（如 8100→8101 补齐 DUE_DATE_/CLAIM_TIME_/CLAIMED_BY_ 等列），
+     * 仅当表缺失时才建表——不会像 create 那样在表已存在时重试建表导致装配失败。
+     * 这样可自愈 Flowable 版本升级带来的 schema 漂移（见 2026-09-26 ACT_HI_PROCINST 缺列事故）。
+     * 若刻意要自行管理 schema（如外部 DBA 统一维护），可在配置里显式设为 none。
      */
-    @Value("${blade.flowable.database-schema-update:none}")
+    @Value("${blade.flowable.database-schema-update:true}")
     private String databaseSchemaUpdate;
 
     private final DataSource dataSource;
     private final PlatformTransactionManager transactionManager;
     private final ResourcePatternResolver resourcePatternResolver;
+    private final ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider;
 
     public FlowableConfig(DataSource dataSource,
                           PlatformTransactionManager transactionManager,
-                          ResourcePatternResolver resourcePatternResolver) {
+                          ResourcePatternResolver resourcePatternResolver,
+                          ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider) {
         this.dataSource = dataSource;
         this.transactionManager = transactionManager;
         this.resourcePatternResolver = resourcePatternResolver;
+        this.wfEngineEventListenerProvider = wfEngineEventListenerProvider;
     }
 
     @Bean
@@ -82,14 +92,32 @@ public class FlowableConfig {
         } catch (Exception ignore) {
             log.warn("[FlowableConfig] 解析 datasource 库名失败，未设置 databaseCatalog", ignore);
         }
-        // ACT_* 表已存在，默认 none（不建表/不校验/不升级），启动时完全不碰 schema。
-        // 如需在新库首次初始化：配置 blade.flowable.database-schema-update=create 启动一次，再改回 none。
+        // ACT_* 表已存在，默认 true（启动时按版本自动升级，缺失时才建表），自愈 schema 漂移且不会撞已存在的表。
+        // 如需在新库首次初始化：配置 blade.flowable.database-schema-update=create 启动一次，再改回 true/none。
         // 走 create 时仍依赖上面的 setDatabaseCatalog：否则 isTablePresent 会因 null catalog
         // 跨 schema 误判（扫到别的库里的 ACT_* 表），导致误判成"表不存在/版本不一致"。
         log.info("[FlowableConfig] databaseSchemaUpdate={}", databaseSchemaUpdate);
         configuration.setDatabaseSchemaUpdate(databaseSchemaUpdate);
-        // 开发环境关闭异步作业执行器
+        // 诊断：打印库内 ACT_GE_PROPERTY 真实记录的 schema 版本，一眼看出引擎期望版本与库实际版本的落差。
+        // 若该值停在 8.1.0.0（8100）而引擎期望 8.1.0.1，即本次 DUE_DATE_ 缺列事故的根因；
+        // 若为 null/表不存在则代表全新库，将由引擎建表分支处理。
+        logDbSchemaVersion();
+        // 开发环境关闭异步作业执行器（方案 C §3.4 前提：异步事件改由 job 独立事务派发，须禁用）
         configuration.setAsyncExecutorActivate(false);
+        // 显式固化历史级别为 audit：保证 ACT_HI_COMMENT 可落库（审批轨迹迁移 ACT_HI_COMMENT 的硬门槛）。
+        // Flowable 默认即为 audit，此处显式声明以消除歧义；表单快照所需的 full 级别不开启（见下沉迁移方案 §0）。
+        // 注：手动装配未使用 flowable-spring-boot-starter，yml 的 flowable.history-level 不会生效，必须此处声明。
+        configuration.setHistory("audit");
+        // 禁止异步历史：HISTORIC_* 事件跨事务写入，开启后存在漏派风险（方案 C §3.4 要求保持关闭）
+        configuration.setAsyncHistoryEnabled(false);
+        // 方案C 事件驱动台账投影：仅当开关 blade.workflow.ledger-listener.enabled=true 时注册全局监听（默认关）。
+        // 监听仅依赖 wf_* Mapper（无引擎 Service 依赖），故走 setEventListeners 直接装配（方案C §2.2 方式一），
+        // 避免与 processEngineConfiguration 形成构造期循环依赖。关闭开关时 bean 不存在，不注册、完全回到方案A 双写。
+        WfEngineEventListener ledgerListener = wfEngineEventListenerProvider.getIfAvailable();
+        if (ledgerListener != null) {
+            configuration.setEventListeners(List.of(ledgerListener));
+            log.info("[FlowableConfig] 已注册方案C 台账事件监听 WfEngineEventListener（ledger-listener.enabled=true）");
+        }
         // 自动部署流程定义
         configuration.setDeploymentResources(
             resourcePatternResolver.getResources("classpath*:processes/*.bpmn20.xml"));
@@ -131,6 +159,32 @@ public class FlowableConfig {
     @Bean
     public ManagementService managementService(ProcessEngine processEngine) {
         return processEngine.getManagementService();
+    }
+
+    /**
+     * 诊断用：读取库内 ACT_GE_PROPERTY 的 schema 版本（及 history），打印到启动日志。
+     * 单独走 DataSource JDBC，避免依赖尚未构建的 ProcessEngine；表不存在/查询失败均仅告警、不影响装配。
+     */
+    private void logDbSchemaVersion() {
+        try (Connection conn = dataSource.getConnection();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                 "SELECT NAME_, VALUE_ FROM ACT_GE_PROPERTY WHERE NAME_ IN ('schema.version', 'schema.history')")) {
+            StringBuilder sb = new StringBuilder("ACT_GE_PROPERTY 现状 → ");
+            boolean any = false;
+            while (rs.next()) {
+                any = true;
+                sb.append(rs.getString("NAME_")).append('=').append(rs.getString("VALUE_")).append("; ");
+            }
+            if (any) {
+                log.info("[FlowableConfig] {}", sb);
+            } else {
+                log.warn("[FlowableConfig] ACT_GE_PROPERTY 中无 schema.version/schema.history 记录，"
+                    + "库可能尚未初始化（全新库，将由引擎按 {} 策略处理）", databaseSchemaUpdate);
+            }
+        } catch (Exception e) {
+            log.warn("[FlowableConfig] 读取 ACT_GE_PROPERTY 失败（表可能不存在，属全新库正常情况）：{}", e.getMessage());
+        }
     }
 
     private static String parseDbFromUrl(String url) {

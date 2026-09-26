@@ -68,6 +68,44 @@ public interface IProcessService {
     void removeVariables(String engineInstId, List<String> names);
 
     /**
+     * 写入单个引擎流程变量（迁移构建块：多实例集合变量 {@code wfMiAssignees_<nodeKey>} 等）。
+     *
+     * <p>下沉迁移方案 §1.1 A 档：会签多实例节点的集合变量须在进入该节点前写入，
+     * 引擎据此展开并行/串行循环。engineInstId / name 为空时静默跳过。</p>
+     *
+     * @param engineInstId 引擎实例ID（PROC_INST_ID_）
+     * @param name         变量名
+     * @param value        变量值（集合类型如 {@code List<Long>}）
+     */
+    void setProcessVariable(String engineInstId, String name, Object value);
+
+    /**
+     * 引擎原生审批/流转意见（下沉迁移方案 §1.1 A 档 + E9 对比 §4.1）。
+     *
+     * <p>替代 / 并行补充 {@code wf_approval_log} 的重复存储：Flowable 落 {@code ACT_HI_COMMENT}。
+     * 需 history level ≥ activity（本工程已在 FlowableConfig 显式设为 audit）。</p>
+     *
+     * @param taskId      引擎任务ID（TASK_ID_，可空：开始/系统动作无 task 时传 null）
+     * @param procInstId  引擎实例ID（PROC_INST_ID_）
+     * @param type        意见类型（建议复用 {@code WfApprovalLog.LOG_*} 常量文本）
+     * @param message     意见/说明内容
+     */
+    void addComment(String taskId, String procInstId, String type, String message);
+
+    /**
+     * 引擎原生身份关联（下沉迁移方案 §1.1 A 档 + E9 对比 §4.1）。
+     *
+     * <p>用于抄送(cc)/传阅(circulate)：复用同一 engineTaskId 添加身份关联，
+     * <b>不会产生新的可办任务行</b>（区别于 insertTask）。需 history level ≥ activity。
+     * 类型建议自定义为 {@code "cc"} / {@code "circulate"}（Flowable 内置类型含 assignee/candidate/participant 等）。</p>
+     *
+     * @param taskId             引擎任务ID（TASK_ID_）
+     * @param userId             关联用户ID（字符串）
+     * @param identityLinkType   身份关联类型（"cc" / "circulate" 等）
+     */
+    void addUserIdentityLink(String taskId, String userId, String identityLinkType);
+
+    /**
      * 部署 BPMN 2.0 定义到引擎
      *
      * @param procKey  流程定义Key（BPMN process id，作为部署资源名前缀）

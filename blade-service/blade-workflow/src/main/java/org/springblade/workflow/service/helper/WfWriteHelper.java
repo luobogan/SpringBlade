@@ -11,6 +11,7 @@ import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.IProcessService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Date;
@@ -47,6 +48,15 @@ public class WfWriteHelper {
     private final WfTaskMapper taskMapper;
     private final WfApprovalLogMapper logMapper;
     private final IProcessService processService;
+
+    /**
+     * 审批轨迹下沉开关（迁移阶段2「双写校验」）：开启后 {@link #appendLog} 在写 wf_approval_log 的同时，
+     * 把意见同步到引擎 {@code ACT_HI_COMMENT}（taskService.addComment）。默认 false。
+     * <p>读侧暂未切换（全模块约 28+ 处读取仍走 wf_approval_log），故开启本开关仅做<b>双写预热</b>，
+     * 不影响现有读路径；读侧切到 {@code HistoryService.createCommentQuery} 需运行时回归，列为后续阶段。</p>
+     */
+    @Value("${blade.workflow.approval-comment.enabled:false}")
+    private boolean approvalCommentEnabled;
 
     /**
      * 终结实例（撤销 / 撤回 / 不通过等终态）：台账置终态 + 关待办 + 流转日志 + 引擎删实例。
@@ -120,5 +130,32 @@ public class WfWriteHelper {
         log.setOpinion(opinion == null ? "" : opinion);
         log.setOperateTime(new Date());
         logMapper.insert(log);
+        if (approvalCommentEnabled) {
+            syncCommentToEngine(instId, taskId, logType, opinion);
+        }
+    }
+
+    /**
+     * 双写引擎审批意见（开关开启时调用）。把 wf_* 主键解析为引擎 id 后调用 addComment，
+     * 失败仅记日志、不阻断业务（引擎意见是预热，不影响台账权威）。
+     */
+    private void syncCommentToEngine(Long instId, Long wfTaskId, String logType, String opinion) {
+        try {
+            WfInstance inst = instanceMapper.selectById(instId);
+            if (inst == null || inst.getEngineInstId() == null) {
+                return;
+            }
+            String procInstId = inst.getEngineInstId();
+            String engineTaskId = null;
+            if (wfTaskId != null) {
+                WfTask wfTask = taskMapper.selectById(wfTaskId);
+                if (wfTask != null) {
+                    engineTaskId = wfTask.getEngineTaskId();
+                }
+            }
+            processService.addComment(engineTaskId, procInstId, logType, opinion == null ? "" : opinion);
+        } catch (Exception e) {
+            log.warn("[WfWriteHelper] 审批意见双写引擎失败（忽略，不影响台账）: {}", e.getMessage());
+        }
     }
 }
