@@ -230,7 +230,7 @@ public class EcologyFormImportServiceImpl implements EcologyFormImportService {
 				"SELECT SELECTVALUE, SELECTNAME, LISTORDER, ISDEFAULT FROM workflow_selectitem " +
 					"WHERE FIELDID = ? AND (CANCEL IS NULL OR CANCEL <> '1') ORDER BY LISTORDER",
 				getLong(f, "id"));
-			boolean hasOptions = (htmlType == 3 || htmlType == 6 || htmlType == 8) && !opts.isEmpty();
+			boolean hasOptions = (htmlType == 3 || htmlType == 4 || htmlType == 6) && !opts.isEmpty();
 			if (hasOptions) {
 				StringBuilder sb = new StringBuilder();
 				for (Map<String, Object> o : opts) {
@@ -318,19 +318,17 @@ public class EcologyFormImportServiceImpl implements EcologyFormImportService {
 		return "formtable_main_" + (maxN + 1);
 	}
 
-	// blade fieldHtmlType 枚举（与前端 typings.d.ts FieldHtmlType 对齐）
+	// blade fieldHtmlType 枚举（必须与前端 TableDesign.tsx 实际编码一致，而非 typings.d.ts）
 	private static final int HTML_TEXT = 1;        // 文本字段
-	private static final int HTML_BROWSER = 2;     // 浏览按钮
-	private static final int HTML_SELECT = 3;      // 选择框
-	private static final int HTML_SPECIAL = 5;     // 特殊字段（日期/时间/说明）
+	private static final int HTML_MULTILINE = 2;   // 多行文本
+	private static final int HTML_BROWSER = 3;     // 浏览按钮
+	private static final int HTML_SELECT = 4;      // 选择框（下拉/单选/多选）
 	private static final int HTML_CHECKBOX = 6;    // 复选框
-	private static final int HTML_DROPDOWN = 8;    // 下拉选择框（新）
+	private static final int HTML_SPECIAL = 7;     // 特殊字段（描述性文字/自定义链接/日期/时间）
 
 	/**
-	 * ecology FIELDHTMLTYPE + TYPE → blade fieldHtmlType
-	 * <p>ecology FIELDHTMLTYPE：1单行文本 2多行文本 3浏览按钮 4check框 5下拉选择框
-	 * 6/9浏览按钮变体 7单选框 8多选框；其中浏览按钮 type=2 在 ecology 为「日期」浏览器，
-	 * blade 无浏览器日期，归入 SPECIAL 日期。</p>
+	 * ecology FIELDHTMLTYPE → 前端 fieldHtmlType（对齐 TableDesign.tsx 下拉项与 getFieldTypeLabel）
+	 * ecology（本部署实测，非标准）：1单行文本 2多行文本 3浏览按钮 4复选框(check框) 5选择框(下拉/单选/复选由TYPE区分) 7特殊字段(描述文本) 8多选框(本部署未见) 6/9浏览按钮变体
 	 */
 	private int mapHtmlType(String ecoHtmlType, String ecoType) {
 		if (ecoHtmlType == null) {
@@ -338,85 +336,178 @@ public class EcologyFormImportServiceImpl implements EcologyFormImportService {
 		}
 		switch (ecoHtmlType.trim()) {
 			case "1":
+				return HTML_TEXT;        // 单行文本
 			case "2":
-				return HTML_TEXT;        // 单行/多行文本
+				return HTML_MULTILINE;   // 多行文本
 			case "3":
 			case "6":
 			case "9":
-				if ("2".equals(ecoType != null ? ecoType.trim() : "")) {
-					return HTML_SPECIAL; // 日期浏览器 → 特殊字段-日期
-				}
-				return HTML_BROWSER;     // 浏览按钮
+				return HTML_BROWSER;     // 浏览按钮（日期/时间也以浏览器类型 98/99 表达）
 			case "4":
 				return HTML_CHECKBOX;    // check框
 			case "5":
-				return HTML_DROPDOWN;    // 下拉选择框
-			case "7":
 			case "8":
-				return HTML_SELECT;      // 单选/多选框
+				return HTML_SELECT;      // 选择框（下拉/单选/多选，由 type 区分；8=多选框，本部署未见）
+			case "7":
+				return HTML_SPECIAL;     // 特殊字段（本部署实测为流程说明/请假说明等描述性文字）
 			default:
 				return HTML_TEXT;
 		}
 	}
 
 	/**
-	 * ecology FIELDHTMLTYPE + TYPE → blade fieldType
-	 * <p>blade fieldType 按 fieldHtmlType 分组（见前端 typings.d.ts FieldType）。</p>
+	 * ecology FIELDHTMLTYPE + TYPE → 前端 fieldType（对齐 TableDesign.tsx 各 htmlType 分支的选项）
 	 */
 	private int mapType(String ecoHtmlType, String ecoType, String dbTypeRaw) {
 		String ht = ecoHtmlType == null ? "" : ecoHtmlType.trim();
 		String t = ecoType == null ? "" : ecoType.trim();
 		switch (ht) {
 			case "1":
-				return 1; // 文本-单行文本
+				return mapTextType(dbTypeRaw); // 文本：按数据库类型细分 单行/整数/浮点
 			case "2":
-				return 2; // 文本-多行文本
+				return 1; // 多行文本
 			case "3":
 			case "6":
 			case "9":
-				if ("2".equals(t)) {
-					return 1; // 特殊字段-日期
-				}
-				return mapBrowserType(t);
+				return mapBrowserType(t, dbTypeRaw); // 浏览按钮（按 dbType 区分日期/部门）
 			case "4":
 				return 1; // 复选框
 			case "5":
-				return 1; // 下拉选择框
+				if ("2".equals(t)) return 2;   // 单选框
+				if ("3".equals(t)) return 3;   // 复选框（多选）
+				return 1;                       // 下拉框（TYPE=1 或未识别）
 			case "7":
-				return 1; // 选择框-单选框
+				if ("1".equals(t)) return 1;   // 自定义链接
+				if ("3".equals(t)) return 3;   // 日期
+				if ("4".equals(t)) return 4;   // 时间
+				return 2;                       // 描述性文字（流程说明/请假说明等，默认）
 			case "8":
-				return 2; // 选择框-多选框
+				return 3; // 选择框-复选框
 			default:
 				return 1;
 		}
 	}
 
 	/**
-	 * ecology 浏览按钮 TYPE → blade 浏览按钮 fieldType。
-	 * 参考示例（已用 ecology2020_demo 报销单核实）：
-	 * 1人力资源 / 2日期(走 SPECIAL) / 4部门 / 16流程 / 161/256自定义浏览框(自定义树形)；
-	 * 其余未知类型兜底为人力资源。
+	 * 单行文本按数据库类型细分：整数(4)/浮点数(5)；其余单行文本(1)。
 	 */
-	private int mapBrowserType(String ecoType) {
-		switch (ecoType == null ? "" : ecoType.trim()) {
+	private int mapTextType(String dbTypeRaw) {
+		String r = dbTypeRaw == null ? "" : dbTypeRaw.toLowerCase();
+		if (r.contains("int")) {
+			return 4; // 整数
+		}
+		if (r.contains("decimal") || r.contains("float") || r.contains("numeric")) {
+			return 5; // 浮点数
+		}
+		return 1; // 单行文本
+	}
+
+	/**
+	 * 判断 ecology 浏览器字段的数据库类型是否像「日期/时间」。
+	 * 本库日期浏览器用 FIELDHTMLTYPE=3 + TYPE=2/3 + FIELDDBTYPE=char(10)/char(8) 表达，
+	 * 而「组织/部门」同样可能用 TYPE=2 —— 必须靠 dbType 区分，否则会把部门误判成日期。
+	 */
+	private boolean isDateLike(String dbTypeRaw) {
+		if (dbTypeRaw == null) {
+			return false;
+		}
+		String r = dbTypeRaw.toLowerCase().replaceAll("\\s+", "");
+		if (r.contains("date") || r.contains("datetime") || r.contains("smalldatetime")) {
+			return true;
+		}
+		// ecology 日期/时间存为定长字符：char(8)~char(11)
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("char\\((\\d+)\\)").matcher(r);
+		if (m.find()) {
+			int len = Integer.parseInt(m.group(1));
+			return len >= 8 && len <= 11;
+		}
+		return false;
+	}
+
+	/**
+	 * ecology 浏览按钮 TYPE → 前端浏览按钮 fieldType（对齐 TableDesign.tsx 浏览器类型选项）。
+	 * 依据（已用 ecology2020_demo 实际数据核对，非标准 weaver 部署，字典标签不可信）：
+	 *  - workflow_browsertype 字典(种子)：1人员 2组织 4文档 7项目 8资产 9人事 …（本部署实际语义与字典不符，以实测为准）
+	 *  - 字段实测语义：-9 表单实测：4=部门(经办部门) 24=岗位(经办岗位)
+	 *                 全局标签实测：9=文档(相关文档/正文/合同文件) 37=文档(自定义：合同文档/PDF正文)
+	 *                 2/19 多为日期/时间（按 dbType 判定）；组织类：2=部门 17=多人力资源(本部署) 18=分部 19=分权单部门 20=分权多部门 21=分权单分部 22=分权多分部 23=多分部；164=分部(本部署，非自定义浏览按钮)
+	 *  - 前端文档选项 fieldType=24（browserTypeMap[24]='文档'），故 9、37 均映射到 24。
+	 * 日期/时间优先按 dbType 判定（TYPE=2/3 + char(10) 为日期，避免与部门冲突）。
+	 * 其余未知类型兜底为人力资源。
+	 * 注意：字典写 4=文档，但本部署 4 实际是部门，故 4 仍映射部门，文档走 9/37。
+	 */
+	private int mapBrowserType(String ecoType, String dbTypeRaw) {
+		String t = ecoType == null ? "" : ecoType.trim();
+		// 1) 日期/时间：dbType 像日期时按 TYPE 区分（与「部门」用同一 TYPE=2 的关键区分）
+		//    TYPE=2 → 日期；TYPE=3/19 → 时间（本库 开始时间/结束时间 用 19）
+		if (isDateLike(dbTypeRaw)) {
+			if ("2".equals(t)) {
+				return 98; // 日期
+			}
+			if ("3".equals(t) || "19".equals(t)) {
+				return 99; // 时间
+			}
+		}
+		// 2) 常规浏览器类型映射（ecology 编码 → 前端编码）
+		switch (t) {
 			case "1":
-				return 1;  // 人力资源
+				return 1;    // 人员 → 人力资源
+			case "2":
+				return 2;    // 组织 → 部门（非日期场景）
+			case "3":
+				return 3;    // 角色
 			case "4":
-				return 2;  // 部门
-			case "22":
-				return 3;  // 角色
-			case "24":
-				return 4;  // 资产
+				return 2;    // 部门（本库 经办部门/报销部门 均用 4）
 			case "7":
+				return 8;    // 项目 → 项目（前端 8）
 			case "8":
-				return 7;  // 文档
+				return 7;    // 资产 → 资产（前端新增选项 7）
+			case "9":
+				return 24;   // 文档（本库 相关文档/正文/合同文件 均用 9）
+			case "12":
+				return 1;    // 集成 → 人力资源（无对应项，兜底）
 			case "16":
-				return 8;  // 流程
+				return 30;   // 相关客户/流程 → 流程（本库 借款流程/相关请求 用 16）
+			case "17":
+				return 161;  // 多人力资源（本部署 同行人 等用 TYPE=17 表示多人力资源，非多部门）
+			case "18":
+				return 18;   // 分部（独立类型，不再并入部门）
+			case "19":
+				return 19;   // 分权单部门（日期型 19 已在上方映射为时间）
+			case "20":
+				return 20;   // 分权多部门
+			case "21":
+				return 21;   // 分权单分部
+			case "22":
+				return 22;   // 分权多分部
+			case "23":
+				return 23;   // 多分部
+			case "24":
+				return 4;    // 岗位（本库 经办岗位 用 24）
+			case "25":
+				return 1;    // 多人员 → 人力资源
+			case "30":
+				return 30;   // 流程
+			case "37":
+				return 24;   // 文档（自定义：合同文档/PDF正文/岗位说明文档 等）
+			case "31":
+				return 30;   // 多流程 → 流程
+			case "57":
+				return 57;   // 附件
+			case "98":
+				return 98;   // 日期
+			case "99":
+				return 99;   // 时间
 			case "161":
 			case "256":
-				return 9;  // 自定义浏览框（自定义树形单选）
+				return 256;  // 自定义树形单选
+			case "162":
+			case "257":
+				return 257;  // 自定义树形多选
+			case "164":
+				return 18;   // 分部（本部署 经办分部 等用 TYPE=164 表示分部，非自定义浏览按钮）
 			default:
-				return 1;  // 兜底：人力资源
+				return 1;    // 兜底：人力资源
 		}
 	}
 
