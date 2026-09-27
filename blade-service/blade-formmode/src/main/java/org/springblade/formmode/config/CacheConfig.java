@@ -7,8 +7,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 import java.time.Duration;
@@ -28,7 +28,11 @@ public class CacheConfig {
             .entryTtl(Duration.ofHours(1))
             .prefixCacheNameWith("formmode:")
             .serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
-            .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer()))
+            // 注：Spring Data Redis（本项目 Spring Boot 4.1.0）已将
+            // GenericJackson2JsonRedisSerializer 标记为 @Deprecated(forRemoval=true)。
+            // 改用官方推荐入口 RedisSerializer.json()：JSON 行为等价（同样写入 @class 类型信息，
+            // 已缓存旧数据不受影响），且将来底层实现被替换时本类无需再改。
+            .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(RedisSerializer.json()))
             .disableCachingNullValues();
 
         return RedisCacheManager.builder(factory)

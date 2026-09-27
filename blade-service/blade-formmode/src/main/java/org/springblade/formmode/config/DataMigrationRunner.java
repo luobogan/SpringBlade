@@ -39,8 +39,14 @@ public class DataMigrationRunner implements CommandLineRunner {
             return;
         }
 
-        // 检查目标库是否已有数据
-        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM modeinfo", Integer.class);
+        // 检查目标库是否已有数据（连接失败仅告警，不影响应用启动）
+        Integer count;
+        try {
+            count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM modeinfo", Integer.class);
+        } catch (Exception e) {
+            log.warn("[数据迁移] 检查 modeinfo 数据量失败（数据源可能未就绪），跳过此次迁移: {}", e.getMessage());
+            return;
+        }
         if (count != null && count > 0) {
             log.info("[数据迁移] modeinfo 表已有 {} 条数据，跳过此次迁移", count);
             return;

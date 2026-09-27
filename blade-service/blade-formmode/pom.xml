@@ -71,6 +71,13 @@
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-xml</artifactId>
         </dependency>
+        <!-- SQL Server 驱动：泛微 e-cology 数据库为 SQL Server（weaver.properties 配置）
+             Maven Central 上 mssql-jdbc 的 JRE 标记是嵌在版本号里的（12.8.1.jre11），不是 classifier -->
+        <dependency>
+            <groupId>com.microsoft.sqlserver</groupId>
+            <artifactId>mssql-jdbc</artifactId>
+            <version>12.8.1.jre11</version>
+        </dependency>
     </dependencies>
 
     <build>
