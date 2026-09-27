@@ -148,9 +148,20 @@ public final class WfNodeSettingsUtil {
     // 「设置表单内容」弹框把打印内容 / 意见显示等统一写进 settings.formContent，
     // 故这些读取必须从 formContent 取，而非顶层 settings（否则读不到）。
 
-    /** 取 settings.formContent 整体 */
+    /**
+     * 取 settings.formContent 整体。
+     *
+     * <p><b>node 为 null 时返回空 Map（而非 NPE）</b>：本类其余读取方法统一做了 {@code node == null}
+     * 保护，而 {@link #fcSetting} / {@code fcInt} / {@code fcBool} / {@code fcList} 全部经由本方法取值，
+     * 若此处不设防，任一调用点传入 null 节点都会连锁 NPE（真实故障：{@code Cannot invoke
+     * "WfProcessNode.getExtJson()" because "node" is null}）。返回空 Map 会让下游按各自的
+     * 缺省值处理，与「节点未配置」语义一致。</p>
+     */
     @SuppressWarnings("unchecked")
     public static Map<String, Object> formContent(WfProcessNode node) {
+        if (node == null) {
+            return Collections.emptyMap();
+        }
         Object v = settings(node.getExtJson()).get("formContent");
         return v instanceof Map ? (Map<String, Object>) v : Collections.emptyMap();
     }

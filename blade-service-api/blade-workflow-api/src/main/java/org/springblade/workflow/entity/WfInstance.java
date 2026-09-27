@@ -145,6 +145,20 @@ public class WfInstance extends TenantEntity {
     private Integer isGray;
 
     /**
+     * 期望终态（intent）：由业务在调用引擎终结（{@code deleteProcessInstance}）<b>之前</b>写入，
+     * 供 {@code PROCESS_CANCELLED} 引擎事件派生真正的终态 —— 该事件只有「取消」语义，
+     * 无法区分「不通过(2)」与「撤销(3)」。
+     *
+     * <p>取值：{@code NULL} = 无 intent（按默认撤销 3 处理）；1 通过 / 2 不通过 / 3 撤销。
+     * 事件侧（{@code WfStateProjector#writeCancel}）读取后应用，并清空本列避免陈旧值。</p>
+     *
+     * <p>对应列 {@code wf_instance.pending_status}，见迁移
+     * {@code V2026.09.27_001__wf_instance_pending_status.sql}。</p>
+     */
+    @Schema(description = "期望终态(intent) 1通过/2不通过/3撤销；NULL=无，由 PROCESS_CANCELLED 事件派生后清空")
+    private Integer pendingStatus;
+
+    /**
      * 主键以字符串形式序列化（对齐 {@code WfProcessDefinition}）：
      * 避免 19 位雪花 ID 在前端 JS 解析时丢失精度。
      */

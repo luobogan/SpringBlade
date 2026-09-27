@@ -358,10 +358,18 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             // 落库 deployment_id：此前 deployProcess 的返回值被丢弃，导致无法精确比对
             // 「引擎 latest == 正式部署」（只能靠部署时间与消毒标记间接判读，见巡检 ⑥）。
             // 落库后：① 巡检可直接 JOIN 比对；② 发起自检可给出 engineDeploymentMatched 标志。
-            def.setDeploymentId(processService.deployProcess(def.getProcKey(), deployXml));
+            // 部署/回写必须用 BPMN 真实的 process id 调 Flowable（与 stored proc_key 解耦）：
+            // 导入流程的 stored proc_key 是派生独立 key（如 comprehensiveApproval_2），但 Flowable
+            // 实际以 BPMN 的 <process id> 为流程 key；若用派生 key 去查会查不到 → 发布后发起失败。
+            // 设计器流程的 stored proc_key 本就等于 BPMN id，此处对它们无变化。
+            String flowKey = extractProcKey(def.getBpmnXml());
+            if (flowKey == null || flowKey.isBlank()) {
+                flowKey = def.getProcKey();
+            }
+            def.setDeploymentId(processService.deployProcess(flowKey, deployXml));
             // 回写「激活版本的流程定义ID」（方案 §3 / 迁移 _015）：
             // 发起时据此走 startProcessInstanceById，精确绑定这一版，与「哪个部署最新」解耦。
-            def.setProcDefId(processService.latestProcDefId(def.getProcKey()));
+            def.setProcDefId(processService.latestProcDefId(flowKey));
         } else {
             throw new ServiceException("尚无 BPMN 定义，请先在「流程画布」中设计并保存");
         }
@@ -470,8 +478,12 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         process = model.getMainProcess();
         String procId = process.getId();
-        if (procId != null && !procId.isBlank()) {
-            // 以画布 process id 为准，保证引擎部署一致
+        // 仅当 proc_key 尚未设置时才用 BPMN process id 校正：导入流程已派生独立 key（如
+        // comprehensiveApproval_2），此处必须保留、不得覆盖回 BPMN 原 id——否则同文件多次导入
+        // 会撞唯一键 uk_proc_key_version，且失去「独立流程」语义。设计器流程创建时 proc_key 即等于
+        // BPMN id（非空），此处永不触发覆盖，行为不变。
+        if (procId != null && !procId.isBlank()
+            && (def.getProcKey() == null || def.getProcKey().isBlank())) {
             def.setProcKey(procId);
         }
         def.setBpmnXml(xmlInput);
@@ -670,39 +682,53 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (dto == null || dto.getBpmnXml() == null || dto.getBpmnXml().isBlank()) {
             throw new ServiceException("BPMN 内容不能为空");
         }
-        // 新建版本=1 的草稿定义。
-        // ⚠️ 数据库 wf_process_definition.proc_key 为 NOT NULL 且无默认值，必须在 insert 前赋值，
-        // 否则报「Field 'proc_key' doesn't have a default value」导致导入 500。
-        // 优先取 BPMN process id（与 saveBpmn 内部校正一致），缺失时退化为唯一占位值。
-        String procKey = extractProcKey(dto.getBpmnXml());
+        // 解析 BPMN process id 作为基准 key。
+        String baseKey = extractProcKey(dto.getBpmnXml());
 
-        // 方案1：导入前物理清掉同 proc_key+version(=1) 的旧记录（含逻辑删除的幽灵行），
-        // 彻底免疫「逻辑删除 + 唯一键冲突」与「连续软删两次」的边界；也让重复导入幂等。
-        // 占位 key（import_ 开头）不会命中既有行，无需清理。
-        if (procKey != null && !procKey.isBlank()) {
-            List<WfProcessDefinition> olds = defMapper.selectAllByProcKeyVersion(procKey, 1);
-            for (WfProcessDefinition old : olds) {
-                physicalRemoveDefinition(old.getId());
-            }
-        }
+        // 【产品语义】导入 = 重新创建一条「独立」的流程定义，不是原流程的版本。
+        //
+        // 约束：saveBpmn（importBpmnXml 必经）会把 proc_key 强制覆盖成 BPMN 的 process id；
+        // 而同一份 BPMN 的 process id 固定（如 comprehensiveApproval），若直接用它当 proc_key，
+        // 受唯一键 (proc_key, version) 约束只能退化成原流程的「版本」，与需求相悖。
+        // 故此处为导入派生一个【独立 proc_key】（comprehensiveApproval_2 / _3 …），使新导入成为
+        // 真正独立的流程（独立版本组、互不干扰），且不会覆盖/删除任何既有流程。
+        String finalKey = (baseKey != null && !baseKey.isBlank())
+            ? uniqueProcKey(baseKey) : ("import_" + System.currentTimeMillis());
 
         WfProcessDefinition def = new WfProcessDefinition();
         def.setName(dto.getName() != null && !dto.getName().isBlank() ? dto.getName() : "未命名流程");
         def.setFormId(dto.getFormId());
         def.setType(dto.getType());
-        def.setVersion(1);
+        def.setVersion(1);            // 独立流程，固定版本 1（不再是 max+1 的版本递增）
         def.setStatus(0);
-        // 注意：这里先不设 activeVersionId（保持 null），原因见下方自锚定。
-        def.setProcKey(procKey != null && !procKey.isBlank() ? procKey : ("import_" + System.currentTimeMillis()));
+        def.setProcKey(finalKey);
         defMapper.insert(def);
         Long defId = def.getId();
-        // 自锚定：version=1 的草稿为「单版本流程」，锚点应为自身 id（对齐 createDefinition / saveBpmn）。
-        // 不能直接 setActiveVersionId(null) 后就完事：MyBatis-Plus 插入策略会跳过 null 字段，
-        // 落到库列默认值 -1，导致前端「版本组仅显示激活版本」过滤把该草稿整行丢弃、列表看不到。
+        // 自锚定：新导入的定义独立成组（版本组锚点 = 自身 id），刻意不与任何其它流程合并。
+        // 不能直接 setActiveVersionId(null)：MP 插入策略会跳过 null 字段，落到库列默认值 -1，
+        // 导致前端「版本组仅显示激活版本」过滤把该草稿整行丢弃、列表看不到。
         def.setActiveVersionId(defId);
         defMapper.updateById(def);
+        // saveBpmn 已改为「proc_key 非空则不覆盖」，上面设置的独立 key（finalKey）会被保留，
+        // 无需再改回；导入即得到一条真正独立的流程（独立版本组、互不干扰）。
         importBpmnXml(defId, dto.getBpmnXml());
         return defId;
+    }
+
+    /**
+     * 为导入派生一个不与既有活跃流程冲突的独立 proc_key。
+     * 基准 key 已存在时追加 _2 / _3 …（如 comprehensiveApproval → comprehensiveApproval_2）。
+     * 仅比对未逻辑删除的行（@TableLogic 会自动过滤 is_deleted=1）。
+     */
+    private String uniqueProcKey(String base) {
+        String cand = base;
+        int i = 2;
+        while (defMapper.selectCount(Wrappers.<WfProcessDefinition>lambdaQuery()
+                .eq(WfProcessDefinition::getProcKey, cand)) > 0) {
+            cand = base + "_" + i;
+            i++;
+        }
+        return cand;
     }
 
     /** 从 BPMN XML（base64 或原文）解析 <process id="...">，作为 proc_key 初值 */

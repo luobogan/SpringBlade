@@ -250,23 +250,86 @@ C 逐步接管后，`WfWriteHelper` **保留**：继续承载 OA 独占写与兜
 
 ---
 
-## 10. 实现进度（骨架已落地）
+## 10. 实现进度（阶段 1/2/3 已完成）
 
-> 记录于 2026-09-26：按阶段 1「影子模式」先落地接线骨架，默认关闭，不写库。
+> 初版记录于 2026-09-26（阶段 1 骨架，默认关闭，只记日志不写库）。
+> **更新于 2026-09-27：阶段 1 影子实测、阶段 2 真实反写、阶段 3 切单写均已落地，并回归通过。**
 
 ### 10.1 已落地
-- `org.springblade.workflow.listener.WfEngineEventListener`：全局 `FlowableEventListener`，`@ConditionalOnProperty(name="blade.workflow.ledger-listener.enabled", havingValue="true", matchIfMissing=false)` 控制，**默认 false**。
-  - `onEvent` 提取 `processInstanceId` / taskId / assignee，按类型派发给 `WfStateProjector`；内部 try-catch，**永不抛异常影响引擎事务**（影子模式）。
-  - 实现本版本（Flowable 8.1.0-SNAPSHOT）接口三方法：`isFailOnException()=false`、`isFireOnTransactionLifecycleEvent()=false`、`getOnTransaction()=null`。
-- `org.springblade.workflow.service.helper.WfStateProjector`：影子模式，**只记日志不写库**；逐事件输出「期望的 wf_* 状态映射」（对齐 §2.3 状态码）。
-- `FlowableConfig#processEngineConfiguration`：通过 `ObjectProvider<WfEngineEventListener>` 在开关开启时 `setEventListeners(List.of(listener))` 注册（§2.2 方式一：监听仅依赖 wf_* Mapper，无引擎 Service 依赖，避免循环依赖）。
+- `org.springblade.workflow.listener.WfEngineEventListener`：全局 `FlowableEventListener`，`@ConditionalOnProperty(name="blade.workflow.ledger-listener.enabled", havingValue="true", matchIfMissing=false)`，**当前在 `application.yml` 显式开启**。
+  - `isFailOnException()=true`（**C1 强一致**，阶段 2 起由影子期的 `false` 改回）、`isFireOnTransactionLifecycleEvent()=false`、`getOnTransaction()=null`。
+  - `onEvent` 内部 try-catch **已移除**：反写失败必须抛异常回滚引擎事务，否则会留下「引擎成/台账丢」的漂移（影子期才吞异常）。
+- `org.springblade.workflow.service.helper.WfStateProjector`：注入 `WfInstanceMapper`/`WfTaskMapper`，按 `engine_inst_id`/`engine_task_id` **先查后写**幂等反写（§4.4）。
+  - `PROCESS_STARTED` **不比对**：`engine_inst_id` 是业务在 `startProcessInstanceByKey` **返回后**才回填的，事件在引擎调用内部派发，此刻该列仍为 NULL，比对必产生 100% 假差异。
+- `FlowableConfig#processEngineConfiguration`：`ObjectProvider<WfEngineEventListener>` 注册（§2.2 方式一：监听仅依赖 wf_* Mapper，无引擎 Service 依赖，避免循环依赖）；`asyncExecutorActivate=false` + `asyncHistoryEnabled=false` 已就位（§3.4 前提）。
+- `WfWriteHelper`：阶段 3 后 **不再显式写 `wf_instance.status` / 关闭 `wf_task`**，改为「写 intent → 调引擎 → 事件反写 → 兜底补齐」。
+- 步骤 2（会签多实例）运行时门禁**已完成**（见《下沉迁移方案》§6.2）：`doApprove` 在引擎多实例节点跳过自研发散计数、`advance` 按「每条引擎任务=一人」生成 wf_task，方案C 真实反写的前置已打通。
 
-### 10.2 校验结论
-- lint 通过（无 ERROR）。
-- 事件类型常量全部存在：`PROCESS_STARTED/COMPLETED/CANCELLED`、`ENTITY_SUSPENDED/ACTIVATED`、`TASK_CREATED/ASSIGNED/COMPLETED`。
-- 任务事件为 `FlowableEntityEvent`（entity 为 `org.flowable.task.api.Task`）；`PROCESS_CANCELLED` 经 `FlowableCancelledEvent extends FlowableEngineEvent` 取 `getProcessInstanceId()`。
+### 10.2 阶段 3 摘写范围（重要边界）
+| 位置 | 处理 |
+|---|---|
+| `terminate` 的 `setStatus+updateById`、关闭 wf_task 循环 | **已摘除**，改由 `PROCESS_CANCELLED` 反写 |
+| `suspend` / `activate` 的 `setStatus+updateById` | **已摘除**，改由 `ENTITY_SUSPENDED/ACTIVATED` 反写 |
+| `advance` 归档的状态写 | **已摘除**，改由事件反写 |
+| `appendLog`（`wf_approval_log`） | **保留** —— OA 独占写，引擎无对应物，本就不存在两次写 |
+| `processService.delete/suspend/activate` | **保留** —— 这是**触发事件的引擎动作**，删了事件不会发生、反写也就没了 |
 
-### 10.3 下一步（仍未做）
-- 阶段 1 实测：开启开关跑一段时间，确认影子日志的「期望映射」与库内 wf_* 实际值一致、差异计数=0。
-- 阶段 2/3：在 `WfStateProjector` 注入 `WfInstanceMapper`/`WfTaskMapper`，按 `engine_inst_id`/`engine_task_id` 幂等反写（§4.4），`isFailOnException()` 切为 C1 强一致；逐项摘掉业务代码里的状态显式写。
-- 步骤 2（会签多实例）运行时门禁**已完成**（见《下沉迁移方案》§6.2）：`doApprove` 在引擎多实例节点跳过自研发散计数、`advance` 按「每条引擎任务=一人」生成 wf_task、`FlowableEventListener` 的 task 事件即可正确关联 wf_task。方案C 真实反写的前置已打通。
+### 10.3 「不通过(2)」语义缺口与 intent 方案
+引擎只有 `PROCESS_COMPLETED`→通过(1)、`PROCESS_CANCELLED`→撤销(3)，**没有「不通过(2)」的独立事件**。解决方案：
+- `wf_instance` 新增 `pending_status` 列，业务在调引擎**之前**写入目标终态意图（intent）；
+- `PROCESS_CANCELLED` 反写时读 `pending_status` 决定终态（1/2/3），缺省回落撤销(3)，写完即清空；
+- 业务侧 `ensureApplied` 兜底：事件万一未派发，仍按 intent 补齐并清空，不留下悬挂状态。
+- ⚠️ **受限说明**：当前业务**没有任何入口会传 `STATUS_REJECTED(2)`**（撤回/撤销恒传 3），故值 2 的分支只有代码正确性保证，**未做端到端验证**（与库内 `status=2` 历史 0 条一致）。
+
+### 10.4 DDL 结论（修正 §9.5）
+| 表 | §9.5 要求 | 实际结论 |
+|---|---|---|
+| `wf_instance.engine_inst_id` | 唯一索引 | **已存在** `UNIQUE KEY uk_engine_inst`，无需 DDL |
+| `wf_task.engine_task_id` | 唯一索引 | **不能建**：协办(7)/抄送(8)/传阅(11) 复用同一 `engine_task_id`（数据实证：同一 id 对应 5 个不同办理人）；该列 `NOT NULL DEFAULT ''`，建唯一索引会重现 `Duplicate entry ''` 事故。幂等**纯靠应用层先查后写** |
+
+### 10.5 踩坑记录（真实事故）
+1. **`updateById` 置 NULL 会生成无 SET 子句的 UPDATE**：MyBatis-Plus 只更新非 null 字段，传全 null 实体拼出 `UPDATE wf_instance WHERE id=?` → SQL 语法错误 → C1 下抛异常 → **整个引擎操作回滚**（撤回返回 500、实例停在运行中）。置 NULL 必须用 `UpdateWrapper.setSql("pending_status = NULL")`。
+   > 反面印证 C1 确实生效：台账写失败真的回滚了引擎操作，没有留下半截状态。
+2. **阶段 3 后差异计数语义失效**：业务不再预写状态，事件到达时「实际值≠目标态」是**正常流程**而非漂移（实测 `ENTITY_SUSPENDED/ACTIVATED` 各计 1 条但状态写对了）。已改为只在实际值**既非目标态、也非合法前置态**时才计差异（暂停前允许 0、恢复前允许 4、终态前允许 0/4）。
+3. **`PROCESS_STARTED` 的时点约束**：见 10.1，该事件无法用于比对/反写 `engine_inst_id`。
+
+### 10.6 阶段 3 回归结果（2026-09-27）
+| 检查项 | 结果 |
+|---|---|
+| 暂停 → `status=4` | ✅ |
+| 恢复 → `status=0` | ✅ |
+| 撤回 → `status=3` + `end_time` 有值 | ✅ |
+| 撤回后待办（含协办 7）全部关闭 | ✅ 3/3 |
+| `pending_status` 清空为 NULL、无残留 | ✅ |
+| 影子差异计数 `totalDiff` | ✅ 0 |
+| `drift_check` 6a / 6b / 6c | ✅ 全 0 |
+| 待办悬挂（业务待办 / 引擎已无） | ✅ 0 |
+
+> **关键证据**：阶段 3 后 `suspend`/`activate` 业务已**完全不写状态**，而实测状态正确变为 4 / 0 —— 证明状态确由**事件反写**产生，而非兜底逻辑补写。
+
+### 10.7 开关与回滚
+`blade.workflow.ledger-listener.enabled=false` 即完全回到方案 A 显式双写：业务侧 `eventDriven()` 返回 false，恢复 `setStatus+updateById` 与关闭待办循环。**无需改代码、无需修数据**，回滚代价极低。
+
+> **回退路径已实测（2026-09-27）**：开关置 false 重启后，`listenerRegistered=false`，暂停/恢复/撤回仍得到正确状态（4/0/3）、待办（含协办 7）全部关闭、`drift_check` 6a/6b/6c 与待办悬挂均为 0 —— 证明 `WfWriteHelper` 兜底分支可独立撑住流程状态，方案C 出问题时可一键回退且不伤业务。验证通过后已恢复 `enabled=true`。
+
+### 10.8 「不通过(2)」定位结论（2026-09-27 排查）
+**业务语义确认**：本系统的「不同意」= **退回上游节点**（`WfRejectManager` 计算可退回候选、`WfTaskServiceImpl#reject` → `rejectToStarter`），**不是终态**。
+因此 `STATUS_REJECTED(2)` 属于**设计上预留、业务上未启用**的状态，无入口产生它是**符合业务现状的**，不是缺陷：
+- `terminate` 的调用方只有 `withdraw`（撤回）与 `cancel`（撤销），两者均传 `STATUS_CANCELED(3)`；
+- 全库 `wf_instance` 状态分布：运行中(0) 76 / 通过(1) 85 / 撤销(3) 7 / 草稿(5) 6 / **不通过(2) 0 条**。
+
+**对应决策**：不新增业务动作，`pending_status` intent 机制**保留为预留**。待业务侧真正需要「不同意并结束流程」时，只需让该入口调用 `terminate(instId, STATUS_REJECTED, ...)`，反写链路无需改动（已支持派生 2）。
+
+### 10.9 反向漏洞排查结论（PROCESS_COMPLETED 恒派生成「通过(1)」）
+风险假设：若某流程定义存在「不同意」分支走到结束事件，实例会被错标为「已通过」。排查结果：
+
+| 流程定义 | 归档节点 | 指向归档的连线 | 结论 |
+|---|---|---|---|
+| 测试-918（两个版本） | 1 个「结束」 | 4 条，来源均为审批节点(2/5/3/6) | 语义都是审批通过 → 标 1 **正确** |
+| test-922 | **3 个**（正常结束 / 错误结束 / 终止结束） | 4 条，含 `UserTask_Reject`(驳回处理) → `ErrorEndEvent`(错误结束) | **存在错标风险** |
+
+**但风险尚未兑现**：test-922 的 3 个实例全部为**草稿(5)**、`engine_inst_id` 为 NULL —— **从未真正发起过**，故从未触发 `PROCESS_COMPLETED`。
+
+**结论与建议**：
+- 当前生产/在用流程**无此风险**，暂不改造（改造需给 `PROCESS_COMPLETED` 也加 outcome 变量派生，改动面大于收益）。
+- 记录为**已知项**：若将来有流程用「分支走到不同结束事件」表达不同审批结果，必须同步给 `PROCESS_COMPLETED` 加终态派生（业务完成时写流程变量 `outcome`，事件据此派生 1 通过 / 2 不通过），否则会被一律标成「已通过」。

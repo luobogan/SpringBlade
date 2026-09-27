@@ -1,6 +1,10 @@
 package org.springblade.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -207,6 +211,32 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     /**
+     * 取 Flowable 实际使用的流程 key（= BPMN 的 &lt;process id&gt;），用于自检与按 key 回退启动。
+     *
+     * <p>导入流程的 {@code stored proc_key} 是派生独立 key（如 comprehensiveApproval_2），但 Flowable
+     * 以 BPMN process id（comprehensiveApproval）为流程 key；故发起自检/回退必须用真实 id，否则会
+     * 误报「部署不一致」或按 key 启动失败。取不到时退回 stored proc_key（设计器流程二者一致）。</p>
+     */
+    private static String realFlowKey(WfProcessDefinition def) {
+        if (def == null) {
+            return null;
+        }
+        String xml = def.getBpmnXml();
+        if (xml != null && !xml.isBlank()) {
+            String s = xml.indexOf('<') >= 0 ? xml
+                : new String(Base64.getDecoder().decode(xml), StandardCharsets.UTF_8);
+            int idx = s.indexOf("<process");
+            if (idx >= 0) {
+                Matcher m = Pattern.compile("id\\s*=\\s*\"([^\"]+)\"").matcher(s.substring(idx));
+                if (m.find()) {
+                    return m.group(1);
+                }
+            }
+        }
+        return def.getProcKey();
+    }
+
+    /**
      * 正式发起守卫：同一 procKey 版本组内存在未清理的测试实例（{@code is_test=1}）时拒绝发起。
      *
      * <p>测试数据未收尾意味着引擎里可能仍残留测试部署（历史版本与正式共用同一 procKey 部署），
@@ -318,10 +348,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 引擎多实例：进入任一 MI 节点前集合变量须就绪，发起即注入（覆盖首节点即为多实例的场景）。
         injectMiCollectionVars(def.getId(), inst, vars, starter);
 
-        // 引擎 key：默认用定义的 procKey；测试态由 WfTestServiceImpl 传 procKey + "__test"
-        // （测试部署独立 key，见 WfDefinitionServiceImpl#deployForTest）
+        // 引擎 key：测试态由 WfTestServiceImpl 传 procKey + "__test"（测试部署独立 key，见 deployForTest）；
+        // 正式发起默认取 BPMN 真实 process id（导入流程 stored proc_key 是派生独立 key，但 Flowable
+        // 以 BPMN process id 为流程 key；用派生 key 自检会误报「部署不一致」、回退按 key 启动也会失败）。
         String engineKey = (dto.getEngineKey() != null && !dto.getEngineKey().isBlank())
-            ? dto.getEngineKey() : def.getProcKey();
+            ? dto.getEngineKey() : realFlowKey(def);
         boolean test = Boolean.TRUE.equals(dto.getTestFlag());
         // 正式发起守卫：存在未清理的测试数据时拒绝，避免带着测试残留（历史测试部署仍可能占用
         // 正式 procKey 的「最新部署」位置）发起正式流程
@@ -1053,7 +1084,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 记录级鉴权：只有发起人本人（或流程管理员）能终止自己的申请
         WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "终止");
         assertNotTestInst(inst, "终止");
-        // 双写收口：台账置暂停 + 流转日志 + 引擎挂起，三者同事务、不可只写其一
+        // 方案C 阶段3：状态改由引擎事件（ENTITY_SUSPENDED）反写，业务不再显式写 status；
+        // 监听开关关闭、或 engineInstId 为空（引擎不派发事件）时由 WfWriteHelper 兜底显式写。
+        // 引擎挂起调用本身必留 —— 它是产生事件的动作，删了就不会有反写。
         writeHelper.suspend(inst);
         return true;
     }
@@ -1069,7 +1102,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 属越权 —— 补齐为与 stop 同口径（见方案 V15 / C19）
         WfAuthUtil.requireSelfOrAdmin(inst.getStarter(), "恢复");
         assertNotTestInst(inst, "恢复");
-        // 双写收口：台账置运行中 + 流转日志 + 引擎激活，三者同事务、不可只写其一
+        // 方案C 阶段3：状态改由引擎事件（ENTITY_ACTIVATED）反写，业务不再显式写 status；
+        // 监听开关关闭、或 engineInstId 为空（引擎不派发事件）时由 WfWriteHelper 兜底显式写。
+        // 引擎激活调用本身必留 —— 它是产生事件的动作，删了就不会有反写。
         writeHelper.activate(inst);
         return true;
     }
@@ -1274,6 +1309,75 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 }
             }
         }
+        // 运行期兜底：引擎任务与业务待办一致性告警（只记录、绝不阻断事务）
+        warnIfEngineTaskMismatch(inst, engineTasks);
+    }
+
+    /**
+     * 运行期兜底告警：校验「引擎当前活动 userTask」与「业务 wf_task 待办」是否对应，
+     * 不一致仅 {@code log.warn}，<b>绝不抛异常、绝不阻断事务</b>（推进/退回都在业务事务内，
+     * 抛异常会回滚用户操作）。
+     *
+     * <p>背景：drift_check.sql 的「A 类漂移」（引擎有任务、业务缺 wf_task → 用户看不到该待办）
+     * 此前只能靠人工跑脚本发现，静默期长；此处把该校验运行期化，漂移即时可见。</p>
+     *
+     * <p>已排除「退回发起人 → 等待重新提交」这一<b>合法中间态</b>（{@link #awaitingCreatorResubmit}）：
+     * {@code WfTaskServiceImpl#rejectToStarter} 刻意让引擎 token 停在第一个审批节点（保证引擎始终有
+     * 活动任务、不被 advance 判成「无活动任务=流程结束」而误归档），业务侧则只给发起人一条
+     * {@code engine_task_id} 为空的合成待办 —— 故该态下引擎任务本就无 wf_task 对应，属预期表现；
+     * 发起人重新提交后走 resubmitByCreator 重新入流，漂移自动消失。不加此排除会对每单退回发起人
+     * 的实例狂刷误报。</p>
+     *
+     * @param inst        当前实例
+     * @param engineTasks 引擎当前活动任务（advanceInternal 内已取得；TaskQuery 只返回 userTask，无需再判类型）
+     */
+    private void warnIfEngineTaskMismatch(WfInstance inst, List<TaskVO> engineTasks) {
+        try {
+            if (inst == null || engineTasks == null || engineTasks.isEmpty()) {
+                return;
+            }
+            if (awaitingCreatorResubmit(inst.getId())) {
+                log.debug("[blade-workflow] 跳过任务一致性告警：实例处于「退回发起人→等待重新提交」合法中间态. instId={}",
+                    inst.getId());
+                return;
+            }
+            // 一次性查出本实例待办并取 engine_task_id 集合，避免逐条查库（N+1）
+            List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, inst.getId())
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+            java.util.Set<String> bound = todos.stream()
+                .map(WfTask::getEngineTaskId)
+                .filter(id -> id != null && !id.isEmpty())
+                .collect(java.util.stream.Collectors.toSet());
+            for (TaskVO t : engineTasks) {
+                String tid = t.getTaskId();
+                if (tid != null && !tid.isEmpty() && !bound.contains(tid)) {
+                    log.warn("[blade-workflow] 引擎任务与业务待办不一致（A类漂移，用户看不到该待办）. "
+                            + "instId={}, engineTaskId={}, nodeKey={}",
+                        inst.getId(), tid, t.getTaskDefinitionKey());
+                }
+            }
+        } catch (Exception e) {
+            // 兜底告警自身绝不能影响业务事务
+            log.warn("[blade-workflow] 任务一致性兜底告警失败（忽略）. instId={}",
+                inst == null ? null : inst.getId(), e);
+        }
+    }
+
+    /**
+     * 是否处于「退回发起人 → 等待重新提交」合法中间态：存在一条 {@code engine_task_id}
+     * 为空/NULL 的待办（合成任务，与草稿待办同一套机制）。判据与 drift_check.sql 第二节
+     * 的排除条件完全一致，保证脚本与运行期两处口径相同。
+     */
+    private boolean awaitingCreatorResubmit(Long instId) {
+        if (instId == null) {
+            return false;
+        }
+        Long cnt = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .and(w -> w.isNull(WfTask::getEngineTaskId).or().eq(WfTask::getEngineTaskId, "")));
+        return cnt != null && cnt > 0;
     }
 
     /**
@@ -1674,7 +1778,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         // 测试态：撤回 / 撤销 会终结实例并关闭其全部待办 —— 测试实例不走这条收尾路径（C19）
         assertNotTestInst(inst, action);
-        // 双写收口：台账置终态 + 关待办 + 流转日志 + 引擎终结，四者同事务、不可只写其一
+        // 方案C 阶段3：终态与关待办改由引擎事件（PROCESS_CANCELLED）反写，业务不再显式写；
+        // 期望终态通过 wf_instance.pending_status（intent）告知事件，以区分「不通过(2)」与「撤销(3)」。
+        // 监听开关关闭、或 engineInstId 为空（引擎不派发事件）时由 WfWriteHelper 兜底显式写。
+        // deleteProcessInstance 必留 —— 它是产生事件的动作，删了就不会有反写。
         return writeHelper.terminate(inst, status, opinion, action);
     }
 

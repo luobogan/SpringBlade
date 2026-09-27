@@ -59,10 +59,35 @@ public class WfWriteHelper {
     private boolean approvalCommentEnabled;
 
     /**
-     * 终结实例（撤销 / 撤回 / 不通过等终态）：台账置终态 + 关待办 + 流转日志 + 引擎删实例。
+     * 方案C 台账事件反写开关 —— 与 {@code WfEngineEventListener} 的
+     * {@code @ConditionalOnProperty(name="blade.workflow.ledger-listener.enabled", havingValue="true", matchIfMissing=false)}
+     * <b>同源</b>，两处判断不会不一致。
      *
-     * <p>四步同事务，顺序与收敛前一致：先台账、后引擎（引擎调用为「尽力而为」，
-     * 实例已不存在时 {@link IProcessService#deleteProcessInstance} 内部吞异常，不阻断业务）。</p>
+     * <p>{@code true}（监听在）→ 本类<b>不写</b> {@code wf_instance.status} / {@code end_time}，
+     * 也不手工关待办，改由 {@code ENTITY_SUSPENDED} / {@code ENTITY_ACTIVATED} / {@code PROCESS_CANCELLED}
+     * 事件经 {@code WfStateProjector} 反写（单一写入源）。</p>
+     *
+     * <p>{@code false}（监听不在）→ 保留原显式写，回退方案A。</p>
+     *
+     * <p><b>为什么必须保留这个兜底</b>：治理文档 §7 承诺「关闭开关即回方案A 显式双写」。若直接删除业务写，
+     * 关掉监听开关后 {@code wf_instance.status} 将<b>完全不被更新</b>（引擎挂起/激活照常发生），
+     * 暂停/恢复/终止会<b>静默失效</b> —— 等于埋了个只在关开关时才爆的雷。</p>
+     */
+    @Value("${blade.workflow.ledger-listener.enabled:false}")
+    private boolean ledgerListenerEnabled;
+
+    /**
+     * 终结实例（撤销 / 撤回 / 不通过等终态）：终态 + 关待办 + 流转日志 + 引擎删实例。
+     *
+     * <p><b>写入源（方案C 阶段3）</b>：
+     * <ul>
+     *   <li>{@code ledgerListenerEnabled=true} 且引擎实例存在 → 状态/关待办<b>不再由本类写</b>，
+     *       改由 {@code PROCESS_CANCELLED} 事件经 {@code WfStateProjector} 反写；
+     *       本类改为在调引擎<b>之前</b>写入 {@code pending_status} intent，告诉事件派生哪个终态 ——
+     *       该事件只有「取消」语义，分不清「不通过(2)」与「撤销(3)」。</li>
+     *   <li>否则（开关关闭，或 {@code engineInstId} 为空导致不会派发事件）→ 沿用原显式写兜底。</li>
+     * </ul>
+     * </p>
      *
      * @param inst    已加载的实例（调用方已完成鉴权与测试态守卫）
      * @param status  目标终态（{@link WfInstance#STATUS_APPROVED} / {@link WfInstance#STATUS_REJECTED} / {@link WfInstance#STATUS_CANCELED}）
@@ -71,49 +96,133 @@ public class WfWriteHelper {
      * @return 恒 true（与收敛前语义一致）
      */
     public boolean terminate(WfInstance inst, int status, String opinion, String action) {
-        inst.setStatus(status);
-        inst.setEndTime(new Date());
-        instanceMapper.updateById(inst);
+        boolean eventDriven = eventDriven(inst);
+        if (eventDriven) {
+            // ① 先落 intent（必须在调引擎之前，否则事件到达时读不到）
+            markPendingStatus(inst.getId(), status);
+        } else {
+            // 兜底：开关关闭，或 engineInstId 为空（引擎不会派发事件）→ 显式写
+            inst.setStatus(status);
+            inst.setEndTime(new Date());
+            instanceMapper.updateById(inst);
+            closePendingTasks(inst.getId());
+        }
+        appendLog(inst.getId(), null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
+            WfApprovalLog.LOG_SUPERVISE, action + "：" + (opinion == null ? "" : opinion));
 
-        // 关闭所有未完成任务（含协办/征询待办：实例终止时一并清掉，避免孤儿待办）
+        // 同步终结引擎运行态实例（必留：这是产生 PROCESS_CANCELLED 事件的动作本身）
+        processService.deleteProcessInstance(inst.getEngineInstId(), action);
+        if (eventDriven) {
+            // ② 兜底校验：事件反写若未生效（如监听异常被引擎侧吞掉），补写并关待办
+            ensureApplied(inst.getId(), status, true);
+        }
+        return true;
+    }
+
+    /**
+     * 暂停实例：{@code status=暂停(4)} + 流转日志 + 引擎挂起实例（触发 {@code ENTITY_SUSPENDED}）。
+     *
+     * <p>开关开启且引擎实例存在时，状态改由事件反写（写入源说明见 {@link #terminate}）。</p>
+     */
+    public void suspend(WfInstance inst) {
+        boolean eventDriven = eventDriven(inst);
+        if (!eventDriven) {
+            inst.setStatus(WfInstance.STATUS_SUSPENDED);
+            instanceMapper.updateById(inst);
+        }
+        appendLog(inst.getId(), null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
+            WfApprovalLog.LOG_SUPERVISE, "暂停流程");
+        // 同步挂起引擎运行态实例（必留：这是产生 ENTITY_SUSPENDED 事件的动作本身）
+        processService.suspendProcessInstance(inst.getEngineInstId());
+        if (eventDriven) {
+            ensureApplied(inst.getId(), WfInstance.STATUS_SUSPENDED, false);
+        }
+    }
+
+    /**
+     * 恢复实例：{@code status=运行中(0)} + 流转日志 + 引擎激活实例（触发 {@code ENTITY_ACTIVATED}）。
+     *
+     * <p>开关开启且引擎实例存在时，状态改由事件反写（写入源说明见 {@link #terminate}）。</p>
+     */
+    public void activate(WfInstance inst) {
+        boolean eventDriven = eventDriven(inst);
+        if (!eventDriven) {
+            inst.setStatus(WfInstance.STATUS_RUNNING);
+            instanceMapper.updateById(inst);
+        }
+        appendLog(inst.getId(), null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
+            WfApprovalLog.LOG_SUPERVISE, "恢复流程");
+        // 同步激活引擎运行态实例（必留：这是产生 ENTITY_ACTIVATED 事件的动作本身）
+        processService.activateProcessInstance(inst.getEngineInstId());
+        if (eventDriven) {
+            ensureApplied(inst.getId(), WfInstance.STATUS_RUNNING, false);
+        }
+    }
+
+    // ---------------- 方案C 阶段3 支撑方法 ----------------
+
+    /**
+     * 是否走「事件驱动」写入：开关开启 <b>且</b> 引擎实例ID 非空。
+     *
+     * <p>{@code engineInstId} 为空/空白时 {@code ProcessServiceImpl} 会直接 return、
+     * <b>不派发任何事件</b>（见 {@code ProcessServiceImpl:303-305}），此时必须走显式写兜底，
+     * 否则实例会永久停留在「运行中」。</p>
+     */
+    private boolean eventDriven(WfInstance inst) {
+        String engineInstId = inst == null ? null : inst.getEngineInstId();
+        return ledgerListenerEnabled && engineInstId != null && !engineInstId.isBlank();
+    }
+
+    /** 写入期望终态 intent（{@code PROCESS_CANCELLED} 据此派生 2不通过 / 3撤销） */
+    private void markPendingStatus(Long instId, int status) {
+        WfInstance patch = new WfInstance();
+        patch.setId(instId);
+        patch.setPendingStatus(status);
+        instanceMapper.updateById(patch);
+    }
+
+    /**
+     * 兜底校验：事件驱动下若引擎事件未把台账改到目标态（监听异常被引擎侧吞掉等），补写之，
+     * 避免台账<b>静默</b>停留在旧状态 —— 这是事件驱动相比显式写最主要的风险。
+     */
+    private void ensureApplied(Long instId, int targetStatus, boolean terminal) {
+        WfInstance cur = instanceMapper.selectById(instId);
+        if (cur == null) {
+            return;
+        }
+        if (cur.getStatus() == null || cur.getStatus() != targetStatus) {
+            log.warn("[WfWriteHelper] 引擎事件未反写目标态，兜底补写. instId={}, target={}, actual={}",
+                instId, targetStatus, cur.getStatus());
+            WfInstance patch = new WfInstance();
+            patch.setId(instId);
+            patch.setStatus(targetStatus);
+            if (terminal) {
+                patch.setEndTime(new Date());
+            }
+            instanceMapper.updateById(patch);
+            if (terminal) {
+                closePendingTasks(instId);
+            }
+        }
+        if (cur.getPendingStatus() != null) {
+            // 必须用 UpdateWrapper 显式置 NULL：updateById 只更新非 null 字段，
+            // 传全 null 实体会拼出无 SET 子句的 UPDATE → SQL 语法错误（详见 WfStateProjector#clearPendingStatus）
+            instanceMapper.update(null, Wrappers.<WfInstance>lambdaUpdate()
+                .setSql("pending_status = NULL")
+                .eq(WfInstance::getId, instId));
+        }
+    }
+
+    /** 关闭实例上所有未完成任务（含协办/征询待办，避免孤儿待办） */
+    private void closePendingTasks(Long instId) {
         List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, inst.getId())
+            .eq(WfTask::getInstId, instId)
             .in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
         for (WfTask t : tasks) {
             t.setStatus(WfTask.STATUS_FINISHED);
             t.setOperateTime(new Date());
             taskMapper.updateById(t);
         }
-        appendLog(inst.getId(), null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
-            WfApprovalLog.LOG_SUPERVISE, action + "：" + (opinion == null ? "" : opinion));
-
-        // 同步终结引擎运行态实例（消除 ACT_RU_* 孤儿漂移：撤销/撤回后引擎不再持有该流程）
-        processService.deleteProcessInstance(inst.getEngineInstId(), action);
-        return true;
-    }
-
-    /**
-     * 暂停实例：台账置 {@link WfInstance#STATUS_SUSPENDED} + 流转日志 + 引擎挂起实例。
-     */
-    public void suspend(WfInstance inst) {
-        inst.setStatus(WfInstance.STATUS_SUSPENDED);
-        instanceMapper.updateById(inst);
-        appendLog(inst.getId(), null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
-            WfApprovalLog.LOG_SUPERVISE, "暂停流程");
-        // 同步挂起引擎运行态实例，使引擎与 wf_instance.status=已暂停 对齐
-        processService.suspendProcessInstance(inst.getEngineInstId());
-    }
-
-    /**
-     * 恢复实例：台账置 {@link WfInstance#STATUS_RUNNING} + 流转日志 + 引擎激活实例。
-     */
-    public void activate(WfInstance inst) {
-        inst.setStatus(WfInstance.STATUS_RUNNING);
-        instanceMapper.updateById(inst);
-        appendLog(inst.getId(), null, inst.getCurrentNodeKey(), SecureUtil.getUserId(),
-            WfApprovalLog.LOG_SUPERVISE, "恢复流程");
-        // 同步激活引擎运行态实例，使引擎与 wf_instance.status=运行中 对齐
-        processService.activateProcessInstance(inst.getEngineInstId());
     }
 
     /**

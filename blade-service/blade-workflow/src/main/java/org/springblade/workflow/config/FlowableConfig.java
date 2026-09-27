@@ -18,11 +18,18 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springblade.workflow.listener.WfEngineEventListener;
 
 import javax.sql.DataSource;
+import java.io.File;
 import java.io.IOException;
+import java.net.URL;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +62,11 @@ public class FlowableConfig {
     private final ResourcePatternResolver resourcePatternResolver;
     private final ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider;
 
+    /** 诊断用：装配阶段解析出的实际库名 / 库内 schema 版本 / history，统一打印自检结论 */
+    private String resolvedCatalog;
+    private String dbSchemaVersion;
+    private String dbSchemaHistory;
+
     public FlowableConfig(DataSource dataSource,
                           PlatformTransactionManager transactionManager,
                           ResourcePatternResolver resourcePatternResolver,
@@ -84,7 +96,7 @@ public class FlowableConfig {
             }
             if (db != null && !db.isEmpty()) {
                 configuration.setDatabaseCatalog(db);
-                log.info("[FlowableConfig] 已显式设置 databaseCatalog={}", db);
+                this.resolvedCatalog = db;
             } else {
                 log.warn("[FlowableConfig] 无法解析库名，未设置 databaseCatalog，"
                     + "Flowable 可能因 null catalog 跨 schema 误判 ACT_* 表而建表失败");
@@ -96,12 +108,9 @@ public class FlowableConfig {
         // 如需在新库首次初始化：配置 blade.flowable.database-schema-update=create 启动一次，再改回 true/none。
         // 走 create 时仍依赖上面的 setDatabaseCatalog：否则 isTablePresent 会因 null catalog
         // 跨 schema 误判（扫到别的库里的 ACT_* 表），导致误判成"表不存在/版本不一致"。
-        log.info("[FlowableConfig] databaseSchemaUpdate={}", databaseSchemaUpdate);
         configuration.setDatabaseSchemaUpdate(databaseSchemaUpdate);
-        // 诊断：打印库内 ACT_GE_PROPERTY 真实记录的 schema 版本，一眼看出引擎期望版本与库实际版本的落差。
-        // 若该值停在 8.1.0.0（8100）而引擎期望 8.1.0.1，即本次 DUE_DATE_ 缺列事故的根因；
-        // 若为 null/表不存在则代表全新库，将由引擎建表分支处理。
-        logDbSchemaVersion();
+        // 诊断自检：一次性聚合 databaseCatalog + databaseSchemaUpdate + 引擎期望版本 vs 库实际版本，打印一行对比结论。
+        logFlowableSummary();
         // 开发环境关闭异步作业执行器（方案 C §3.4 前提：异步事件改由 job 独立事务派发，须禁用）
         configuration.setAsyncExecutorActivate(false);
         // 显式固化历史级别为 audit：保证 ACT_HI_COMMENT 可落库（审批轨迹迁移 ACT_HI_COMMENT 的硬门槛）。
@@ -110,6 +119,12 @@ public class FlowableConfig {
         configuration.setHistory("audit");
         // 禁止异步历史：HISTORIC_* 事件跨事务写入，开启后存在漏派风险（方案 C §3.4 要求保持关闭）
         configuration.setAsyncHistoryEnabled(false);
+        // ⚠️ 硬约束（方案C 启用真实反写时必读）：上面两行（关闭异步历史 + 关闭异步作业执行器）是方案C 杜绝
+        // 定时/异步漏派漂移的【前提】。若将来把 blade.workflow.ledger-listener.enabled=true 并在
+        // WfStateProjector 内落地真实反写，必须同步把 WfEngineEventListener.isFailOnException() 改回 true
+        // （C1 强一致：写 wf_* 失败即回滚引擎事务，台账与引擎同生共死）。当前监听处于影子模式、isFailOnException=false
+        // 仅打日志不回滚，是【阶段1 验证期】的安全值；一旦开启真实反写却忘了改回 true，事件同事务派发虽已无跨事务漏派，
+        // 但台账写库失败不会回滚引擎，仍会留下"引擎成/台账丢"的漂移——此开关只是消除异步那一维，强一致那维须靠 isFailOnException 兜底。
         // 方案C 事件驱动台账投影：仅当开关 blade.workflow.ledger-listener.enabled=true 时注册全局监听（默认关）。
         // 监听仅依赖 wf_* Mapper（无引擎 Service 依赖），故走 setEventListeners 直接装配（方案C §2.2 方式一），
         // 避免与 processEngineConfiguration 形成构造期循环依赖。关闭开关时 bean 不存在，不注册、完全回到方案A 双写。
@@ -133,7 +148,13 @@ public class FlowableConfig {
 
     @Bean
     public ProcessEngine processEngine() throws Exception {
-        return processEngineFactory().getObject();
+        ProcessEngine engine = processEngineFactory().getObject();
+        // 确认引擎真的构建成功（而非只配了 bean 没起来）。构建失败（如 schema 升级/建表异常）会在此前抛错，
+        // 这行就不会出现——它本身即“引擎没起来”的否定信号。
+        String engineVersion = resolveEngineSchemaVersion();
+        log.info("[FlowableConfig] [引擎就绪] ProcessEngine 已成功构建 ✓ name={} | 引擎版本={}",
+            engine.getName(), (engineVersion != null ? engineVersion : "未知"));
+        return engine;
     }
 
     @Bean
@@ -162,29 +183,95 @@ public class FlowableConfig {
     }
 
     /**
-     * 诊断用：读取库内 ACT_GE_PROPERTY 的 schema 版本（及 history），打印到启动日志。
-     * 单独走 DataSource JDBC，避免依赖尚未构建的 ProcessEngine；表不存在/查询失败均仅告警、不影响装配。
+     * 诊断自检：聚合 databaseCatalog / databaseSchemaUpdate / 引擎期望版本 / 库实际版本，
+     * 打印一行“一目了然”的对比结论。单独走 DataSource JDBC，不依赖尚未构建的 ProcessEngine；
+     * 表不存在/查询失败视为全新库，不影响装配。
      */
-    private void logDbSchemaVersion() {
+    private void logFlowableSummary() {
+        String engineExpected = resolveEngineSchemaVersion();
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                  "SELECT NAME_, VALUE_ FROM ACT_GE_PROPERTY WHERE NAME_ IN ('schema.version', 'schema.history')")) {
-            StringBuilder sb = new StringBuilder("ACT_GE_PROPERTY 现状 → ");
-            boolean any = false;
             while (rs.next()) {
-                any = true;
-                sb.append(rs.getString("NAME_")).append('=').append(rs.getString("VALUE_")).append("; ");
-            }
-            if (any) {
-                log.info("[FlowableConfig] {}", sb);
-            } else {
-                log.warn("[FlowableConfig] ACT_GE_PROPERTY 中无 schema.version/schema.history 记录，"
-                    + "库可能尚未初始化（全新库，将由引擎按 {} 策略处理）", databaseSchemaUpdate);
+                String name = rs.getString("NAME_");
+                String value = rs.getString("VALUE_");
+                if ("schema.version".equals(name)) {
+                    this.dbSchemaVersion = value;
+                } else if ("schema.history".equals(name)) {
+                    this.dbSchemaHistory = value;
+                }
             }
         } catch (Exception e) {
-            log.warn("[FlowableConfig] 读取 ACT_GE_PROPERTY 失败（表可能不存在，属全新库正常情况）：{}", e.getMessage());
+            log.debug("[FlowableConfig] 读取 ACT_GE_PROPERTY 失败（全新库常见，将按建表处理）：{}", e.getMessage());
         }
+
+        String catalog = (this.resolvedCatalog != null) ? this.resolvedCatalog : "未解析/Null(可能跨schema误判)";
+        String actual = (this.dbSchemaVersion != null) ? this.dbSchemaVersion : "N/A(全新库)";
+
+        String conclusion;
+        if (engineExpected == null) {
+            conclusion = "引擎版本未知，无法比对（请检查 flowable-engine 依赖）";
+        } else if (this.dbSchemaVersion == null) {
+            conclusion = "库未初始化，启动将按 schemaUpdate 策略建表/升级";
+        } else if (engineExpected.equals(this.dbSchemaVersion)) {
+            conclusion = "版本一致 ✓";
+        } else if ("true".equalsIgnoreCase(databaseSchemaUpdate) || "create".equalsIgnoreCase(databaseSchemaUpdate)) {
+            conclusion = "库版本偏低/不一致，启动将自动升级(" + this.dbSchemaVersion + "→" + engineExpected + ")";
+        } else {
+            conclusion = "⚠ 库版本(" + this.dbSchemaVersion + ")≠引擎期望(" + engineExpected
+                + ")，且 schemaUpdate=none 不自动升级，可能缺列/报错(如 DUE_DATE_)";
+        }
+
+        log.info("[FlowableConfig] [映射自检] catalog={} | databaseSchemaUpdate={} | 引擎期望版本={} | 库实际版本={} | 结论: {}",
+            catalog, databaseSchemaUpdate, engineExpected, actual, conclusion);
+        if (this.dbSchemaHistory != null) {
+            log.info("[FlowableConfig] [映射自检] schema.history={}", this.dbSchemaHistory);
+        }
+    }
+
+    /**
+     * 从 flowable-engine jar 的升级脚本资源反推引擎“期望 schema 版本”：取所有
+     * flowable.all.upgradestep.*.to.{to}.engine.sql 中最大的 to 段（如 8101），
+     * 规整为 8.1.0.1 形式——这正是 Flowable 自身升级链要抵达的目标版本，且与库内
+     * ACT_GE_PROPERTY.schema.version 格式一致，可直接比对。不依赖任何被移除的版本常量类。
+     */
+    private static String resolveEngineSchemaVersion() {
+        try {
+            URL loc = SpringProcessEngineConfiguration.class.getProtectionDomain()
+                .getCodeSource().getLocation();
+            if (loc == null || !loc.getPath().endsWith(".jar")) {
+                return null;
+            }
+            try (JarFile jar = new JarFile(new File(loc.toURI()))) {
+                Pattern p = Pattern.compile("org/flowable/db/upgrade/flowable\\.all\\.upgradestep\\.\\d+\\.to\\.(\\d+)\\.engine\\.sql$");
+                String maxTo = null;
+                Enumeration<JarEntry> entries = jar.entries();
+                while (entries.hasMoreElements()) {
+                    String name = entries.nextElement().getName();
+                    Matcher m = p.matcher(name);
+                    if (m.matches()) {
+                        String to = m.group(1);
+                        if (maxTo == null || to.compareTo(maxTo) > 0) {
+                            maxTo = to;
+                        }
+                    }
+                }
+                return (maxTo != null) ? formatVersion(maxTo) : null;
+            }
+        } catch (Exception e) {
+            log.debug("[FlowableConfig] 反推引擎期望 schema 版本失败：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 把 4 位升级编号（如 8101 / 6411）规整为带点的 schema 版本（8.1.0.1 / 6.4.1.1） */
+    private static String formatVersion(String fourDigits) {
+        if (fourDigits == null || fourDigits.length() != 4) {
+            return fourDigits;
+        }
+        return fourDigits.charAt(0) + "." + fourDigits.charAt(1) + "."
+            + fourDigits.charAt(2) + "." + fourDigits.charAt(3);
     }
 
     private static String parseDbFromUrl(String url) {

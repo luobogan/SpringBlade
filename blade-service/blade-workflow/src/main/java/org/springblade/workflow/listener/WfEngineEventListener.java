@@ -36,53 +36,56 @@ public class WfEngineEventListener implements FlowableEventListener {
         this.projector = projector;
     }
 
+    /**
+     * 事件派发。<b>阶段2 起不再吞异常</b>：写台账失败必须向上传播，
+     * 配合 {@link #isFailOnException()} = true 让引擎操作整体回滚（C1 强一致），
+     * 避免出现「引擎动了、台账没动」的漂移（C2 弱一致会重新引入该问题，治理文档 §4.3 明确不采用）。
+     *
+     * <p>注意：投影器内部对「查不到 wf_instance / wf_task 行」等数据性情况只记 warn 并返回，
+     * 不抛异常 —— 那属于数据问题，不应阻断用户操作；只有真正的写失败才会回滚。</p>
+     */
     @Override
     public void onEvent(FlowableEvent event) {
-        try {
-            if (!(event.getType() instanceof FlowableEngineEventType type)) {
-                return;
-            }
-            // 统一从 FlowableEngineEvent 取 processInstanceId；任务事件 entity 为 Task，取其 taskId/assignee
-            String procInstId = null;
-            String taskId = null;
-            String assignee = null;
-            if (event instanceof FlowableEngineEvent ee) {
-                procInstId = ee.getProcessInstanceId();
-            }
-            if (event instanceof FlowableEntityEvent ee) {
-                Object entity = ee.getEntity();
-                if (entity instanceof Task t) {
-                    taskId = t.getId();
-                    assignee = t.getAssignee();
-                    if (procInstId == null) {
-                        procInstId = t.getProcessInstanceId();
-                    }
+        if (!(event.getType() instanceof FlowableEngineEventType type)) {
+            return;
+        }
+        // 统一从 FlowableEngineEvent 取 processInstanceId；任务事件 entity 为 Task，取其 taskId/assignee
+        String procInstId = null;
+        String taskId = null;
+        String assignee = null;
+        if (event instanceof FlowableEngineEvent ee) {
+            procInstId = ee.getProcessInstanceId();
+        }
+        if (event instanceof FlowableEntityEvent ee) {
+            Object entity = ee.getEntity();
+            if (entity instanceof Task t) {
+                taskId = t.getId();
+                assignee = t.getAssignee();
+                if (procInstId == null) {
+                    procInstId = t.getProcessInstanceId();
                 }
             }
-            switch (type) {
-                case PROCESS_STARTED -> projector.onProcessStarted(procInstId);
-                case PROCESS_COMPLETED -> projector.onProcessCompleted(procInstId);
-                case PROCESS_CANCELLED -> projector.onProcessCancelled(procInstId);
-                case ENTITY_SUSPENDED -> projector.onEntitySuspended(procInstId);
-                case ENTITY_ACTIVATED -> projector.onEntityActivated(procInstId);
-                case TASK_CREATED -> projector.onTaskCreated(taskId, procInstId, assignee);
-                case TASK_ASSIGNED -> projector.onTaskAssigned(taskId, assignee);
-                case TASK_COMPLETED -> projector.onTaskCompleted(taskId, procInstId);
-                default -> {
-                    // 其余事件（变量/作业/活动/序列流等）暂不在影子范围内
-                }
+        }
+        switch (type) {
+            case PROCESS_STARTED -> projector.onProcessStarted(procInstId);
+            case PROCESS_COMPLETED -> projector.onProcessCompleted(procInstId);
+            case PROCESS_CANCELLED -> projector.onProcessCancelled(procInstId);
+            case ENTITY_SUSPENDED -> projector.onEntitySuspended(procInstId);
+            case ENTITY_ACTIVATED -> projector.onEntityActivated(procInstId);
+            case TASK_CREATED -> projector.onTaskCreated(taskId, procInstId, assignee);
+            case TASK_ASSIGNED -> projector.onTaskAssigned(taskId, assignee);
+            case TASK_COMPLETED -> projector.onTaskCompleted(taskId, procInstId);
+            default -> {
+                // 其余事件（变量/作业/活动/序列流等）不参与台账反写
             }
-        } catch (Exception e) {
-            // 影子模式：绝不抛异常影响引擎事务，仅记录，避免引入漂移或阻断流程
-            log.warn("[WfEngineEventListener] 事件处理异常（影子模式已忽略）: type={}, msg={}",
-                event != null ? event.getType() : null, e.getMessage());
         }
     }
 
     @Override
     public boolean isFailOnException() {
-        // 影子模式不回滚引擎操作；真实反写阶段（C1 强一致）再按需改为 true
-        return false;
+        // 阶段2：真实反写 + C1 强一致 —— 台账写失败即回滚整个引擎操作（代价是连带回滚用户操作，
+        // 故必须先经阶段1 影子验证映射正确，且全程由 ledger-listener.enabled 开关保护、可一键回退）
+        return true;
     }
 
     @Override

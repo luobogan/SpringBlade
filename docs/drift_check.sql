@@ -10,6 +10,12 @@
 --   4) 协办(7)/抄送(8)/传阅(11) 复用同一 engine_task_id → 行数不可直接比，按 ID 关联
 --   5) 测试态(is_test=1) 不参与对账（其清理走「测试数据一键清理」独立路径）
 --   6) 在 wf_* 与 ACT_* 同库的 MySQL 客户端执行
+--   7) 「退回发起人 → 等待重新提交」是合法中间态，不算漂移（见第二节的排除条件）：
+--      WfTaskServiceImpl#rejectToStarter 刻意让引擎 token 停在「第一个审批节点」
+--      （保证引擎始终有活动任务，避免被 advance 判成「无活动任务=流程结束」而误归档），
+--      业务侧则把 current_node_key 置为创建节点、只给发起人一条 engine_task_id 为空的
+--      合成待办。故该态下「引擎有开放任务、业务无对应 wf_task」是预期表现；
+--      发起人重新提交后走 resubmitByCreator 重新入流，漂移自动消失。
 --
 -- 使用顺序：先跑本文件确认漂移范围 → 跑一次性修复脚本(HistoricalDriftFixer) → 再跑本文件复核应为 0
 -- ============================================================================
@@ -26,6 +32,9 @@ SELECT
 
 
 -- ============ 二、A 类漂移：引擎有任务，业务缺记录（孤儿任务 → 用户看不到待办） ============
+-- 已排除「退回发起人 → 等待重新提交」这一合法中间态（判据见文件头前提 7)）：
+-- 该态下引擎刻意停在第一个审批节点，业务侧只有发起人一条 engine_task_id 为空的合成待办，
+-- 引擎任务本就无 wf_task 对应，属预期表现而非漂移；重新提交后漂移自动消失。
 SELECT rt.ID_        AS engine_task_id,
        rt.NAME_      AS task_name,
        rt.ASSIGNEE_  AS engine_assignee,
@@ -34,6 +43,31 @@ SELECT rt.ID_        AS engine_task_id,
        rt.CREATE_TIME_
 FROM ACT_RU_TASK rt
 WHERE rt.ID_ NOT IN (SELECT engine_task_id FROM wf_task WHERE engine_task_id IS NOT NULL)
+  AND NOT EXISTS (
+        SELECT 1
+        FROM wf_instance wi
+        WHERE wi.engine_inst_id = rt.PROC_INST_ID_
+          AND EXISTS (
+                SELECT 1 FROM wf_task ct
+                WHERE ct.inst_id = wi.id
+                  AND ct.status = 0
+                  AND (ct.engine_task_id IS NULL OR ct.engine_task_id = '')
+          )
+  )
+ORDER BY rt.CREATE_TIME_ DESC;
+
+-- 二-b：被上一条排除掉的「等待发起人重新提交」实例（合法中间态，仅供核对，不计入漂移）
+SELECT wi.id AS inst_id, wi.title, wi.current_node_key, wi.starter,
+       rt.ID_ AS parked_engine_task_id, rt.NAME_ AS parked_task_name, rt.CREATE_TIME_
+FROM ACT_RU_TASK rt
+JOIN wf_instance wi ON wi.engine_inst_id = rt.PROC_INST_ID_
+WHERE rt.ID_ NOT IN (SELECT engine_task_id FROM wf_task WHERE engine_task_id IS NOT NULL)
+  AND EXISTS (
+        SELECT 1 FROM wf_task ct
+        WHERE ct.inst_id = wi.id
+          AND ct.status = 0
+          AND (ct.engine_task_id IS NULL OR ct.engine_task_id = '')
+  )
 ORDER BY rt.CREATE_TIME_ DESC;
 
 

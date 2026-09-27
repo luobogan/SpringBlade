@@ -45,6 +45,20 @@ spring:
 blade:
   flowable:
     database-schema-update: true
+  workflow:
+    ledger-listener:
+      # 方案C 总开关（《工作流双写漂移治理-方案C-事件驱动落地设计.md》§6/§7，进度见 §10）。
+      # 当前阶段：阶段 3「切单写」已完成并回归通过（见文档 §10.6）。
+      #
+      # true  = 注册 WfEngineEventListener，台账状态由【引擎事件反写】驱动（C1 强一致，isFailOnException=true）；
+      #         业务侧 WfWriteHelper 不再显式写 wf_instance.status / 关闭 wf_task，只写 intent 并由事件落地。
+      # false = 完全回到方案A 显式双写：业务侧 eventDriven() 返回 false，恢复 setStatus+updateById
+      #         与关闭待办循环。无需改代码、无需修数据 —— 这是方案C 的【回退路径】。
+      #
+      # 注意：若 Nacos blade-workflow-dev.yaml 也配置了该键，以 Nacos 为准（届时需在 Nacos 侧同步修改）。
+      # 回退路径验证已通过（2026-09-27）：enabled=false 时 WfWriteHelper 兜底显式写可独立撑住状态。
+      # 现恢复 true，处于阶段 3「切单写」生效状态。
+      enabled: true
   data-scope:
     mapper-exclude:
       - FlowMapper
