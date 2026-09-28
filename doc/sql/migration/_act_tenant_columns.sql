@@ -1,0 +1,13 @@
+-- 核查：blade 库各 ACT_* 表是否具备 TENANT_ID_ 列（决定多业务域能否直接按租户隔离）
+SELECT t.TABLE_NAME,
+       CASE WHEN c.COLUMN_NAME IS NULL THEN '❌ 无 TENANT_ID_' ELSE '✅ 有 TENANT_ID_' END AS tenant_col,
+       CASE WHEN c2.COLUMN_NAME IS NULL THEN '-' ELSE '有 PROC_INST_ID_' END AS proc_inst_col
+FROM information_schema.TABLES t
+LEFT JOIN information_schema.COLUMNS c
+       ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME
+      AND c.COLUMN_NAME = 'TENANT_ID_'
+LEFT JOIN information_schema.COLUMNS c2
+       ON c2.TABLE_SCHEMA = t.TABLE_SCHEMA AND c2.TABLE_NAME = t.TABLE_NAME
+      AND c2.COLUMN_NAME = 'PROC_INST_ID_'
+WHERE t.TABLE_SCHEMA = 'blade' AND t.TABLE_NAME LIKE 'ACT\_%'
+ORDER BY tenant_col DESC, t.TABLE_NAME;

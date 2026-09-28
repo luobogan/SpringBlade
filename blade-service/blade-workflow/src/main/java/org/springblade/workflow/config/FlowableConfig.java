@@ -85,7 +85,7 @@ public class FlowableConfig {
         // 关键修复：显式指定 databaseCatalog。Flowable 的 isTablePresent() 在 databaseCatalog 为 null 时，
         // 会调用 getTables(null, null, 'ACT_GE_PROPERTY', ...) —— MySQL 会把 null catalog 当成“所有库”，
         // 误命中其它 schema（如 jeelowcode）里的 ACT_GE_PROPERTY，导致误判版本不一致而拒绝建表。
-        // 显式绑定到本库后，getTables 只扫描 blade_workflow，空库时才能正确走建表分支。
+        // 显式绑定到本库（实际库名由 JDBC URL 动态解析，现为 blade）后，getTables 只扫描该 catalog，空库时才能正确走建表分支。
         try (Connection catalogConn = dataSource.getConnection()) {
             String url = catalogConn.getMetaData().getURL();
             String db = parseDbFromUrl(url);
@@ -111,7 +111,7 @@ public class FlowableConfig {
         configuration.setDatabaseSchemaUpdate(databaseSchemaUpdate);
         // 诊断自检：一次性聚合 databaseCatalog + databaseSchemaUpdate + 引擎期望版本 vs 库实际版本，打印一行对比结论。
         logFlowableSummary();
-        // 开发环境关闭异步作业执行器（方案 C §3.4 前提：异步事件改由 job 独立事务派发，须禁用）
+        // 关闭异步作业执行器（方案 C §3.4 前提：本模块未使用定时器边界事件 / 异步节点，故保持关闭；一旦要支持定时器须开启，并配套 §3.4 的「C1 降级为最终一致 + 常驻对账修复 + deadletter 告警」三项兜底）
         configuration.setAsyncExecutorActivate(false);
         // 显式固化历史级别为 audit：保证 ACT_HI_COMMENT 可落库（审批轨迹迁移 ACT_HI_COMMENT 的硬门槛）。
         // Flowable 默认即为 audit，此处显式声明以消除歧义；表单快照所需的 full 级别不开启（见下沉迁移方案 §0）。
