@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 
 /**
- * 直接在真实 MySQL(blade_workflow) 上执行 Flowable schema 创建（DB_SCHEMA_UPDATE_CREATE）。
+ * 直接在真实 MySQL(blade) 上执行 Flowable schema 创建（DB_SCHEMA_UPDATE_CREATE）。
  * 与线上引擎同版本(7.1.0)，确保 ACT_* 表结构与运行引擎一致。仅建表、不删。
  * 运行：mvn -pl blade-service/blade-workflow test -Dtest=CreateActTablesTest
  *
@@ -22,7 +22,7 @@ public class CreateActTablesTest {
 
     @Test
     public void createSchema() {
-        String url = "jdbc:mysql://127.0.0.1:3306/blade_workflow"
+        String url = "jdbc:mysql://127.0.0.1:3306/blade"
                 + "?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true";
         ProcessEngineConfiguration cfg = ProcessEngineConfiguration.createStandaloneProcessEngineConfiguration();
         cfg.setJdbcUrl(url);
@@ -30,7 +30,7 @@ public class CreateActTablesTest {
         cfg.setJdbcUsername("root");
         cfg.setJdbcPassword("123456");
         // 关键：显式 catalog，避免 isTablePresent 在 null catalog 下跨 schema 误判
-        cfg.setDatabaseCatalog("blade_workflow");
+        cfg.setDatabaseCatalog("blade");
         cfg.setDatabaseSchemaUpdate(AbstractEngineConfiguration.DB_SCHEMA_UPDATE_CREATE);
         cfg.setAsyncExecutorActivate(false);
 

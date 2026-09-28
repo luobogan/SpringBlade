@@ -15,7 +15,7 @@
 //import java.util.Map;
 //
 ///**
-// * 端到端可用性质疑验证：不依赖 HTTP，直接以独立 Flowable 引擎连真实 MySQL(blade_workflow)，
+// * 端到端可用性质疑验证：不依赖 HTTP，直接以独立 Flowable 引擎连真实 MySQL(blade)，
 // * 跑通「部署查询→发起→查待办→完成→待办清空」全流程，证明引擎本身可用。
 // * 仅读取/写入已存在的 7.1.0.2 schema（databaseSchemaUpdate=false），不改动表结构。
 // */
@@ -23,14 +23,14 @@
 //
 //    @Test
 //    public void endToEndUseCase() {
-//        String url = "jdbc:mysql://127.0.0.1:3306/blade_workflow"
+//        String url = "jdbc:mysql://127.0.0.1:3306/blade"
 //                + "?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true";
 //        ProcessEngineConfiguration cfg = ProcessEngineConfiguration.createStandaloneProcessEngineConfiguration();
 //        cfg.setJdbcUrl(url);
 //        cfg.setJdbcDriver("com.mysql.cj.jdbc.Driver");
 //        cfg.setJdbcUsername("root");
 //        cfg.setJdbcPassword("123456");
-//        cfg.setDatabaseCatalog("blade_workflow");
+//        cfg.setDatabaseCatalog("blade");
 //        cfg.setDatabaseSchemaUpdate(ProcessEngineConfiguration.DB_SCHEMA_UPDATE_FALSE);
 //        cfg.setAsyncExecutorActivate(false);
 //

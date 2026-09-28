@@ -23,17 +23,17 @@
 
 
 
-#服务器端口
-server:
-  port: ${blade.workflow.port:8111}
+# #服务器端口
+# server:
+#   port: ${blade.workflow.port:8111}
 
-#数据源配置（从Nacos读取，修改blade.yaml即可）
-spring:
-  datasource:
-    url: ${blade.datasource.workflow.url}
-    username: ${blade.datasource.workflow.username}
-    password: ${blade.datasource.workflow.password}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+# #数据源配置（从Nacos读取，修改blade.yaml即可）
+# spring:
+#   datasource:
+#     url: ${blade.datasource.dev.url}
+#     username: ${blade.datasource.dev.username}
+#     password: ${blade.datasource.dev.password}
+#     driver-class-name: com.mysql.cj.jdbc.Driver
 
 # Flowable ACT_* 表结构策略：true=启动时按版本自动升级（自愈 schema 漂移，仅缺失时建表）。
 # 若不显式配置，FlowableConfig 的 @Value 默认值也是 true。
