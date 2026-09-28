@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
  * 对标泛微E9 ModeFormFieldExtend 表
  */
 @RestController
-@RequestMapping("/api/formmode/field-extend")
+@RequestMapping("/field-extend")
 @Tag(name = "字段扩展属性管理", description = "字段扩展属性管理（对标泛微E9）")
 @RequiredArgsConstructor
 public class FieldExtendController {

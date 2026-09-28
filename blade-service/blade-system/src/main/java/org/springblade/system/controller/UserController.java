@@ -97,6 +97,22 @@ public class UserController {
 	}
 
 	/**
+	 * 保存当前登录用户的主题设置
+	 * <p>前端「主题设置」抽屉点击保存时调用，将布局主题配置（navTheme/colorPrimary/layout 等）以 JSON 字符串持久化到用户表，
+	 * 登录时由 {@link #info(BladeUser)} 随用户信息返回并应用到布局。</p>
+	 */
+	@Operation(summary = "保存主题设置", description = "保存当前登录用户的布局主题配置（JSON 字符串）")
+	@PostMapping("/theme-setting")
+	public R<Boolean> saveThemeSetting(@RequestBody Map<String, String> body, BladeUser bladeUser) {
+		String themeSetting = body.get("themeSetting");
+		boolean updated = userService.lambdaUpdate()
+			.eq(User::getId, bladeUser.getUserId())
+			.set(User::getThemeSetting, themeSetting)
+			.update();
+		return R.status(updated);
+	}
+
+	/**
 	 * 用户列表
 	 */
 	@GetMapping("/list")

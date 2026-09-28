@@ -16,7 +16,7 @@ import java.util.List;
  * 对标泛微E9 selectItem 表
  */
 @RestController
-@RequestMapping("/api/formmode/field-option")
+@RequestMapping("/field-option")
 @Tag(name = "字段选项配置管理", description = "字段选项配置管理（对标泛微E9）")
 @RequiredArgsConstructor
 public class FieldOptionController {

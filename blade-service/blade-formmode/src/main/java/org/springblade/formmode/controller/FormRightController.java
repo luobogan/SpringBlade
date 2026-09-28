@@ -20,7 +20,7 @@ import java.util.List;
  * 对应 ecology 的 FormmodeRightController
  */
 @RestController
-@RequestMapping("/api/blade-formmode/right")
+@RequestMapping({"/api/blade-formmode/right", "/right"})
 @Tag(name = "表单权限", description = "表单建模权限管理")
 @RequiredArgsConstructor
 public class FormRightController extends BladeController {

@@ -17,7 +17,7 @@ import java.util.Map;
  * 自定义搜索/树控制器
  */
 @RestController
-@RequestMapping("/api/blade-formmode")
+@RequestMapping({"/api/blade-formmode", ""})
 @Tag(name = "自定义搜索/树", description = "自定义搜索和树配置")
 @RequiredArgsConstructor
 public class FormSearchTreeController extends BladeController {

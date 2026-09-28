@@ -23,7 +23,7 @@ import java.util.List;
  * 对应 ecology 的 FormmodeFormAction + FormmodeFormController
  */
 @RestController
-@RequestMapping("/api/blade-formmode/mode")
+@RequestMapping({"/api/blade-formmode/mode", "/mode"})
 @Tag(name = "表单模块管理", description = "表单建模模块的CRUD管理")
 @RequiredArgsConstructor
 public class FormModeController extends BladeController {

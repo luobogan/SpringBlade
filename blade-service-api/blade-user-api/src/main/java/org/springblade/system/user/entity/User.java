@@ -211,4 +211,12 @@ public class User extends TenantEntity {
 
 	// ==================== 商城会员字段结束 ====================
 
+	/**
+	 * 主题设置（JSON 字符串，存储前端布局主题配置：navTheme / colorPrimary / layout 等）
+	 * 由「主题设置」抽屉保存，登录时随用户信息返回并应用到布局。
+	 */
+	@Schema(description = "主题设置(JSON)")
+	@TableField("theme_setting")
+	private String themeSetting;
+
 }
