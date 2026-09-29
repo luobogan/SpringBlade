@@ -247,6 +247,66 @@ class WfBpmnExtensionRoundTripTest {
 		}
 	}
 
+	// ----------------------------------------------------- 扩展操作者字段往返保真（schema 新增字段）
+
+	/** 仅含一条携带全部扩展字段的操作者的 userTask，用于验证 T-3 扩字段后无损 */
+	private static final String BPMN_EXT_OP = """
+		<?xml version="1.0" encoding="UTF-8"?>
+		<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+		             xmlns:wf="http://www.springblade.org/workflow"
+		             targetNamespace="http://www.springblade.org/workflow">
+		  <process id="p" isExecutable="true">
+		    <userTask id="approve1" name="审批">
+		      <extensionElements>
+		        <wf:node nodeType="2">
+		          <wf:operator groupNo="0" opType="1" objId="10" bhxj="1" levelMin="0" levelMax="99"
+		                       signOrder="1" batchNo="1" groupName="部门经理" canView="1"
+		                       conditionJson="{&quot;a&quot;:1}" isCoadjutant="1" coadjutants="u1,u2"
+		                       isPending="1" isModify="0" signType="0"/>
+		        </wf:node>
+		      </extensionElements>
+		    </userTask>
+		  </process>
+		</definitions>
+		""";
+
+	@Test
+	@DisplayName("T-3 扩展操作者字段（groupName/conditionJson/coadjutants/isCoadjutant…）经 readNode 解析无损")
+	void extendedOperatorFieldsParsed() {
+		WfNodeExt ext = BpmnExtensionUtil.readNode(
+			(UserTask) parse(BPMN_EXT_OP).getMainProcess().getFlowElement("approve1"));
+		assertNotNull(ext);
+		assertEquals(1, ext.operators.size());
+		BpmnExtensionUtil.WfOperatorExt o = ext.operators.get(0);
+		assertEquals("0", o.groupNo);
+		assertEquals("1", o.opType);
+		assertEquals("10", o.objId);
+		assertEquals("部门经理", o.groupName);
+		assertEquals("1", o.canView);
+		assertEquals("{\"a\":1}", o.conditionJson);
+		assertEquals("1", o.isCoadjutant);
+		assertEquals("u1,u2", o.coadjutants);
+		assertEquals("1", o.isPending);
+		assertEquals("0", o.isModify);
+	}
+
+	@Test
+	@DisplayName("T-3 扩展操作者字段经 writeNode 写回后往返无损")
+	void extendedOperatorFieldsRoundTrip() {
+		BpmnModel model = parse(BPMN_EXT_OP);
+		UserTask task = (UserTask) model.getMainProcess().getFlowElement("approve1");
+		BpmnExtensionUtil.writeNode(task, BpmnExtensionUtil.readNode(task));
+		BpmnModel written = parse(write(model));
+		WfNodeExt ext = BpmnExtensionUtil.readNode(
+			(UserTask) written.getMainProcess().getFlowElement("approve1"));
+		assertEquals(1, ext.operators.size());
+		BpmnExtensionUtil.WfOperatorExt o = ext.operators.get(0);
+		assertEquals("部门经理", o.groupName);
+		assertEquals("{\"a\":1}", o.conditionJson);
+		assertEquals("u1,u2", o.coadjutants);
+		assertEquals("1", o.isPending);
+	}
+
 	// ---------------------------------------------------------------- 工具
 
 	private static BpmnModel parse(String xml) {

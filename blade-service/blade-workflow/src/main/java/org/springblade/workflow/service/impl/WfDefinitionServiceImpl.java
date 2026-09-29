@@ -807,16 +807,27 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             if (ext == null) {
                 continue;
             }
-            Element wfOps = firstChildElement(ext, "wf:operators");
-            Element wfCustom = firstChildElement(ext, "wf:customOperations");
-            Element wfPerm = firstChildElement(ext, "wf:fieldPerms");
-            if (wfOps == null && wfCustom == null && wfPerm == null) {
-                continue;
-            }
             String nodeKey = el.getAttribute("id");
             Long nodeId = nodeKey2Id.get(nodeKey);
             if (nodeId == null) {
                 log.warn("[blade-workflow] importBpmn 节点在流程中不存在，跳过 wf 扩展: nodeKey={}", nodeKey);
+                continue;
+            }
+
+            // —— 新格式优先（BpmnExtensionUtil.writeNode / 回填作业产出）：语义统一收敛在 wf:node 内 ——
+            Element wfNode = firstChildElement(ext, "wf:node");
+            if (wfNode != null) {
+                importNodeOperatorsFromWfNode(nodeId, wfNode);
+                importNodeCustomOpsFromWfNode(defId, nodeKey, wfNode);
+                importNodeFieldPermsFromWfNode(defId, nodeKey, wfNode);
+                continue;
+            }
+
+            // —— 旧格式兼容（历史 BPMN 未回填）：平行容器 wf:operators / wf:customOperations / wf:fieldPerms ——
+            Element wfOps = firstChildElement(ext, "wf:operators");
+            Element wfCustom = firstChildElement(ext, "wf:customOperations");
+            Element wfPerm = firstChildElement(ext, "wf:fieldPerms");
+            if (wfOps == null && wfCustom == null && wfPerm == null) {
                 continue;
             }
 
@@ -885,6 +896,92 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                     fieldPermMapper.insert(p);
                 }
             }
+        }
+    }
+
+    /** 从新格式 wf:node 读取操作者并覆盖式写入 wf_node_operator（字段齐全：opType/objId/groupNo/levelMin/levelMax/协办/条件…） */
+    private void importNodeOperatorsFromWfNode(Long nodeId, Element wfNode) {
+        operatorMapper.delete(Wrappers.<WfNodeOperator>lambdaQuery()
+            .eq(WfNodeOperator::getNodeId, nodeId));
+        for (Element opEl : childElements(wfNode, "wf:operator")) {
+            WfNodeOperator op = new WfNodeOperator();
+            op.setNodeId(nodeId);
+            op.setOpType(parseIntSafe(attr(opEl, "opType", null), 3));
+            op.setObjId(attr(opEl, "objId", null));
+            op.setGroupNo(parseIntSafe(attr(opEl, "groupNo", null), 1));
+            op.setBhxj(parseIntSafe(attr(opEl, "bhxj", null), 0));
+            op.setLevelMin(parseIntOrNull(attr(opEl, "levelMin", null)));
+            op.setLevelMax(parseIntOrNull(attr(opEl, "levelMax", null)));
+            op.setSignOrder(parseIntSafe(attr(opEl, "signOrder", null), 1));
+            op.setBatchNo(parseIntSafe(attr(opEl, "batchNo", null), 1));
+            op.setGroupName(attr(opEl, "groupName", null));
+            op.setCanView(parseIntSafe(attr(opEl, "canView", null), 1));
+            op.setConditionJson(attr(opEl, "conditionJson", null));
+            op.setIsCoadjutant(parseIntSafe(attr(opEl, "isCoadjutant", null), 0));
+            op.setCoadjutants(attr(opEl, "coadjutants", null));
+            op.setIsPending(parseIntSafe(attr(opEl, "isPending", null), 0));
+            op.setIsModify(parseIntSafe(attr(opEl, "isModify", null), 0));
+            op.setSignType(parseIntSafe(attr(opEl, "signType", null), 0));
+            operatorMapper.insert(op);
+        }
+    }
+
+    /** 从新格式 wf:node 读取自定义操作（按钮 + 动作 + 权限矩阵），复用 saveBatch 级联写入 */
+    private void importNodeCustomOpsFromWfNode(Long defId, String nodeKey, Element wfNode) {
+        List<WfCustomOperationFull> fulls = new ArrayList<>();
+        for (Element opEl : childElements(wfNode, "wf:operation")) {
+            WfCustomOperationFull full = new WfCustomOperationFull();
+            WfCustomOperation op = new WfCustomOperation();
+            op.setDefId(defId);
+            op.setNodeKey(nodeKey);
+            op.setBtnName(attr(opEl, "btnName", null));
+            op.setBtnOrder(parseIntSafe(attr(opEl, "btnOrder", null), 0));
+            op.setActionType(parseIntSafe(attr(opEl, "actionType", null), 2));
+            op.setEnabled(parseIntSafe(attr(opEl, "enabled", null), 1));
+            WfCustomOperationAction action = new WfCustomOperationAction();
+            action.setFlowOperation(flowOperationOf(op.getBtnName()));
+            action.setOpinion(op.getBtnName());
+            full.setOp(op);
+            full.setAction(action);
+            List<WfCustomOperationRight> rights = new ArrayList<>();
+            for (Element rEl : childElements(opEl, "wf:right")) {
+                WfCustomOperationRight r = new WfCustomOperationRight();
+                r.setRightType(attr(rEl, "rightType", null));
+                r.setRightValue(attr(rEl, "rightValue", null));
+                rights.add(r);
+            }
+            full.setRights(rights);
+            fulls.add(full);
+        }
+        customOperationService.saveBatch(defId, nodeKey, fulls);
+    }
+
+    /** 从新格式 wf:node 读取字段权限并覆盖式写入 wf_node_field_perm（field/perm，scope 默认 main） */
+    private void importNodeFieldPermsFromWfNode(Long defId, String nodeKey, Element wfNode) {
+        fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+            .eq(WfNodeFieldPerm::getDefId, defId)
+            .eq(WfNodeFieldPerm::getNodeKey, nodeKey));
+        for (Element pEl : childElements(wfNode, "wf:fieldPerm")) {
+            WfNodeFieldPerm p = new WfNodeFieldPerm();
+            p.setDefId(defId);
+            p.setNodeKey(nodeKey);
+            p.setScope("main");
+            p.setFieldName(attr(pEl, "field", null));
+            int perm = parseIntSafe(attr(pEl, "perm", null), 1);
+            p.setPerm(perm);
+            applyThreeDim(p, perm);
+            fieldPermMapper.insert(p);
+        }
+    }
+
+    private Integer parseIntOrNull(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Exception e) {
+            return null;
         }
     }
 
