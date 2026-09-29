@@ -64,6 +64,9 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.jdbc.core.JdbcTemplate;
+
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -97,6 +100,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
     private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
+    /** 原生历史库 JDBC：读源=act 时从 ACT_HI_COMMENT 还原审批日志（与 WfInstanceActWriter 同数据源，与 syncCommentToEngine 对称） */
+    private final JdbcTemplate jdbcTemplate;
     /**
      * 双写收口器：生命周期类操作（终结 / 暂停 / 恢复）的「台账 + 引擎」同写入口。
      *
@@ -152,6 +157,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private static final int SIGN_ALL = 1;
     /** 依次：按批次逐个激活，最后一人处理完才推进引擎 */
     private static final int SIGN_SEQUENCE = 2;
+
+    /** ACT_HI_COMMENT.MESSAGE_ 中审批日志 JSON 解析器（与 WfWriteHelper.COMMENT_MAPPER 对称） */
+    private static final ObjectMapper COMMENT_OM = new ObjectMapper();
 
     /**
      * 表单直发（发起流程页）时创建业务数据行，返回其 id 作为 dataId。
@@ -757,18 +765,48 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return count == null ? 0 : count.intValue();
     }
 
+    /**
+     * 实例加载（读源路由）：act=原生 ACT_HI_PROCINST（按 BUSINESS_ID_ 反查，业务列由双写器写回）；
+     * wf=遗留 wf_instance。返回的 {@link WfInstance} 仅填充鉴权与下游所需字段，status 由 ACT 原生
+     * BUSINESS_STATUS_ 经 {@link ActHiProcinst#statusCode} 映射（与 wf_instance.status 同语义），
+     * 使 canView/fresh/logs/detail 等在切源后行为一致。默认 wf，零行为变化。
+     */
+    private WfInstance loadInstance(Long instId) {
+        if (instId == null) {
+            return null;
+        }
+        if (actRead()) {
+            ActHiProcinst t = actProcinstMapper.selectOne(Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getBusinessId, instId).last("LIMIT 1"));
+            if (t == null) {
+                return null;
+            }
+            WfInstance stub = new WfInstance();
+            stub.setId(t.getBusinessId());
+            stub.setStarter(t.getStarter());
+            stub.setStatus(ActHiProcinst.statusCode(t.getBusinessStatus()));
+            stub.setCurrentNodeKey(t.getCurrentNodeKey());
+            stub.setIsTest(t.getIsTest());
+            stub.setDefId(t.getDefId());
+            stub.setEngineInstId(t.getId());
+            return stub;
+        }
+        return instanceMapper.selectById(instId);
+    }
+
     @Override
     public boolean canView(Long instId) {
-        return canVisible(instanceMapper.selectById(instId));
+        return canVisible(loadInstance(instId));
     }
 
     @Override
     public List<ApprovalLogVO> logs(Long instId) {
         // 记录级鉴权：只有发起人、参与人（办理人/抄送人）或流程管理员能看流转记录
         WfInstance inst = requireVisible(instId, "查看流转记录");
-        List<WfApprovalLog> logs = logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
-            .eq(WfApprovalLog::getInstId, instId)
-            .orderByAsc(WfApprovalLog::getOperateTime));
+        List<WfApprovalLog> logs = actRead() ? readApprovalLogsFromAct(inst)
+            : logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
+                .eq(WfApprovalLog::getInstId, instId)
+                .orderByAsc(WfApprovalLog::getOperateTime));
 
         // 节点信息 → 运行时消费：按「当前节点」的「表单日志查看范围」过滤可见节点的日志。
         // null = 不限制（保持既有行为）。
@@ -926,6 +964,68 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             result.add(vo);
         }
         return result;
+    }
+
+    /**
+     * 审批日志读源=act：从原生 ACT_HI_COMMENT 还原（{@code syncCommentToEngine} 把 nodeKey/operator/opinion
+     * 编码进 MESSAGE_，TYPE_ 保留 logType）。前置：须开启 {@code blade.workflow.approval-comment.enabled}
+     * 双写且历史评论已回填，否则仅见双写开启后的记录（旧 wf_approval_log 不自动同步）。
+     */
+    private List<WfApprovalLog> readApprovalLogsFromAct(WfInstance inst) {
+        if (inst.getEngineInstId() == null) {
+            return new ArrayList<>();
+        }
+        String sql = "SELECT TYPE_, TIME_, MESSAGE_ FROM ACT_HI_COMMENT "
+            + "WHERE PROC_INST_ID_ = ? ORDER BY TIME_ ASC";
+        List<WfApprovalLog> rows = jdbcTemplate.query(sql, (rs, i) -> {
+            WfApprovalLog l = parseActComment(rs.getString("MESSAGE_"), rs.getString("TYPE_"),
+                rs.getTimestamp("TIME_"));
+            if (l == null) {
+                return null;
+            }
+            l.setInstId(inst.getId());
+            return l;
+        }, inst.getEngineInstId());
+        return rows.stream().filter(Objects::nonNull).collect(Collectors.toList());
+    }
+
+    /**
+     * 对称解析单条 ACT_HI_COMMENT（与 {@code WfWriteHelper.syncCommentToEngine} 写入的 JSON 形态一致）。
+     * 解析失败（非本模块写入的评论 / 格式异常）返回 null，由调用方跳过，避免污染流转意见。
+     */
+    static WfApprovalLog parseActComment(String message, String type, Date time) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        Map<String, Object> p;
+        try {
+            p = COMMENT_OM.readValue(message, Map.class);
+        } catch (Exception e) {
+            return null;
+        }
+        WfApprovalLog l = new WfApprovalLog();
+        l.setId(null);
+        l.setTaskId(toLong(p.get("wfTaskId")));
+        l.setNodeKey(p.get("nodeKey") == null ? "" : String.valueOf(p.get("nodeKey")));
+        l.setOperator(toLong(p.get("operator")));
+        l.setLogType(type);
+        l.setOpinion(p.get("opinion") == null ? "" : String.valueOf(p.get("opinion")));
+        l.setOperateTime(time);
+        return l;
+    }
+
+    private static Long toLong(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number) {
+            return ((Number) v).longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(v));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -1722,7 +1822,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * @return 实例实体，调用方可直接复用（避免重复查询）
      */
     private WfInstance requireVisible(Long instId, String action) {
-        WfInstance inst = instanceMapper.selectById(instId);
+        WfInstance inst = loadInstance(instId);
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
         }
