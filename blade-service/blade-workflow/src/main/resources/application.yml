@@ -46,6 +46,19 @@ blade:
   flowable:
     database-schema-update: true
   workflow:
+    task-act-write:
+      # 任务业务列双写 ACT_RU_TASK / ACT_HI_TASKINST（去 wf_ 表 P4/P5 写侧）。
+      # 依赖 doc/sql/migration/act_add_task_biz_columns.sql 已执行的 6 个自定义列（已执行）。
+      # 与 wf_task 并存双写、互为校验；待读源切到 act 并验证无误后，才退役 wf_task。
+      # 写失败仅告警不阻断主流程；会签 N:1（同一引擎任务多人）由写入器内建守卫跳过。
+      enabled: true
+    engine-multi-instance:
+      # 会签/或签/依次下沉引擎多实例总开关（去 wf_ 表：让「1 引擎任务 = 1 人」，解锁待办/已办读源=act）。
+      # 前置条件（代码均已实现）：① 部署期注入 multiInstanceLoopCharacteristics；
+      #   ② doApprove 的 isEngineMultiInstance 守卫跳过自研计数；③ injectMiCollectionVars 注入集合变量。
+      # ⚠️ 仅改本开关【不会】改写已部署定义，必须再调 POST /definition/admin/redeploy-mi 重新部署才对新建实例生效。
+      # ⚠️ 在途实例不受影响（Flowable 绑定创建时的流程定义版本），回退改回 false 即可。
+      enabled: true
     ledger-listener:
       # 方案C 总开关（《工作流双写漂移治理-方案C-事件驱动落地设计.md》§6/§7，进度见 §10）。
       # 当前阶段：阶段 3「切单写」已完成并回归通过（见文档 §10.6）。

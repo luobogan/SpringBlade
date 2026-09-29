@@ -8,6 +8,7 @@ import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.IWfTimeoutService;
+import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -57,6 +58,8 @@ public class WfTimeoutJob {
     private final WfTaskMapper taskMapper;
     private final WfInstanceMapper instanceMapper;
     private final IWfTimeoutService timeoutService;
+    /** 任务业务列双写收口器（方案 A1） */
+    private final WfTaskActWriter taskActWriter;
     /** 仅用于 D9 选主锁的获取/释放（在同一条连接上完成，保证 GET_LOCK 与 RELEASE_LOCK 同会话） */
     private final JdbcTemplate jdbcTemplate;
 
@@ -172,5 +175,7 @@ public class WfTimeoutJob {
     private void markHandled(WfTask task) {
         task.setTimeoutHandled(1);
         taskMapper.updateById(task);
+        // 超时防重标记同步到 ACT_*（TIMEOUT_HANDLED_ 为 wf_task 独有列，须双写）
+        taskActWriter.sync(task);
     }
 }

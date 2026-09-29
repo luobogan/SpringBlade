@@ -53,6 +53,7 @@ import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.vo.WfTestResultVO;
+import org.springblade.workflow.service.helper.WfApprovalLogActReader;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -128,6 +129,8 @@ public class WfTestServiceImpl implements IWfTestService {
     private final WfNodeFieldPermMapper fieldPermMapper;
     private final IWfFormRenderService formRenderService;
     private final IFormmodeClient formmodeClient;
+    /** 审批日志读源=act 时的 ACT_HI_COMMENT 还原器（与 WfInstanceServiceImpl.logs 同源） */
+    private final WfApprovalLogActReader actLogReader;
 
     @Override
     public WfTestResultVO run(WfTestRunDTO dto) {
@@ -1967,10 +1970,13 @@ public class WfTestServiceImpl implements IWfTestService {
             return lines;
         }
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        List<WfApprovalLog> logs = approvalLogMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
-            .eq(WfApprovalLog::getInstId, inst.getId())
-            .orderByAsc(WfApprovalLog::getOperateTime)
-            .orderByAsc(WfApprovalLog::getId));
+        // 读源=act 时从 ACT_HI_COMMENT 还原审批日志（与 WfInstanceServiceImpl.logs 同源，统一收口到 actLogReader）
+        List<WfApprovalLog> logs = (actLogReader.actRead() && inst != null && inst.getEngineInstId() != null)
+            ? actLogReader.readFromAct(inst.getEngineInstId(), inst.getId())
+            : approvalLogMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
+                .eq(WfApprovalLog::getInstId, inst.getId())
+                .orderByAsc(WfApprovalLog::getOperateTime)
+                .orderByAsc(WfApprovalLog::getId));
         // 按出现顺序收集去重节点 + 每节点聚合操作者
         LinkedHashMap<String, List<Long>> byNode = new LinkedHashMap<>();
         List<String> orderedKeys = new ArrayList<>();

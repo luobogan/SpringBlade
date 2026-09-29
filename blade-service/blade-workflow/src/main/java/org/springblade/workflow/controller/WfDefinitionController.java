@@ -19,7 +19,9 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.service.IWfDefinitionService;
+import org.springblade.workflow.service.IWfDefinitionRedeployService;
 import org.springblade.workflow.vo.BrowserOptionVO;
+import org.springblade.workflow.vo.RedeployReportVO;
 import org.springblade.workflow.vo.FormBindingVO;
 import org.springblade.workflow.vo.FormConditionVO;
 import org.springblade.workflow.vo.SimulateResultVO;
@@ -66,6 +68,8 @@ import java.util.Map;
 public class WfDefinitionController {
 
     private final IWfDefinitionService definitionService;
+    /** 批量重部署（会签/或签下沉多实例用：MI 仅在部署期注入，需重新部署才生效） */
+    private final IWfDefinitionRedeployService redeployService;
 
     @PostMapping
     @Operation(summary = "创建流程定义", description = "含节点、出口、操作者")
@@ -91,6 +95,21 @@ public class WfDefinitionController {
         log.info("[blade-workflow][审计] 部署流程定义. defId={}, 结果={}, operator={}",
             id, ok, SecureUtil.getUserId());
         return R.data(ok, "部署成功");
+    }
+
+    @PostMapping("/admin/redeploy-mi")
+    @Operation(summary = "批量重部署（注入多实例）",
+        description = "对全部【已发布且有 BPMN】的流程定义逐条重新部署，用于把会签/或签/依次的多实例注入引擎。"
+            + "⚠ 多实例只在【部署期】注入，仅改开关不会改写已部署定义，必须重部署；"
+            + "在途实例由 Flowable 绑定创建时的流程定义版本，不受影响。")
+    public R<RedeployReportVO> redeployForMultiInstance(
+        @RequestParam(defaultValue = "true") boolean onlyMissingMi,
+        @RequestParam(defaultValue = "false") boolean force) {
+        RedeployReportVO report = redeployService.redeployAllForMultiInstance(onlyMissingMi, force);
+        // 管理面审计：批量重部署会改变全部定义的「引擎最新版本」，必须留痕
+        log.info("[blade-workflow][审计] 批量重部署（注入多实例）. onlyMissingMi={}, force={}, 结果={}, operator={}",
+            onlyMissingMi, force, report.getMessage(), SecureUtil.getUserId());
+        return R.data(report, "批量重部署已执行");
     }
 
     @PutMapping("/{id}/bpmn")

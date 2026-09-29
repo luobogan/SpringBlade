@@ -49,6 +49,8 @@ import org.springblade.workflow.service.IWfSubflowService;
 import org.springblade.workflow.service.IWfTimeoutService;
 import org.springblade.workflow.service.helper.WfWriteHelper;
 import org.springblade.workflow.service.helper.WfInstanceActWriter;
+import org.springblade.workflow.service.helper.WfTaskActWriter;
+import org.springblade.workflow.service.helper.WfApprovalLogActReader;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfInstanceService;
@@ -63,9 +65,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -100,8 +99,6 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
     private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
-    /** 原生历史库 JDBC：读源=act 时从 ACT_HI_COMMENT 还原审批日志（与 WfInstanceActWriter 同数据源，与 syncCommentToEngine 对称） */
-    private final JdbcTemplate jdbcTemplate;
     /**
      * 双写收口器：生命周期类操作（终结 / 暂停 / 恢复）的「台账 + 引擎」同写入口。
      *
@@ -127,13 +124,15 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final ActHiProcinstMapper actProcinstMapper;
     /** 实例业务列双写收口器（去 wf_ 表写侧） */
     private final WfInstanceActWriter actWriter;
+    /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
+    private final WfTaskActWriter taskActWriter;
     /**
-     * 实例读源：wf=遗留 wf_instance（默认，零行为变化）；act=原生 ACT_HI_PROCINST（去 wf_ 表切源）。
+     * 实例/审批日志读源开关统一收口到 {@link WfApprovalLogActReader}（与审批日志读源同源，
+     * 避免 WfInstanceServiceImpl / WfTestServiceImpl 各自读开关导致漂移）。
      * 切 act 前须先开启 {@code blade.workflow.instance-act-write.enabled} 双写 + 跑 act_backfill.sql，
      * 否则 ACT_* 业务列为空。读侧与写侧独立开关，便于灰度验证。
      */
-    @Value("${blade.workflow.instance-read-source:wf}")
-    private String instanceReadSource;
+    private final WfApprovalLogActReader actLogReader;
 
     /**
      * 子流程服务：与 {@link WfSubflowServiceImpl}（亦注入本服务）存在循环依赖，
@@ -157,9 +156,6 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private static final int SIGN_ALL = 1;
     /** 依次：按批次逐个激活，最后一人处理完才推进引擎 */
     private static final int SIGN_SEQUENCE = 2;
-
-    /** ACT_HI_COMMENT.MESSAGE_ 中审批日志 JSON 解析器（与 WfWriteHelper.COMMENT_MAPPER 对称） */
-    private static final ObjectMapper COMMENT_OM = new ObjectMapper();
 
     /**
      * 表单直发（发起流程页）时创建业务数据行，返回其 id 作为 dataId。
@@ -972,60 +968,15 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * 双写且历史评论已回填，否则仅见双写开启后的记录（旧 wf_approval_log 不自动同步）。
      */
     private List<WfApprovalLog> readApprovalLogsFromAct(WfInstance inst) {
-        if (inst.getEngineInstId() == null) {
-            return new ArrayList<>();
-        }
-        String sql = "SELECT TYPE_, TIME_, MESSAGE_ FROM ACT_HI_COMMENT "
-            + "WHERE PROC_INST_ID_ = ? ORDER BY TIME_ ASC";
-        List<WfApprovalLog> rows = jdbcTemplate.query(sql, (rs, i) -> {
-            WfApprovalLog l = parseActComment(rs.getString("MESSAGE_"), rs.getString("TYPE_"),
-                rs.getTimestamp("TIME_"));
-            if (l == null) {
-                return null;
-            }
-            l.setInstId(inst.getId());
-            return l;
-        }, inst.getEngineInstId());
-        return rows.stream().filter(Objects::nonNull).collect(Collectors.toList());
+        return actLogReader.readFromAct(inst.getEngineInstId(), inst.getId());
     }
 
     /**
-     * 对称解析单条 ACT_HI_COMMENT（与 {@code WfWriteHelper.syncCommentToEngine} 写入的 JSON 形态一致）。
+     * 兼容保留：委托到 {@link WfApprovalLogActReader#parseActComment}（与写侧对称，单一契约源）。
      * 解析失败（非本模块写入的评论 / 格式异常）返回 null，由调用方跳过，避免污染流转意见。
      */
     static WfApprovalLog parseActComment(String message, String type, Date time) {
-        if (message == null || message.isBlank()) {
-            return null;
-        }
-        Map<String, Object> p;
-        try {
-            p = COMMENT_OM.readValue(message, Map.class);
-        } catch (Exception e) {
-            return null;
-        }
-        WfApprovalLog l = new WfApprovalLog();
-        l.setId(null);
-        l.setTaskId(toLong(p.get("wfTaskId")));
-        l.setNodeKey(p.get("nodeKey") == null ? "" : String.valueOf(p.get("nodeKey")));
-        l.setOperator(toLong(p.get("operator")));
-        l.setLogType(type);
-        l.setOpinion(p.get("opinion") == null ? "" : String.valueOf(p.get("opinion")));
-        l.setOperateTime(time);
-        return l;
-    }
-
-    private static Long toLong(Object v) {
-        if (v == null) {
-            return null;
-        }
-        if (v instanceof Number) {
-            return ((Number) v).longValue();
-        }
-        try {
-            return Long.parseLong(String.valueOf(v));
-        } catch (Exception e) {
-            return null;
-        }
+        return WfApprovalLogActReader.parseActComment(message, type, time);
     }
 
     /**
@@ -1482,6 +1433,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                         tk2.setStatus(WfTask.STATUS_DONE);
                         tk2.setOperateTime(new Date());
                         taskMapper.updateById(tk2);
+                        // 引擎侧任务已消失的残留待办置已办 → 子状态同步到 ACT_*
+                        taskActWriter.sync(tk2);
                     }
                 }
             }
@@ -1631,6 +1584,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             task.setStatus(WfTask.STATUS_COADJUTANT);
             task.setReceiveTime(new Date());
             taskMapper.insert(task);
+            taskActWriter.sync(task);
         }
     }
 
@@ -1644,6 +1598,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             tk.setStatus(WfTask.STATUS_DONE);
             tk.setOperateTime(new Date());
             taskMapper.updateById(tk);
+            taskActWriter.sync(tk);
         }
     }
 
@@ -1760,6 +1715,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             task.setDueTime(due);
         }
         taskMapper.insert(task);
+        // 业务列双写到 ACT_*（方案 A1）：history=audit 下 HI 行已在创建时落库，故创建即写两张表，
+        // 否则任务完成（RU 行删除）后「已办」读不到子状态。开关默认关，零行为变化。
+        taskActWriter.sync(task);
     }
 
     /**
@@ -2043,9 +2001,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return toInstanceVO(InstanceView.fromWfInstance(inst));
     }
 
-    /** 实例读源是否切到原生 ACT_HI_PROCINST（去 wf_ 表） */
+    /** 实例/日志读源是否切到原生 ACT（去 wf_ 表），统一收口到 {@link WfApprovalLogActReader}。 */
     private boolean actRead() {
-        return "act".equalsIgnoreCase(instanceReadSource);
+        return actLogReader.actRead();
     }
 
     /**
@@ -2093,9 +2051,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
 
         // ② 审批日志：真实办理人（加签/转办/退回等不一定留下本人 task 行，靠日志补齐）
-        List<WfApprovalLog> logs = logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
-            .eq(WfApprovalLog::getInstId, instId)
-            .orderByAsc(WfApprovalLog::getId));
+        // 读源=act 时改从 ACT_HI_COMMENT 还原（与 logs() 同源，统一收口到 WfApprovalLogActReader）
+        List<WfApprovalLog> logs = (actRead() && inst != null && inst.getEngineInstId() != null)
+            ? actLogReader.readFromAct(inst.getEngineInstId(), inst.getId())
+            : logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
+                .eq(WfApprovalLog::getInstId, instId)
+                .orderByAsc(WfApprovalLog::getId));
         for (WfApprovalLog l : logs) {
             Long op = l.getOperator();
             // 0 = 系统（引擎自动推进/归档），不是人，不进分组

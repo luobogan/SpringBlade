@@ -47,6 +47,8 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
     private final WfProcessNodeMapper nodeMapper;
     private final WfTaskMapper taskMapper;
     private final IWfTaskService taskService;
+    /** 任务业务列双写收口器（方案 A1） */
+    private final org.springblade.workflow.service.helper.WfTaskActWriter taskActWriter;
     private final IWfInstanceService instanceService;
     private final IFormmodeClient formmodeClient;
     /** P3-5：节点超时规则改读 BPMN {@code wf:} 扩展（替代 wf_node_timeout）。默认关，运行时回归后开启。
@@ -230,6 +232,8 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
         // 仅成功才标记已执行，避免重复触发
         task.setTimeoutHandled(1);
         taskMapper.updateById(task);
+        // 超时已执行标记同步到 ACT_*（TIMEOUT_HANDLED_ 为 wf_task 独有列）
+        taskActWriter.sync(task);
     }
 
     /** 超时转办：将待办办理人改为指定操作者（取首个；多操作者仅记首人，后续可扩展） */

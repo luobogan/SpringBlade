@@ -29,6 +29,7 @@ import org.springblade.workflow.entity.WfSubflowRequest;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.system.user.entity.UserInfo;
@@ -115,6 +116,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfSubflowRequestMapper subflowRequestMapper;
     /** 节点操作者解析（退回弹窗「操作者」列展示用，解析失败不阻塞） */
     private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
+    /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
+    private final WfTaskActWriter taskActWriter;
 
     /**
      * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
@@ -219,6 +222,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
         taskMapper.updateById(task);
+        // 业务列双写 ACT_*：子状态 DONE 落到 ACT_HI_TASKINST（已办读源前置）；开关默认关
+        taskActWriter.sync(task);
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), operator,
             WfApprovalLog.LOG_APPROVE, opinion);
 
@@ -407,6 +412,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
         taskMapper.updateById(task);
+        // 业务列双写 ACT_*：退回也是任务完成态，子状态 DONE 需落到 ACT_HI_TASKINST
+        taskActWriter.sync(task);
         // 留痕记「节点接收人」而非当前登录人：代跑/测试态下当前登录人是管理员，记管理员会让
         // 流程信息看起来是「管理员退回了这张单」，与代跑留痕口径不一致（见方案 C14/C16）
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), task.getAssignee(),
@@ -554,6 +561,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
         taskMapper.updateById(task);
+        taskActWriter.sync(task);
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_FORWARD, dto.getOpinion());
 
@@ -570,6 +578,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 新建的这条任务会是 is_test=0，任何 is_test 过滤都拦不住它（V10 / C2 标记断层）
         forwarded.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
         taskMapper.insert(forwarded);
+        // 双写 ACT_*（会签/或签 N:1 时由写入器内建守卫跳过，不会写坏）
+        taskActWriter.sync(forwarded);
         return true;
     }
 
@@ -597,6 +607,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 标记继承：同 forward（V10 / C2）
         added.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
         taskMapper.insert(added);
+        taskActWriter.sync(added);
 
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_COMMENT,
@@ -630,6 +641,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
             // 标记继承：同 forward（V10 / C2）—— 抄送任务会进入被抄送人的「已办」（V9）
             cc.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
             taskMapper.insert(cc);
+            taskActWriter.sync(cc);
             // 迁移阶段3 双写校验：复用同一 engineTaskId 把抄送关系落到引擎身份关联（不产生可办任务）。
             // 失败仅记日志、不阻断业务；读侧抄送列表仍走 wf_task，本调用仅做引擎侧关联预热。
             if (ccIdentityLinkEnabled && task.getEngineTaskId() != null) {
@@ -687,7 +699,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfTask patch = new WfTask();
         patch.setId(taskId);
         patch.setViewTime(new Date());
-        return taskMapper.updateById(patch) > 0;
+        boolean ok = taskMapper.updateById(patch) > 0;
+        if (ok) {
+            // 双写 ACT_*：patch 仅带 id（updateById 最小更新集），故用已加载的 task（含 engineTaskId）同步
+            task.setViewTime(patch.getViewTime());
+            taskActWriter.sync(task);
+        }
+        return ok;
     }
 
     @Override
@@ -1171,6 +1189,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
             s.setStatus(WfTask.STATUS_FINISHED);
             s.setOperateTime(new Date());
             taskMapper.updateById(s);
+            // 或签办结同节点其余待办 → 子状态 FINISHED 需同步到 ACT_*
+            taskActWriter.sync(s);
         }
     }
 

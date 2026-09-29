@@ -50,6 +50,8 @@ public class WfWriteHelper {
     private final WfInstanceMapper instanceMapper;
     private final WfTaskMapper taskMapper;
     private final WfApprovalLogMapper logMapper;
+    /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
+    private final WfTaskActWriter taskActWriter;
     private final IProcessService processService;
     /** 去 wf_ 表预热：生命周期状态同步写回原生 ACT_HI_PROCINST（开关关闭时无操作） */
     private final WfInstanceActWriter actWriter;
@@ -238,6 +240,8 @@ public class WfWriteHelper {
             t.setStatus(WfTask.STATUS_FINISHED);
             t.setOperateTime(new Date());
             taskMapper.updateById(t);
+            // 关闭实例残留待办 → 子状态 FINISHED 同步到 ACT_*
+            taskActWriter.sync(t);
         }
     }
 
