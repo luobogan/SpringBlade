@@ -106,13 +106,16 @@ public class WfTaskActWriter {
             task.getTimeoutHandled(),
             // blade 业务任务ID：翻源后待办/已办列表仍吐此 ID，操作接口（approve/转办/退回）链路不变
             task.getId(),
+            // blade 办理人：未开多实例时引擎 ASSIGNEE_ 常为 NULL（办理人只在 wf_task），读源须以此为准
+            task.getAssignee(),
             task.getEngineTaskId()
         };
         // 已办：HI 行承载最终业务维度（RU 行完成即删除，故必须写 HI）
         try {
             jdbcTemplate.update(
                 "UPDATE ACT_HI_TASKINST SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
-                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=? WHERE ID_=?",
+                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=?, "
+                    + "BIZ_ASSIGNEE_=? WHERE ID_=?",
                 args);
         } catch (Exception e) {
             log.warn("[WfTaskActWriter] 写回 ACT_HI_TASKINST 失败（双写预热，不影响台账）. engineTaskId={}",
@@ -122,7 +125,8 @@ public class WfTaskActWriter {
         try {
             jdbcTemplate.update(
                 "UPDATE ACT_RU_TASK SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
-                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=? WHERE ID_=?",
+                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=?, "
+                    + "BIZ_ASSIGNEE_=? WHERE ID_=?",
                 args);
         } catch (Exception e) {
             log.warn("[WfTaskActWriter] 写回 ACT_RU_TASK 失败（双写预热，不影响台账）. engineTaskId={}",

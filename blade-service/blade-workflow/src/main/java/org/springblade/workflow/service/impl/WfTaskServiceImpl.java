@@ -29,6 +29,7 @@ import org.springblade.workflow.entity.WfSubflowRequest;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
@@ -118,6 +119,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
     /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
     private final WfTaskActWriter taskActWriter;
+    /** 待办/已办读源=act 时的 ACT_* 读取器（含读源开关，默认 wf，零行为变化） */
+    private final WfTaskActReader taskActReader;
 
     /**
      * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
@@ -733,6 +736,18 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private List<WfTaskVO> list(Long assignee, List<Integer> statuses) {
         // 记录级鉴权：非流程管理员一律只能查自己的待办/已办，忽略传入的 assignee
         Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
+        // 读源=act：待办读 ACT_RU_TASK、已办读 ACT_HI_TASKINST，不再回读 wf_task。
+        // 失败自动降级走 wf_task —— 灰度期「列表可用」优先于「读源正确」。
+        if (taskActReader.actRead() && statuses != null && !statuses.isEmpty()) {
+            try {
+                boolean onlyTodo = statuses.size() == 1 && statuses.get(0) != null
+                    && statuses.get(0) == WfTask.STATUS_TODO;
+                return onlyTodo ? taskActReader.todoFromAct(target) : taskActReader.doneFromAct(target);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 任务读源=act 读取 ACT_* 失败，降级走 wf_task. assignee={}, {}",
+                    target, e.getMessage());
+            }
+        }
         // 测试态任务不进生产「待办 / 已办」列表（方案 §6.4 C1 / V1、V3、C14）：
         // 含已办(2)/办结(3)/自动提交(4)/协办(7)/传阅(8)/已读(9) —— 整组排除，
         // 其中「已办」最易漏：代跑会在真人名下留一条已办，平时无人细看，漏了就长期存在。

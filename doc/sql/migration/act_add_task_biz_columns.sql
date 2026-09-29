@@ -81,6 +81,9 @@ CALL blade_add_col('ACT_RU_TASK', 'TIMEOUT_HANDLED_', "tinyint      DEFAULT 0   
 -- 操作接口（approve/转办/退回/查看）一律按 wf_task.id 查（requireTodoTask → selectById），
 -- 若列表改吐引擎任务 ID_ 会导致「点同意查不到任务」。故必须冗余此列。
 CALL blade_add_col('ACT_RU_TASK', 'BIZ_TASK_ID_',    "bigint       DEFAULT NULL COMMENT 'blade 业务任务ID(wf_task.id)：翻源后列表仍吐此ID，操作链路不变'");
+-- blade 办理人（wf_task.assignee）：未开多实例时引擎 userTask 常【没有 assignee 表达式】，
+-- 引擎任务 ASSIGNEE_ 为 NULL，办理人只存在于 wf_task —— 若按 ASSIGNEE_ 过滤会导致翻源后任务从列表消失。
+CALL blade_add_col('ACT_RU_TASK', 'BIZ_ASSIGNEE_',   "bigint       DEFAULT NULL COMMENT 'blade 办理人(wf_task.assignee)：引擎 ASSIGNEE_ 常为空，读源以此为准'");
 
 -- 待办列表高频检索：按办理人 + 测试态过滤
 CALL blade_add_idx('ACT_RU_TASK', 'IDX_RU_TASK_ASSIGNEE_TEST', 'ASSIGNEE_, IS_TEST_');
@@ -96,6 +99,7 @@ CALL blade_add_col('ACT_HI_TASKINST', 'SIGN_ORDER_',      "int          DEFAULT 
 CALL blade_add_col('ACT_HI_TASKINST', 'VIEW_TIME_',       "datetime(3)  DEFAULT NULL COMMENT '首次查看时间'");
 CALL blade_add_col('ACT_HI_TASKINST', 'TIMEOUT_HANDLED_', "tinyint      DEFAULT 0    COMMENT '超时动作是否已执行 0未1已'");
 CALL blade_add_col('ACT_HI_TASKINST', 'BIZ_TASK_ID_',    "bigint       DEFAULT NULL COMMENT 'blade 业务任务ID(wf_task.id)：翻源后列表仍吐此ID'");
+CALL blade_add_col('ACT_HI_TASKINST', 'BIZ_ASSIGNEE_',   "bigint       DEFAULT NULL COMMENT 'blade 办理人(wf_task.assignee)：引擎 ASSIGNEE_ 常为空，读源以此为准'");
 
 -- 已办列表高频检索：按办理人 + 完成时间 + 测试态过滤（done 读 END_TIME_ IS NOT NULL）
 CALL blade_add_idx('ACT_HI_TASKINST', 'IDX_HI_TASK_ASSIGNEE_END',  'ASSIGNEE_, END_TIME_, IS_TEST_');
@@ -108,7 +112,7 @@ SELECT TABLE_NAME, COUNT(*) AS col_cnt
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'blade'
   AND TABLE_NAME IN ('ACT_RU_TASK', 'ACT_HI_TASKINST')
-  AND COLUMN_NAME IN ('BUSINESS_STATUS_','IS_TEST_','ORIGINAL_USER_','SIGN_ORDER_','VIEW_TIME_','TIMEOUT_HANDLED_','BIZ_TASK_ID_')
+  AND COLUMN_NAME IN ('BUSINESS_STATUS_','IS_TEST_','ORIGINAL_USER_','SIGN_ORDER_','VIEW_TIME_','TIMEOUT_HANDLED_','BIZ_TASK_ID_','BIZ_ASSIGNEE_')
 GROUP BY TABLE_NAME;
 
 SELECT TABLE_NAME, INDEX_NAME

@@ -42,7 +42,7 @@ class WfTaskActWriterTest {
 			jdbc.execute("CREATE TABLE " + t + " ("
 				+ "ID_ VARCHAR(64) PRIMARY KEY, BUSINESS_STATUS_ VARCHAR(32), IS_TEST_ TINYINT, "
 				+ "ORIGINAL_USER_ VARCHAR(64), SIGN_ORDER_ INT, VIEW_TIME_ TIMESTAMP, "
-				+ "TIMEOUT_HANDLED_ TINYINT, BIZ_TASK_ID_ BIGINT)");
+				+ "TIMEOUT_HANDLED_ TINYINT, BIZ_TASK_ID_ BIGINT, BIZ_ASSIGNEE_ BIGINT)");
 		}
 
 		writer = new WfTaskActWriter(jdbc);
@@ -58,6 +58,7 @@ class WfTaskActWriterTest {
 	private WfTask task(String engineTaskId) {
 		WfTask t = new WfTask();
 		t.setId(2104055356658364418L);
+		t.setAssignee(1123598821738675201L);
 		t.setEngineTaskId(engineTaskId);
 		t.setStatus(WfTask.STATUS_DONE);
 		t.setIsTest(0);
@@ -88,6 +89,9 @@ class WfTaskActWriterTest {
 			assertEquals(Long.valueOf(2104055356658364418L), jdbc.queryForObject(
 				"SELECT BIZ_TASK_ID_ FROM " + table + " WHERE ID_=?", Long.class, engineTaskId),
 				table + " 业务任务ID(wf_task.id)应回写");
+			assertEquals(Long.valueOf(1123598821738675201L), jdbc.queryForObject(
+				"SELECT BIZ_ASSIGNEE_ FROM " + table + " WHERE ID_=?", Long.class, engineTaskId),
+				table + " 办理人(wf_task.assignee)应回写");
 		}
 	}
 

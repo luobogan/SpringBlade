@@ -19,8 +19,9 @@ USE blade;
 -- 已办/历史（ACT_HI_TASKINST）：翻源后「已办」列表读此表
 UPDATE ACT_HI_TASKINST h
 JOIN wf_task t ON t.engine_task_id = h.ID_
-SET h.BIZ_TASK_ID_ = t.id
-WHERE h.BIZ_TASK_ID_ IS NULL
+SET h.BIZ_TASK_ID_ = t.id, h.BIZ_ASSIGNEE_ = t.assignee
+-- ⚠️ 判空必须按【各自列】而非只看 BIZ_TASK_ID_：否则先回填过 ID 的行会被跳过，导致 BIZ_ASSIGNEE_ 漏填
+WHERE h.BIZ_TASK_ID_ IS NULL OR h.BIZ_ASSIGNEE_ IS NULL
   AND t.engine_task_id IS NOT NULL
   AND t.engine_task_id <> ''
   AND t.engine_task_id IN (
@@ -32,8 +33,8 @@ WHERE h.BIZ_TASK_ID_ IS NULL
 -- 待办（ACT_RU_TASK）
 UPDATE ACT_RU_TASK r
 JOIN wf_task t ON t.engine_task_id = r.ID_
-SET r.BIZ_TASK_ID_ = t.id
-WHERE r.BIZ_TASK_ID_ IS NULL
+SET r.BIZ_TASK_ID_ = t.id, r.BIZ_ASSIGNEE_ = t.assignee
+WHERE r.BIZ_TASK_ID_ IS NULL OR r.BIZ_ASSIGNEE_ IS NULL
   AND t.engine_task_id IS NOT NULL
   AND t.engine_task_id <> ''
   AND t.engine_task_id IN (
