@@ -11,11 +11,14 @@ import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.IProcessService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 工作流「双写收口器」——生命周期类操作的唯一写入口（方案 A）。
@@ -48,15 +51,22 @@ public class WfWriteHelper {
     private final WfTaskMapper taskMapper;
     private final WfApprovalLogMapper logMapper;
     private final IProcessService processService;
+    /** 去 wf_ 表预热：生命周期状态同步写回原生 ACT_HI_PROCINST（开关关闭时无操作） */
+    private final WfInstanceActWriter actWriter;
 
     /**
      * 审批轨迹下沉开关（迁移阶段2「双写校验」）：开启后 {@link #appendLog} 在写 wf_approval_log 的同时，
      * 把意见同步到引擎 {@code ACT_HI_COMMENT}（taskService.addComment）。默认 false。
-     * <p>读侧暂未切换（全模块约 28+ 处读取仍走 wf_approval_log），故开启本开关仅做<b>双写预热</b>，
-     * 不影响现有读路径；读侧切到 {@code HistoryService.createCommentQuery} 需运行时回归，列为后续阶段。</p>
+     * <p>读侧暂未切换（全模块约 28+ 处读取仍走 wf_approval_log），故本开关当前仅做<b>双写预热</b>，
+     * 不影响现有读路径；读侧切到 {@code HistoryService.createCommentQuery} 需运行时回归，列为后续阶段（P3-4/P6）。</p>
+     *
+     * <p><b>P3-4 默认开启</b>：写侧以 {@code ACT_HI_COMMENT} 为权威存储（补齐 nodeKey/operator 维度，见 {@link #syncCommentToEngine}），
+     * 现有读路径仍走 {@code wf_approval_log}，双写期间两表并存、零漂移；读侧切换与 {@code wf_approval_log} 停写随 P6 退役完成。</p>
      */
-    @Value("${blade.workflow.approval-comment.enabled:false}")
+    @Value("${blade.workflow.approval-comment.enabled:true}")
     private boolean approvalCommentEnabled;
+
+    private static final ObjectMapper COMMENT_MAPPER = new ObjectMapper();
 
     /**
      * 方案C 台账事件反写开关 —— 与 {@code WfEngineEventListener} 的
@@ -112,6 +122,8 @@ public class WfWriteHelper {
 
         // 同步终结引擎运行态实例（必留：这是产生 PROCESS_CANCELLED 事件的动作本身）
         processService.deleteProcessInstance(inst.getEngineInstId(), action);
+        // 去 wf_ 表预热：终态写回 ACT_HI_PROCINST（开关关闭时无操作）
+        actWriter.writeLifecycle(inst.getEngineInstId(), status, new Date());
         if (eventDriven) {
             // ② 兜底校验：事件反写若未生效（如监听异常被引擎侧吞掉），补写并关待办
             ensureApplied(inst.getId(), status, true);
@@ -134,6 +146,8 @@ public class WfWriteHelper {
             WfApprovalLog.LOG_SUPERVISE, "暂停流程");
         // 同步挂起引擎运行态实例（必留：这是产生 ENTITY_SUSPENDED 事件的动作本身）
         processService.suspendProcessInstance(inst.getEngineInstId());
+        // 去 wf_ 表预热：暂停态写回 ACT_HI_PROCINST（开关关闭时无操作）
+        actWriter.writeLifecycle(inst.getEngineInstId(), WfInstance.STATUS_SUSPENDED, null);
         if (eventDriven) {
             ensureApplied(inst.getId(), WfInstance.STATUS_SUSPENDED, false);
         }
@@ -154,6 +168,8 @@ public class WfWriteHelper {
             WfApprovalLog.LOG_SUPERVISE, "恢复流程");
         // 同步激活引擎运行态实例（必留：这是产生 ENTITY_ACTIVATED 事件的动作本身）
         processService.activateProcessInstance(inst.getEngineInstId());
+        // 去 wf_ 表预热：恢复运行态写回 ACT_HI_PROCINST（开关关闭时无操作）
+        actWriter.writeLifecycle(inst.getEngineInstId(), WfInstance.STATUS_RUNNING, null);
         if (eventDriven) {
             ensureApplied(inst.getId(), WfInstance.STATUS_RUNNING, false);
         }
@@ -240,15 +256,21 @@ public class WfWriteHelper {
         log.setOperateTime(new Date());
         logMapper.insert(log);
         if (approvalCommentEnabled) {
-            syncCommentToEngine(instId, taskId, logType, opinion);
+            syncCommentToEngine(instId, taskId, nodeKey, operator, logType, opinion);
         }
     }
 
     /**
      * 双写引擎审批意见（开关开启时调用）。把 wf_* 主键解析为引擎 id 后调用 addComment，
      * 失败仅记日志、不阻断业务（引擎意见是预热，不影响台账权威）。
+     *
+     * <p><b>维度补齐（P3-4）</b>：{@code ACT_HI_COMMENT} 原生没有 {@code nodeKey} 列，而审批日志 UI 的
+     * 「可见节点过滤 / 下一节点接收人」都依赖 {@code nodeKey}。故将 {@code nodeKey/operator/wfTaskId/opinion/ts}
+     * 编码为 JSON 写进 {@code MESSAGE_}，{@code TYPE_} 仍保留 {@code logType}（对齐 RequestLogType）。
+     * 这样读侧切到 {@code HistoryService.createCommentQuery} 时可直接还原全部维度，无需再加列。</p>
      */
-    private void syncCommentToEngine(Long instId, Long wfTaskId, String logType, String opinion) {
+    private void syncCommentToEngine(Long instId, Long wfTaskId, String nodeKey, Long operator,
+                                     String logType, String opinion) {
         try {
             WfInstance inst = instanceMapper.selectById(instId);
             if (inst == null || inst.getEngineInstId() == null) {
@@ -262,7 +284,14 @@ public class WfWriteHelper {
                     engineTaskId = wfTask.getEngineTaskId();
                 }
             }
-            processService.addComment(engineTaskId, procInstId, logType, opinion == null ? "" : opinion);
+            Map<String, Object> payload = new LinkedHashMap<>(8);
+            payload.put("nodeKey", nodeKey == null ? "" : nodeKey);
+            payload.put("operator", operator == null ? 0L : operator);
+            payload.put("wfTaskId", wfTaskId == null ? 0L : wfTaskId);
+            payload.put("opinion", opinion == null ? "" : opinion);
+            payload.put("ts", System.currentTimeMillis());
+            String message = COMMENT_MAPPER.writeValueAsString(payload);
+            processService.addComment(engineTaskId, procInstId, logType, message);
         } catch (Exception e) {
             log.warn("[WfWriteHelper] 审批意见双写引擎失败（忽略，不影响台账）: {}", e.getMessage());
         }

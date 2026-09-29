@@ -10,6 +10,7 @@ import org.flowable.bpmn.model.UserTask;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springblade.workflow.util.BpmnExtensionUtil;
+import org.springblade.workflow.util.BpmnExtensionUtil.WfFieldPermExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfLinkExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfNodeExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfProcessMetaExt;
@@ -51,7 +52,7 @@ class WfBpmnExtensionRoundTripTest {
 	/** 本项目使用的自定义元素名（须全部不与保留名冲突） */
 	private static final List<String> OUR_LOCAL_NAMES = List.of(
 		"node", "link", "processMeta", "operator", "fieldPerm", "detailPerm",
-		"detailFilter", "timeout", "customAction", "operation", "right",
+		"detailFilter", "detailTablePerm", "timeout", "customAction", "operation", "right",
 		"extJson", "extraOperations"
 	);
 
@@ -77,9 +78,12 @@ class WfBpmnExtensionRoundTripTest {
 		          <wf:extJson><![CDATA[{"remind":{"types":"sys"}}]]></wf:extJson>
 		          <wf:operator groupNo="0" opType="1" objId="10" bhxj="1" levelMin="0" levelMax="99"/>
 		          <wf:operator groupNo="1" opType="17"/>
-		          <wf:fieldPerm field="amount" perm="edit"/>
-		          <wf:detailPerm dtKey="dt1" field="lineAmount" perm="readonly"/>
-		          <wf:detailFilter dtKey="dt1" rowFilter="${row.amount > 100}"/>
+		          <wf:fieldPerm scope="main" field="amount" perm="2" visible="1" editable="1" required="0"/>
+		          <wf:detailPerm dtKey="dt1" field="lineAmount" perm="1" visible="1" editable="0" required="0"/>
+		          <wf:detailTablePerm dtIndex="1" canAdd="1" canEdit="1" canDelete="0" hideEmpty="0"
+		                             defaultRows="2" required="1" printSerial="1" allowScroll="0" openPaging="1"/>
+		          <wf:detailFilter dtIndex="1" modeType="1" fieldName="amount" compareType="3"
+		                          compareValue="100,200" isRequired="1"/>
 		          <wf:timeout seq="0" enabled="1" durationMin="60" actionWay="autoApprove"/>
 		          <wf:customAction actionKey="print" name="打印" type="1" url="/print"/>
 		          <wf:operation btnName="审批通过" btnOrder="1" actionType="2" enabled="1">
@@ -133,13 +137,27 @@ class WfBpmnExtensionRoundTripTest {
 
 		assertNotNull(child(node, "fieldPerm"));
 		assertEquals("amount", attr(child(node, "fieldPerm"), "field"));
-		assertEquals("edit", attr(child(node, "fieldPerm"), "perm"));
+		assertEquals("2", attr(child(node, "fieldPerm"), "perm"));
+		assertEquals("main", attr(child(node, "fieldPerm"), "scope"));
+		assertEquals("1", attr(child(node, "fieldPerm"), "visible"));
+		assertEquals("1", attr(child(node, "fieldPerm"), "editable"));
+		assertEquals("0", attr(child(node, "fieldPerm"), "required"));
 
 		assertNotNull(child(node, "detailPerm"));
 		assertEquals("dt1", attr(child(node, "detailPerm"), "dtKey"));
+		assertEquals("1", attr(child(node, "detailPerm"), "visible"));
+		assertEquals("0", attr(child(node, "detailPerm"), "editable"));
+		assertEquals("0", attr(child(node, "detailPerm"), "required"));
 
 		assertNotNull(child(node, "detailFilter"));
-		assertEquals("${row.amount > 100}", attr(child(node, "detailFilter"), "rowFilter"));
+		assertEquals("1", attr(child(node, "detailFilter"), "dtIndex"));
+		assertEquals("3", attr(child(node, "detailFilter"), "compareType"));
+		assertEquals("100,200", attr(child(node, "detailFilter"), "compareValue"));
+
+		assertNotNull(child(node, "detailTablePerm"));
+		assertEquals("1", attr(child(node, "detailTablePerm"), "dtIndex"));
+		assertEquals("1", attr(child(node, "detailTablePerm"), "canAdd"));
+		assertEquals("1", attr(child(node, "detailTablePerm"), "openPaging"));
 
 		assertNotNull(child(node, "timeout"));
 		assertEquals("autoApprove", attr(child(node, "timeout"), "actionWay"));
@@ -200,6 +218,7 @@ class WfBpmnExtensionRoundTripTest {
 		assertTrue(xml2.contains("wf:link"), "写回后应保留 wf:link");
 		assertTrue(xml2.contains("wf:processMeta"), "写回后应保留 wf:processMeta");
 		assertTrue(xml2.contains("wf:detailPerm"), "写回后应保留 wf:detailPerm");
+		assertTrue(xml2.contains("wf:detailTablePerm"), "写回后应保留 wf:detailTablePerm");
 
 		assertSameExtension(model1, parse(xml2));
 	}
@@ -307,6 +326,70 @@ class WfBpmnExtensionRoundTripTest {
 		assertEquals("1", o.isPending);
 	}
 
+	// -------------------------------------------------- P3-5 timeout 全字段往返保真
+
+	/** 携带全部超时字段的 userTask，用于验证 timeoutFromBpmn 切换前 BPMN schema 字段完整无损 */
+	private static final String BPMN_EXT_TIMEOUT = """
+		<?xml version="1.0" encoding="UTF-8"?>
+		<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+		             xmlns:wf="http://www.springblade.org/workflow"
+		             targetNamespace="http://www.springblade.org/workflow">
+		  <process id="p" isExecutable="true">
+		    <userTask id="approve1" name="审批">
+		      <extensionElements>
+		        <wf:node nodeType="2">
+		          <wf:timeout seq="0" enabled="1" startType="2" startField="applyTime"
+		                     endType="2" endFixedTime="23:59" durationMin="120"
+		                     actionWay="assign" opinion="超时转办"
+		                     operatorIds="100,200" remindBeforeOperator="1"
+		                     remindTypes="sys,ml" remindPersons="300"/>
+		        </wf:node>
+		      </extensionElements>
+		    </userTask>
+		  </process>
+		</definitions>
+		""";
+
+	@Test
+	@DisplayName("P3-5：timeout 全字段经 readNode 解析无损（支撑 timeoutFromBpmn 切换）")
+	void timeoutFieldsParsed() {
+		WfNodeExt ext = BpmnExtensionUtil.readNode(
+			(UserTask) parse(BPMN_EXT_TIMEOUT).getMainProcess().getFlowElement("approve1"));
+		assertNotNull(ext);
+		assertEquals(1, ext.timeouts.size());
+		BpmnExtensionUtil.WfTimeoutExt t = ext.timeouts.get(0);
+		assertEquals("0", t.seq);
+		assertEquals("1", t.enabled);
+		assertEquals("2", t.startType);
+		assertEquals("applyTime", t.startField);
+		assertEquals("2", t.endType);
+		assertEquals("23:59", t.endFixedTime);
+		assertEquals("120", t.durationMin);
+		assertEquals("assign", t.actionWay);
+		assertEquals("超时转办", t.opinion);
+		assertEquals("100,200", t.operatorIds);
+		assertEquals("1", t.remindBeforeOperator);
+		assertEquals("sys,ml", t.remindTypes);
+		assertEquals("300", t.remindPersons);
+	}
+
+	@Test
+	@DisplayName("P3-5：timeout 全字段经 writeNode 写回后往返无损（幂等不丢字段）")
+	void timeoutFieldsRoundTrip() {
+		BpmnModel model = parse(BPMN_EXT_TIMEOUT);
+		UserTask task = (UserTask) model.getMainProcess().getFlowElement("approve1");
+		BpmnExtensionUtil.writeNode(task, BpmnExtensionUtil.readNode(task));
+		WfNodeExt ext = BpmnExtensionUtil.readNode(
+			(UserTask) parse(write(model)).getMainProcess().getFlowElement("approve1"));
+		assertEquals(1, ext.timeouts.size());
+		BpmnExtensionUtil.WfTimeoutExt t = ext.timeouts.get(0);
+		assertEquals("assign", t.actionWay);
+		assertEquals("100,200", t.operatorIds);
+		assertEquals("sys,ml", t.remindTypes);
+		assertEquals("300", t.remindPersons);
+		assertEquals("23:59", t.endFixedTime);
+	}
+
 	// ---------------------------------------------------------------- 工具
 
 	private static BpmnModel parse(String xml) {
@@ -337,7 +420,15 @@ class WfBpmnExtensionRoundTripTest {
 
 		assertEquals(n1.fieldPerms.size(), n2.fieldPerms.size());
 		assertEquals(n1.detailPerms.size(), n2.detailPerms.size(), "detailPerm 往返后不一致");
+		// 字段权限三维度（scope/visible/editable/required）往返一致性
+		WfFieldPermExt fp1 = n1.fieldPerms.get(0);
+		WfFieldPermExt fp2 = n2.fieldPerms.get(0);
+		assertEquals(fp1.scope, fp2.scope, "fieldPerm.scope 往返后不一致");
+		assertEquals(fp1.visible, fp2.visible, "fieldPerm.visible 往返后不一致");
+		assertEquals(fp1.editable, fp2.editable, "fieldPerm.editable 往返后不一致");
+		assertEquals(fp1.required, fp2.required, "fieldPerm.required 往返后不一致");
 		assertEquals(n1.detailFilters.size(), n2.detailFilters.size(), "detailFilter 往返后不一致");
+		assertEquals(n1.detailTablePerms.size(), n2.detailTablePerms.size(), "detailTablePerm 往返后不一致");
 		assertEquals(n1.timeouts.size(), n2.timeouts.size(), "timeout 往返后不一致");
 		assertEquals(n1.customActions.size(), n2.customActions.size(), "customAction 往返后不一致");
 		assertEquals(n1.operations.size(), n2.operations.size(), "operation 往返后不一致");

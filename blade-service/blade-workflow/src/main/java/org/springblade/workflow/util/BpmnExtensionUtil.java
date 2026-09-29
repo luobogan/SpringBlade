@@ -139,8 +139,12 @@ public final class BpmnExtensionUtil {
 		}
 		for (ExtensionElement fp : allChild(node, "fieldPerm")) {
 			WfFieldPermExt f = new WfFieldPermExt();
+			f.scope = attr(fp, "scope");
 			f.field = attr(fp, "field");
 			f.perm = attr(fp, "perm");
+			f.visible = attr(fp, "visible");
+			f.editable = attr(fp, "editable");
+			f.required = attr(fp, "required");
 			ext.fieldPerms.add(f);
 		}
 		for (ExtensionElement dp : allChild(node, "detailPerm")) {
@@ -148,13 +152,34 @@ public final class BpmnExtensionUtil {
 			d.dtKey = attr(dp, "dtKey");
 			d.field = attr(dp, "field");
 			d.perm = attr(dp, "perm");
+			d.visible = attr(dp, "visible");
+			d.editable = attr(dp, "editable");
+			d.required = attr(dp, "required");
 			ext.detailPerms.add(d);
 		}
 		for (ExtensionElement df : allChild(node, "detailFilter")) {
 			WfDetailFilterExt d = new WfDetailFilterExt();
-			d.dtKey = attr(df, "dtKey");
-			d.rowFilter = attr(df, "rowFilter");
+			d.dtIndex = attr(df, "dtIndex");
+			d.modeType = attr(df, "modeType");
+			d.fieldName = attr(df, "fieldName");
+			d.compareType = attr(df, "compareType");
+			d.compareValue = attr(df, "compareValue");
+			d.isRequired = attr(df, "isRequired");
 			ext.detailFilters.add(d);
+		}
+		for (ExtensionElement dp : allChild(node, "detailTablePerm")) {
+			WfDetailTablePermExt d = new WfDetailTablePermExt();
+			d.dtIndex = attr(dp, "dtIndex");
+			d.canAdd = attr(dp, "canAdd");
+			d.canEdit = attr(dp, "canEdit");
+			d.canDelete = attr(dp, "canDelete");
+			d.hideEmpty = attr(dp, "hideEmpty");
+			d.defaultRows = attr(dp, "defaultRows");
+			d.required = attr(dp, "required");
+			d.printSerial = attr(dp, "printSerial");
+			d.allowScroll = attr(dp, "allowScroll");
+			d.openPaging = attr(dp, "openPaging");
+			ext.detailTablePerms.add(d);
 		}
 		for (ExtensionElement to : allChild(node, "timeout")) {
 			WfTimeoutExt t = new WfTimeoutExt();
@@ -189,6 +214,13 @@ public final class BpmnExtensionUtil {
 			o.btnOrder = attr(op, "btnOrder");
 			o.actionType = attr(op, "actionType");
 			o.enabled = attr(op, "enabled");
+			// 动作明细（前端 CustomOperationModal：URL/流程操作/接口 三种动作类型的参数）
+			o.url = attr(op, "url");
+			o.httpMethod = attr(op, "httpMethod");
+			o.paramExpr = attr(op, "paramExpr");
+			o.flowOperation = attr(op, "flowOperation");
+			o.interfaceName = attr(op, "interfaceName");
+			o.opinion = attr(op, "opinion");
 			for (ExtensionElement r : allChild(op, "right")) {
 				WfRightExt right = new WfRightExt();
 				right.rightType = attr(r, "rightType");
@@ -242,8 +274,12 @@ public final class BpmnExtensionUtil {
 		}
 		for (WfFieldPermExt f : ext.fieldPerms) {
 			ExtensionElement e = newElement("fieldPerm");
+			setAttr(e, "scope", f.scope);
 			setAttr(e, "field", f.field);
 			setAttr(e, "perm", f.perm);
+			setAttr(e, "visible", f.visible);
+			setAttr(e, "editable", f.editable);
+			setAttr(e, "required", f.required);
 			node.addChildElement(e);
 		}
 		for (WfDetailPermExt d : ext.detailPerms) {
@@ -251,12 +287,33 @@ public final class BpmnExtensionUtil {
 			setAttr(e, "dtKey", d.dtKey);
 			setAttr(e, "field", d.field);
 			setAttr(e, "perm", d.perm);
+			setAttr(e, "visible", d.visible);
+			setAttr(e, "editable", d.editable);
+			setAttr(e, "required", d.required);
 			node.addChildElement(e);
 		}
 		for (WfDetailFilterExt d : ext.detailFilters) {
 			ExtensionElement e = newElement("detailFilter");
-			setAttr(e, "dtKey", d.dtKey);
-			setAttr(e, "rowFilter", d.rowFilter);
+			setAttr(e, "dtIndex", d.dtIndex);
+			setAttr(e, "modeType", d.modeType);
+			setAttr(e, "fieldName", d.fieldName);
+			setAttr(e, "compareType", d.compareType);
+			setAttr(e, "compareValue", d.compareValue);
+			setAttr(e, "isRequired", d.isRequired);
+			node.addChildElement(e);
+		}
+		for (WfDetailTablePermExt d : ext.detailTablePerms) {
+			ExtensionElement e = newElement("detailTablePerm");
+			setAttr(e, "dtIndex", d.dtIndex);
+			setAttr(e, "canAdd", d.canAdd);
+			setAttr(e, "canEdit", d.canEdit);
+			setAttr(e, "canDelete", d.canDelete);
+			setAttr(e, "hideEmpty", d.hideEmpty);
+			setAttr(e, "defaultRows", d.defaultRows);
+			setAttr(e, "required", d.required);
+			setAttr(e, "printSerial", d.printSerial);
+			setAttr(e, "allowScroll", d.allowScroll);
+			setAttr(e, "openPaging", d.openPaging);
 			node.addChildElement(e);
 		}
 		for (WfTimeoutExt t : ext.timeouts) {
@@ -292,6 +349,13 @@ public final class BpmnExtensionUtil {
 			setAttr(e, "btnOrder", o.btnOrder);
 			setAttr(e, "actionType", o.actionType);
 			setAttr(e, "enabled", o.enabled);
+			// 动作明细
+			setAttr(e, "url", o.url);
+			setAttr(e, "httpMethod", o.httpMethod);
+			setAttr(e, "paramExpr", o.paramExpr);
+			setAttr(e, "flowOperation", o.flowOperation);
+			setAttr(e, "interfaceName", o.interfaceName);
+			setAttr(e, "opinion", o.opinion);
 			for (WfRightExt r : o.rights) {
 				ExtensionElement re = newElement("right");
 				setAttr(re, "rightType", r.rightType);
@@ -376,6 +440,7 @@ public final class BpmnExtensionUtil {
 		public final List<WfOperatorExt> operators = new ArrayList<>();
 		public final List<WfFieldPermExt> fieldPerms = new ArrayList<>();
 		public final List<WfDetailPermExt> detailPerms = new ArrayList<>();
+		public final List<WfDetailTablePermExt> detailTablePerms = new ArrayList<>();
 		public final List<WfDetailFilterExt> detailFilters = new ArrayList<>();
 		public final List<WfTimeoutExt> timeouts = new ArrayList<>();
 		public final List<WfCustomActionExt> customActions = new ArrayList<>();
@@ -389,15 +454,22 @@ public final class BpmnExtensionUtil {
 	}
 
 	public static class WfFieldPermExt {
-		public String field, perm;
+		public String scope, field, perm, visible, editable, required;
 	}
 
 	public static class WfDetailPermExt {
-		public String dtKey, field, perm;
+		public String dtKey, field, perm, visible, editable, required;
 	}
 
+	/** 明细表字段筛选规则（BPMN 元素 detailFilter）：对应 {@code wf_node_detail_filter} 的逐字段比较规则 */
 	public static class WfDetailFilterExt {
-		public String dtKey, rowFilter;
+		public String dtIndex, modeType, fieldName, compareType, compareValue, isRequired;
+	}
+
+	/** 节点级明细表整表权限（BPMN 元素 detailTablePerm）：对应 {@code wf_node_detail_perm}（canAdd/canEdit/…/openPaging） */
+	public static class WfDetailTablePermExt {
+		public String dtIndex, canAdd, canEdit, canDelete, hideEmpty, defaultRows,
+			required, printSerial, allowScroll, openPaging;
 	}
 
 	public static class WfTimeoutExt {
@@ -411,6 +483,8 @@ public final class BpmnExtensionUtil {
 
 	public static class WfOperationExt {
 		public String btnName, btnOrder, actionType, enabled;
+		/** 动作明细：按 actionType 使用（1=URL 取 url/httpMethod/paramExpr，2=流程操作 取 flowOperation/opinion，3=接口 取 interfaceName/paramExpr） */
+		public String url, httpMethod, paramExpr, flowOperation, interfaceName, opinion;
 		public final List<WfRightExt> rights = new ArrayList<>();
 	}
 

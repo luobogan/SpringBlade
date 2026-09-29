@@ -12,6 +12,8 @@ import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
+import org.springblade.workflow.util.BpmnExtensionUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -93,6 +95,15 @@ public class WfOperatorResolver {
     private final WfFormSnapshotMapper snapshotMapper;
     /** 用户中心：把「部门/角色/岗位/所有人/上级/本部门」解析成真实办理人（Feign 失败即降级，不阻塞流转） */
     private final IUserClient userClient;
+    /** P3-5：操作者改读 BPMN {@code wf:} 扩展（替代 wf_node_operator）。默认关，运行时回归后开启 */
+    private final WfBpmnExtensionReader bpmnReader;
+
+    /**
+     * P3-5 开关：把节点操作者解析的数据源从 {@code wf_node_operator} 表切到 BPMN {@code wf:} 扩展。
+     * 默认 {@code false}（保持现状，零行为变化）；回归通过后置 {@code true} 即完成「去 wf_node_operator 读」。
+     */
+    @Value("${blade.workflow.operator-from-bpmn.enabled:false}")
+    private boolean operatorFromBpmn;
 
     /**
      * 解析某节点的操作者为办理人ID集合（已去重、已剔除 0/null）。
@@ -122,19 +133,30 @@ public class WfOperatorResolver {
         if (formData == null) {
             formData = Map.of();
         }
-        WfProcessNode node = nodeMapper.selectOne(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
-                .eq(WfProcessNode::getDefId, defId)
-                .eq(WfProcessNode::getNodeKey, nodeKey)
-                .last("LIMIT 1"));
-        if (node == null || node.getId() == null) {
-            return List.of();
-        }
-        List<WfNodeOperator> operators = operatorMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfNodeOperator>()
-                .eq(WfNodeOperator::getNodeId, node.getId()));
-        if (operators.isEmpty()) {
-            return List.of();
+        List<WfNodeOperator> operators;
+        if (operatorFromBpmn) {
+            // P3-5：从 BPMN wf: 扩展读取操作者（替代 wf_node_operator 表）
+            operators = bpmnReader.operators(defId, nodeKey).stream()
+                .map(this::toNodeOperator)
+                .toList();
+            if (operators.isEmpty()) {
+                return List.of();
+            }
+        } else {
+            WfProcessNode node = nodeMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
+                    .eq(WfProcessNode::getDefId, defId)
+                    .eq(WfProcessNode::getNodeKey, nodeKey)
+                    .last("LIMIT 1"));
+            if (node == null || node.getId() == null) {
+                return List.of();
+            }
+            operators = operatorMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfNodeOperator>()
+                    .eq(WfNodeOperator::getNodeId, node.getId()));
+            if (operators.isEmpty()) {
+                return List.of();
+            }
         }
         Set<Long> ids = new LinkedHashSet<>();
         for (WfNodeOperator op : operators) {
@@ -254,23 +276,68 @@ public class WfOperatorResolver {
         if (defId == null || nodeKey == null) {
             return List.of();
         }
-        WfProcessNode node = nodeMapper.selectOne(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
-                .eq(WfProcessNode::getDefId, defId)
-                .eq(WfProcessNode::getNodeKey, nodeKey)
-                .last("LIMIT 1"));
-        if (node == null || node.getId() == null) {
-            return List.of();
+        List<WfNodeOperator> operators;
+        if (operatorFromBpmn) {
+            // P3-5：从 BPMN wf: 扩展读取协办/征询意见人（isCoadjutant=1）
+            operators = bpmnReader.operators(defId, nodeKey).stream()
+                .filter(e -> "1".equals(e.isCoadjutant))
+                .map(this::toNodeOperator)
+                .toList();
+        } else {
+            WfProcessNode node = nodeMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
+                    .eq(WfProcessNode::getDefId, defId)
+                    .eq(WfProcessNode::getNodeKey, nodeKey)
+                    .last("LIMIT 1"));
+            if (node == null || node.getId() == null) {
+                return List.of();
+            }
+            operators = operatorMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfNodeOperator>()
+                    .eq(WfNodeOperator::getNodeId, node.getId())
+                    .eq(WfNodeOperator::getIsCoadjutant, 1));
         }
-        List<WfNodeOperator> operators = operatorMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfNodeOperator>()
-                .eq(WfNodeOperator::getNodeId, node.getId())
-                .eq(WfNodeOperator::getIsCoadjutant, 1));
         Set<Long> ids = new LinkedHashSet<>();
         for (WfNodeOperator op : operators) {
             ids.addAll(parseIds(op.getCoadjutants()));
         }
         return new ArrayList<>(ids);
+    }
+
+    /**
+     * 把 BPMN {@code wf:operator} 扩展（全 String）映射为 {@link WfNodeOperator}（Integer 字段做 null 安全转换），
+     * 以便复用既有 {@link #resolveByType} 解析逻辑。转换失败的字段按 null 处理，绝不抛异常。
+     */
+    private WfNodeOperator toNodeOperator(BpmnExtensionUtil.WfOperatorExt e) {
+        WfNodeOperator op = new WfNodeOperator();
+        op.setGroupNo(toInt(e.groupNo));
+        op.setOpType(toInt(e.opType));
+        op.setObjId(e.objId);
+        op.setLevelMin(toInt(e.levelMin));
+        op.setLevelMax(toInt(e.levelMax));
+        op.setBhxj(toInt(e.bhxj));
+        op.setSignOrder(toInt(e.signOrder));
+        op.setBatchNo(toInt(e.batchNo));
+        op.setConditionJson(e.conditionJson);
+        op.setGroupName(e.groupName);
+        op.setCanView(toInt(e.canView));
+        op.setIsCoadjutant(toInt(e.isCoadjutant));
+        op.setSignType(toInt(e.signType));
+        op.setIsPending(toInt(e.isPending));
+        op.setIsModify(toInt(e.isModify));
+        op.setCoadjutants(e.coadjutants);
+        return op;
+    }
+
+    private static Integer toInt(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** 按部门（可选含下级）查用户ID */

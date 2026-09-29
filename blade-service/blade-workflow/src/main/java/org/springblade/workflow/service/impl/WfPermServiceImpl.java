@@ -13,10 +13,13 @@ import org.springblade.workflow.entity.WfNodeFieldPerm;
 import org.springblade.workflow.mapper.WfNodeDetailFilterMapper;
 import org.springblade.workflow.mapper.WfNodeDetailPermMapper;
 import org.springblade.workflow.mapper.WfNodeFieldPermMapper;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.IWfPermService;
+import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,9 +37,37 @@ public class WfPermServiceImpl implements IWfPermService {
     private final WfNodeFieldPermMapper fieldPermMapper;
     private final WfNodeDetailPermMapper detailPermMapper;
     private final WfNodeDetailFilterMapper detailFilterMapper;
+    /** P3-5：字段权限改读 BPMN {@code wf:} 扩展（替代 wf_node_field_perm）。默认关，运行时回归后开启 */
+    private final WfBpmnExtensionReader bpmnReader;
+
+    /**
+     * P3-5 开关：把字段权限（含 main/dt 作用域的字段级权限）的数据源从 {@code wf_node_field_perm} 表切到 BPMN。
+     * 默认 {@code false}（保持现状，零行为变化）；回归通过后置 {@code true} 即完成「去 wf_node_field_perm 读」。
+     * 注意：开启前须确保 BPMN 已携带完整 scope/三维度（经回填或前端 moddle 收敛），否则缺三维度时按 perm 反推（向后兼容）。
+     */
+    @Value("${blade.workflow.perm-from-bpmn.enabled:false}")
+    private boolean permFromBpmn;
+
+    /**
+     * P3-5 开关：把「明细表整表权限」数据源从 {@code wf_node_detail_perm} 表切到 BPMN {@code wf:detailTablePerm}。
+     * 默认 {@code false}（保持现状）；回归通过后置 {@code true} 即完成「去 wf_node_detail_perm 读」。
+     * 注意：开启前须确保 BPMN 已携带 detailTablePerm（经回填或前端 moddle 收敛）。
+     */
+    @Value("${blade.workflow.detail-perm-from-bpmn.enabled:false}")
+    private boolean detailPermFromBpmn;
+
+    /**
+     * P3-5 开关：把「明细表字段筛选」数据源从 {@code wf_node_detail_filter} 表切到 BPMN {@code wf:detailFilter}（逐字段规则）。
+     * 默认 {@code false}（保持现状）；回归通过后置 {@code true} 即完成「去 wf_node_detail_filter 读」。
+     */
+    @Value("${blade.workflow.detail-filter-from-bpmn.enabled:false}")
+    private boolean detailFilterFromBpmn;
 
     @Override
     public List<FieldPermVO> getFieldPerm(Long defId, String nodeKey) {
+        if (permFromBpmn) {
+            return fieldPermFromBpmn(defId, nodeKey);
+        }
         List<WfNodeFieldPerm> list = fieldPermMapper.selectList(
             Wrappers.<WfNodeFieldPerm>lambdaQuery()
                 .eq(WfNodeFieldPerm::getDefId, defId)
@@ -60,6 +91,56 @@ public class WfPermServiceImpl implements IWfPermService {
             result.add(vo);
         }
         return result;
+    }
+
+    /**
+     * P3-5：从 BPMN {@code wf:} 扩展读取字段权限（含 main 作用域 {@code fieldPerm} 与 dt 作用域 {@code detailPerm}，
+     * 统一为带 scope 的 {@link FieldPermVO}）。三维度缺省时按 perm 反推，保证与历史 BPMN（仅 field+perm）兼容。
+     */
+    private List<FieldPermVO> fieldPermFromBpmn(Long defId, String nodeKey) {
+        List<FieldPermVO> result = new ArrayList<>();
+        for (BpmnExtensionUtil.WfFieldPermExt f : bpmnReader.fieldPerms(defId, nodeKey)) {
+            result.add(toFieldPermVO("main", f.field, f.perm, f.visible, f.editable, f.required));
+        }
+        for (BpmnExtensionUtil.WfDetailPermExt d : bpmnReader.detailPerms(defId, nodeKey)) {
+            result.add(toFieldPermVO(d.dtKey, d.field, d.perm, d.visible, d.editable, d.required));
+        }
+        return result;
+    }
+
+    private static FieldPermVO toFieldPermVO(String scope, String field, String perm,
+                                             String visible, String editable, String required) {
+        FieldPermVO vo = new FieldPermVO();
+        vo.setScope(scope);
+        vo.setFieldName(field);
+        if (visible == null && editable == null && required == null) {
+            // BPMN 仅携带 perm（旧格式/历史回填）→ 按 perm 反推三维度，向后兼容
+            vo.applyPerm(toInt(perm));
+        } else {
+            vo.setVisible(toBool(visible));
+            vo.setEditable(toBool(editable));
+            vo.setRequired(toBool(required));
+            vo.setPerm(vo.derivePerm());
+        }
+        return vo;
+    }
+
+    private static Integer toInt(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Boolean toBool(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        return !"0".equals(s.trim()) && !"false".equalsIgnoreCase(s.trim());
     }
 
     /** TINYINT 三态 → 布尔（NULL 视为 false；存量行不会走到这里） */
@@ -101,6 +182,9 @@ public class WfPermServiceImpl implements IWfPermService {
 
     @Override
     public List<DetailPermVO> getDetailPerm(Long defId, String nodeKey) {
+        if (detailPermFromBpmn) {
+            return WfBpmnExtensionReader.toDetailPermVOs(bpmnReader.detailTablePerms(defId, nodeKey));
+        }
         List<WfNodeDetailPerm> list = detailPermMapper.selectList(
             Wrappers.<WfNodeDetailPerm>lambdaQuery()
                 .eq(WfNodeDetailPerm::getDefId, defId)
@@ -156,6 +240,9 @@ public class WfPermServiceImpl implements IWfPermService {
 
     @Override
     public List<DetailFilterVO> getDetailFilter(Long defId, String nodeKey, Integer modeType) {
+        if (detailFilterFromBpmn) {
+            return WfBpmnExtensionReader.toDetailFilterVOs(modeType, bpmnReader.detailFilters(defId, nodeKey));
+        }
         List<WfNodeDetailFilter> list = detailFilterMapper.selectList(
             Wrappers.<WfNodeDetailFilter>lambdaQuery()
                 .eq(WfNodeDetailFilter::getDefId, defId)

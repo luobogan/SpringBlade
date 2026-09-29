@@ -15,10 +15,12 @@ import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfNodeTimeoutMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.service.IWfTimeoutService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.text.ParseException;
@@ -47,17 +49,35 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
     private final IWfTaskService taskService;
     private final IWfInstanceService instanceService;
     private final IFormmodeClient formmodeClient;
+    /** P3-5：节点超时规则改读 BPMN {@code wf:} 扩展（替代 wf_node_timeout）。默认关，运行时回归后开启。
+     * 注意：开启前须确保 BPMN 已携带完整超时规则（经回填或前端 saveBpmn 收敛）；本开关同时影响
+     * 运行期 {@code resolveDueTime}/{@code firstOverdue} 的取数，使超时成为「单一事实源」。 */
+    private final WfBpmnExtensionReader bpmnReader;
+
+    @Value("${blade.workflow.timeout-from-bpmn.enabled:false}")
+    private boolean timeoutFromBpmn;
 
     @Override
     public List<WfNodeTimeout> listEnabled(Long defId, String nodeKey) {
         if (defId == null || nodeKey == null) {
             return new ArrayList<>();
         }
+        if (timeoutFromBpmn) {
+            return timeoutsFromBpmn(defId, nodeKey);
+        }
         return timeoutMapper.selectList(Wrappers.<WfNodeTimeout>lambdaQuery()
             .eq(WfNodeTimeout::getDefId, defId)
             .eq(WfNodeTimeout::getNodeKey, nodeKey)
             .eq(WfNodeTimeout::getEnabled, 1)
             .orderByAsc(WfNodeTimeout::getSeq));
+    }
+
+    /**
+     * P3-5：从 BPMN {@code wf:timeout} 读取已启用规则。BPMN 超时 schema 与 {@code wf_node_timeout}
+     * 字段对齐（回填已结构化写入），转换逻辑见 {@link WfBpmnExtensionReader#toNodeTimeouts}（纯函数，可单测回归）。
+     */
+    private List<WfNodeTimeout> timeoutsFromBpmn(Long defId, String nodeKey) {
+        return WfBpmnExtensionReader.toNodeTimeouts(defId, nodeKey, bpmnReader.timeouts(defId, nodeKey));
     }
 
     @Override

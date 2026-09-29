@@ -33,6 +33,7 @@ import org.springblade.workflow.dto.DefinitionSaveDTO;
 import org.springblade.workflow.entity.WfNodeDetailPerm;
 import org.springblade.workflow.entity.WfNodeFieldPerm;
 import org.springblade.workflow.entity.WfNodeLink;
+import org.springblade.workflow.entity.WfNodeTimeout;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springblade.workflow.entity.WfProcessDefinition;
@@ -43,6 +44,7 @@ import org.springblade.workflow.mapper.WfNodeDetailPermMapper;
 import org.springblade.workflow.mapper.WfNodeFieldPermMapper;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
+import org.springblade.workflow.mapper.WfNodeTimeoutMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfWorkflowTypeMapper;
@@ -127,6 +129,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final WfProcessNodeMapper nodeMapper;
     private final WfNodeLinkMapper linkMapper;
     private final WfNodeOperatorMapper operatorMapper;
+    private final WfNodeTimeoutMapper timeoutMapper;
     private final WfNodeFieldPermMapper fieldPermMapper;
     private final WfNodeDetailPermMapper detailPermMapper;
     private final WfWorkflowTypeMapper wfWorkflowTypeMapper;
@@ -815,11 +818,23 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             }
 
             // —— 新格式优先（BpmnExtensionUtil.writeNode / 回填作业产出）：语义统一收敛在 wf:node 内 ——
+            // 各分类「仅当 BPMN 显式携带该子元素时才同步」：避免未迁移分类（仍存于 wf_* 的存量数据）
+            // 被「先删后插」误清空（过渡期双轨安全）。例如仅迁移了操作者、字段权限仍走 REST 的节点，
+            // 不会因 wf:node 存在而把字段权限洗掉。
             Element wfNode = firstChildElement(ext, "wf:node");
             if (wfNode != null) {
-                importNodeOperatorsFromWfNode(nodeId, wfNode);
-                importNodeCustomOpsFromWfNode(defId, nodeKey, wfNode);
-                importNodeFieldPermsFromWfNode(defId, nodeKey, wfNode);
+                if (!childElements(wfNode, "wf:operator").isEmpty()) {
+                    importNodeOperatorsFromWfNode(nodeId, wfNode);
+                }
+                if (!childElements(wfNode, "wf:operation").isEmpty()) {
+                    importNodeCustomOpsFromWfNode(defId, nodeKey, wfNode);
+                }
+                if (!childElements(wfNode, "wf:fieldPerm").isEmpty()) {
+                    importNodeFieldPermsFromWfNode(defId, nodeKey, wfNode);
+                }
+                if (!childElements(wfNode, "wf:timeout").isEmpty()) {
+                    importNodeTimeoutsFromWfNode(defId, nodeKey, wfNode);
+                }
                 continue;
             }
 
@@ -956,21 +971,59 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         customOperationService.saveBatch(defId, nodeKey, fulls);
     }
 
-    /** 从新格式 wf:node 读取字段权限并覆盖式写入 wf_node_field_perm（field/perm，scope 默认 main） */
+    /** 从新格式 wf:node 读取字段权限并覆盖式写入 wf_node_field_perm（field/perm，scope 默认 main；明细表权限以 dt{idx} 形式携带） */
     private void importNodeFieldPermsFromWfNode(Long defId, String nodeKey, Element wfNode) {
-        fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
-            .eq(WfNodeFieldPerm::getDefId, defId)
-            .eq(WfNodeFieldPerm::getNodeKey, nodeKey));
-        for (Element pEl : childElements(wfNode, "wf:fieldPerm")) {
-            WfNodeFieldPerm p = new WfNodeFieldPerm();
-            p.setDefId(defId);
-            p.setNodeKey(nodeKey);
-            p.setScope("main");
-            p.setFieldName(attr(pEl, "field", null));
-            int perm = parseIntSafe(attr(pEl, "perm", null), 1);
-            p.setPerm(perm);
-            applyThreeDim(p, perm);
-            fieldPermMapper.insert(p);
+    	fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+    		.eq(WfNodeFieldPerm::getDefId, defId)
+    		.eq(WfNodeFieldPerm::getNodeKey, nodeKey));
+    	for (Element pEl : childElements(wfNode, "wf:fieldPerm")) {
+    		WfNodeFieldPerm p = new WfNodeFieldPerm();
+    		p.setDefId(defId);
+    		p.setNodeKey(nodeKey);
+    		String scope = attr(pEl, "scope", "main");
+    		p.setScope(scope == null || scope.isBlank() ? "main" : scope);
+    		p.setFieldName(attr(pEl, "field", null));
+    		int perm = parseIntSafe(attr(pEl, "perm", null), 1);
+    		p.setPerm(perm);
+    		// 三维度：BPMN 显式携带（scope/三维度补齐后）时优先，否则按 perm 反推（向后兼容历史 BPMN）
+    		String vis = attr(pEl, "visible", null);
+    		String edt = attr(pEl, "editable", null);
+    		String req = attr(pEl, "required", null);
+    		if (vis != null || edt != null || req != null) {
+    			p.setIsVisible(parseIntSafe(vis, 0));
+    			p.setIsEditable(parseIntSafe(edt, 0));
+    			p.setIsRequired(parseIntSafe(req, 0));
+    		} else {
+    			applyThreeDim(p, perm);
+    		}
+    		fieldPermMapper.insert(p);
+    	}
+    }
+
+    /** 从新格式 wf:node 读取超时规则并覆盖式写入 wf_node_timeout（对齐 NodeTimeoutModal 的 BPMN 写入） */
+    private void importNodeTimeoutsFromWfNode(Long defId, String nodeKey, Element wfNode) {
+        timeoutMapper.delete(Wrappers.<WfNodeTimeout>lambdaQuery()
+            .eq(WfNodeTimeout::getDefId, defId)
+            .eq(WfNodeTimeout::getNodeKey, nodeKey));
+        for (Element tEl : childElements(wfNode, "wf:timeout")) {
+            WfNodeTimeout t = new WfNodeTimeout();
+            t.setDefId(defId);
+            t.setNodeKey(nodeKey);
+            t.setSeq(parseIntSafe(attr(tEl, "seq", null), 0));
+            t.setEnabled(parseIntSafe(attr(tEl, "enabled", null), 1));
+            t.setStartType(parseIntSafe(attr(tEl, "startType", null), 1));
+            t.setStartField(attr(tEl, "startField", null));
+            t.setEndType(parseIntSafe(attr(tEl, "endType", null), 1));
+            t.setEndFixedTime(attr(tEl, "endFixedTime", null));
+            t.setEndField(attr(tEl, "endField", null));
+            t.setDurationMin(parseIntOrNull(attr(tEl, "durationMin", null)));
+            t.setActionWay(attr(tEl, "actionWay", "autoApprove"));
+            t.setOpinion(attr(tEl, "opinion", null));
+            t.setOperatorIds(attr(tEl, "operatorIds", null));
+            t.setRemindBeforeOperator(parseIntSafe(attr(tEl, "remindBeforeOperator", null), 0));
+            t.setRemindTypes(attr(tEl, "remindTypes", null));
+            t.setRemindPersons(attr(tEl, "remindPersons", null));
+            timeoutMapper.insert(t);
         }
     }
 

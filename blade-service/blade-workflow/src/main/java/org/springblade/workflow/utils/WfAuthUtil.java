@@ -49,6 +49,17 @@ public final class WfAuthUtil {
     }
 
     /**
+     * 当前登录用户所属租户ID（无登录上下文返回 null）。
+     *
+     * <p>用于「去 wf_ 表」后直接读 {@code ACT_HI_PROCINST} 的场景：该表不是 Blade 托管的
+     * MyBatis-Plus 实体，<b>不会被租户插件自动追加 {@code tenant_id} 过滤</b>，必须在查询中
+     * 显式 {@code eq(TENANT_ID_, ...)}，否则多租户下会串数据（T-13）。</p>
+     */
+    public static String tenantId() {
+        return SecureUtil.getTenantId();
+    }
+
+    /**
      * 「所有人」占位 id（0）。
      *
      * <p>供无登录上下文的系统动作记录操作人：超时自动通过、异常兜底自动流转、子流程自动推进等，

@@ -30,7 +30,9 @@ import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
+import org.springblade.workflow.entity.ActHiProcinst;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.mapper.ActHiProcinstMapper;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfDefinitionGrayMapper;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
@@ -46,6 +48,7 @@ import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfSubflowService;
 import org.springblade.workflow.service.IWfTimeoutService;
 import org.springblade.workflow.service.helper.WfWriteHelper;
+import org.springblade.workflow.service.helper.WfInstanceActWriter;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.service.IWfInstanceService;
@@ -54,6 +57,7 @@ import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
+import org.springblade.workflow.vo.InstanceView;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -114,6 +118,17 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfNodeOperatorMapper operatorMapper;
     private final NodeActionExecutor nodeActionExecutor;
     private final IFormmodeClient formmodeClient;
+    /** 实例读源切换映射器：读源=act 时从此读原生 ACT_HI_PROCINST */
+    private final ActHiProcinstMapper actProcinstMapper;
+    /** 实例业务列双写收口器（去 wf_ 表写侧） */
+    private final WfInstanceActWriter actWriter;
+    /**
+     * 实例读源：wf=遗留 wf_instance（默认，零行为变化）；act=原生 ACT_HI_PROCINST（去 wf_ 表切源）。
+     * 切 act 前须先开启 {@code blade.workflow.instance-act-write.enabled} 双写 + 跑 act_backfill.sql，
+     * 否则 ACT_* 业务列为空。读侧与写侧独立开关，便于灰度验证。
+     */
+    @Value("${blade.workflow.instance-read-source:wf}")
+    private String instanceReadSource;
 
     /**
      * 子流程服务：与 {@link WfSubflowServiceImpl}（亦注入本服务）存在循环依赖，
@@ -437,6 +452,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             instanceMapper.insert(inst);
         }
 
+        // 去 wf_ 表预热：把业务列双写到原生 ACT_HI_PROCINST（开关关闭时不产生任何 ACT_* 写入）
+        actWriter.writeOnStart(inst, engineInstId, WfInstance.STATUS_RUNNING);
+
         // 表单数据快照（决策 3：数据与布局解耦）
         WfFormSnapshot snap = new WfFormSnapshot();
         snap.setInstId(inst.getId());
@@ -461,6 +479,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             patch.setId(inst.getId());
             patch.setRequestIdBound(bound ? 1 : 0);
             instanceMapper.updateById(patch);
+            // L3 自检③ 双写回 ACT_*
+            actWriter.writeRequestIdBound(engineInstId, bound ? 1 : 0);
         }
 
         advance(inst.getId());
@@ -633,11 +653,33 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (inst.getIsTest() != null && inst.getIsTest() == 1 && !WfAuthUtil.isAdmin()) {
             throw new WfAccessDeniedException("该流程为测试数据，无权查看");
         }
+        if (actRead()) {
+            // 读源=act：台账从原生 ACT_HI_PROCINST 取（BUSINESS_ID_=雪花业务ID，与鉴权用的 wf_instance.id 同源）
+            ActHiProcinst t = actProcinstMapper.selectOne(Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getBusinessId, id).last("LIMIT 1"));
+            if (t == null) {
+                throw new ServiceException("流程实例不存在(ACT)");
+            }
+            return toInstanceVO(InstanceView.fromActHiProcinst(t));
+        }
         return toInstanceVO(inst);
     }
 
     @Override
     public IPage<InstanceVO> mine(Long current, Long pageSize, String title) {
+        if (actRead()) {
+            // 读源=act：直接扫原生 ACT_HI_PROCINST（STARTER_/IS_TEST_/TITLE_/START_TIME_ 已加列+索引）
+            Page<ActHiProcinst> page = new Page<>(
+                (current == null || current < 1) ? 1 : current,
+                (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200));
+            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+                .eq(ActHiProcinst::getStarter, WfAuthUtil.userId())
+                .eq(ActHiProcinst::getIsTest, 0)
+                .like(title != null && !title.isBlank(), ActHiProcinst::getTitle, title)
+                .orderByDesc(ActHiProcinst::getStartTime));
+            return result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
+        }
         Page<WfInstance> page = new Page<>(
             (current == null || current < 1) ? 1 : current,
             (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200));
@@ -654,6 +696,27 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
     @Override
     public InstanceVO getByBiz(Long formId, Long dataId) {
+        if (actRead()) {
+            // 读源=act：直接扫原生 ACT_HI_PROCINST（BUSINESS_KEY_=formId:dataId，已加列+索引）
+            ActHiProcinst t = actProcinstMapper.selectOne(Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+                .eq(ActHiProcinst::getBizKey, buildBizKey(formId, dataId))
+                .eq(ActHiProcinst::getIsTest, 0)
+                .last("LIMIT 1"));
+            if (t == null) {
+                return null;
+            }
+            // 记录级鉴权（复用 wf_instance 双写保真的 id/starter，避免暴露参与人探测面）
+            WfInstance stub = new WfInstance();
+            stub.setId(t.getBusinessId());
+            stub.setStarter(t.getStarter());
+            if (!canVisible(stub)) {
+                log.warn("[blade-workflow] 忽略越权的按业务反查(act). businessId={}, starter={}, current={}",
+                    t.getBusinessId(), t.getStarter(), WfAuthUtil.userId());
+                return null;
+            }
+            return toInstanceVO(InstanceView.fromActHiProcinst(t));
+        }
         WfInstance inst = instanceMapper.selectOne(Wrappers.<WfInstance>lambdaQuery()
             .eq(WfInstance::getBizKey, buildBizKey(formId, dataId))
             // 测试实例不参与「按业务数据反查」（方案 §6.4 C1）：单据侧反查只应看到正式流程
@@ -676,6 +739,15 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     public int countByForm(Long formId) {
         if (formId == null) {
             return 0;
+        }
+        if (actRead()) {
+            // 读源=act：直接扫原生 ACT_HI_PROCINST（FORM_ID_ 已加列+索引）
+            Long count = actProcinstMapper.selectCount(Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+                .eq(ActHiProcinst::getFormId, formId)
+                // 测试实例不计入「表单引用计数」（方案 §6.4 C1）
+                .eq(ActHiProcinst::getIsTest, 0));
+            return count == null ? 0 : count.intValue();
         }
         Long count = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
             .eq(WfInstance::getFormId, formId)
@@ -1185,6 +1257,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setEndTime(new Date());
             inst.setCurrentNodeKey("");
             instanceMapper.updateById(inst);
+            // 去 wf_ 表预热：归档终态 + 当前节点双写回 ACT_*
+            actWriter.writeLifecycle(inst.getEngineInstId(), WfInstance.STATUS_APPROVED, inst.getEndTime());
+            actWriter.writeCurrentNodeKey(inst.getEngineInstId(), "");
             // 归档补一条流转意见：否则「流转意见」里只有各办理节点，看不到最终归档这一步。
             appendArchiveLog(inst, lastNodeKey);
             // 节点信息 → 运行时消费：归档后子流程触发（settings.subflow.trigger=afterArchive）
@@ -1209,6 +1284,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setCurrentNodeKey(nodeKey);
         }
         instanceMapper.updateById(inst);
+        // 去 wf_ 表预热：当前节点双写回 ACT_*（每次流转同步，幂等）
+        actWriter.writeCurrentNodeKey(inst.getEngineInstId(), inst.getCurrentNodeKey());
         if (nodeChanged && (inst.getIsTest() == null || inst.getIsTest() != 1)) {
             // 离开旧节点 → 关闭其上残留的协办/征询待办（非阻塞，随节点推进一并清掉）
             if (oldNodeKey != null && !oldNodeKey.isEmpty()) {
@@ -1832,32 +1909,43 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return node == null ? nodeKey : node.getNodeName();
     }
 
-    private InstanceVO toInstanceVO(WfInstance inst) {
+    /** 读源切换：把统一中间态 {@link InstanceView} 装配为 {@link InstanceVO}（wf / act 共用，零行为差异） */
+    private InstanceVO toInstanceVO(InstanceView v) {
         InstanceVO vo = new InstanceVO();
-        vo.setId(inst.getId());
-        vo.setDefId(inst.getDefId());
-        vo.setFormId(inst.getFormId());
-        vo.setDataId(inst.getDataId());
-        vo.setTitle(inst.getTitle());
-        vo.setBizKey(inst.getBizKey());
-        vo.setStatus(inst.getStatus());
-        vo.setCurrentNodeKey(inst.getCurrentNodeKey());
-        vo.setCurrentNodeName(resolveNodeName(inst.getDefId(), inst.getCurrentNodeKey()));
-        vo.setStarter(inst.getStarter());
-        vo.setStartTime(inst.getStartTime());
-        vo.setEndTime(inst.getEndTime());
-        vo.setUrgency(inst.getUrgency());
+        vo.setId(v.getId());
+        vo.setDefId(v.getDefId());
+        vo.setFormId(v.getFormId());
+        vo.setDataId(v.getDataId());
+        vo.setTitle(v.getTitle());
+        vo.setBizKey(v.getBizKey());
+        vo.setStatus(v.getStatus());
+        vo.setCurrentNodeKey(v.getCurrentNodeKey());
+        vo.setCurrentNodeName(resolveNodeName(v.getDefId(), v.getCurrentNodeKey()));
+        vo.setStarter(v.getStarter());
+        vo.setStartTime(v.getStartTime());
+        vo.setEndTime(v.getEndTime());
+        vo.setUrgency(v.getUrgency());
         // 测试态标记透出（C3）：前端据此识别「这是测试单」并置只读 / 加「测试」标识
-        vo.setIsTest(inst.getIsTest());
-        // L3 运行时自检标志（发起时写入 wf_instance，随详情/我的请求返回前端）
-        vo.setBusinessRowReady(inst.getBusinessRowReady());
-        vo.setRequestIdBound(inst.getRequestIdBound());
-        vo.setEngineDeploymentMatched(inst.getEngineDeploymentMatched());
-        WfProcessDefinition def = defMapper.selectById(inst.getDefId());
+        vo.setIsTest(v.getIsTest());
+        // L3 运行时自检标志（发起时写入，随详情/我的请求返回前端）
+        vo.setBusinessRowReady(v.getBusinessRowReady());
+        vo.setRequestIdBound(v.getRequestIdBound());
+        vo.setEngineDeploymentMatched(v.getEngineDeploymentMatched());
+        WfProcessDefinition def = defMapper.selectById(v.getDefId());
         if (def != null) {
             vo.setDefName(def.getName());
         }
         return vo;
+    }
+
+    /** 兼容遗留：WfInstance → InstanceView → InstanceVO（读源=wf 时走此路径） */
+    private InstanceVO toInstanceVO(WfInstance inst) {
+        return toInstanceVO(InstanceView.fromWfInstance(inst));
+    }
+
+    /** 实例读源是否切到原生 ACT_HI_PROCINST（去 wf_ 表） */
+    private boolean actRead() {
+        return "act".equalsIgnoreCase(instanceReadSource);
     }
 
     /**

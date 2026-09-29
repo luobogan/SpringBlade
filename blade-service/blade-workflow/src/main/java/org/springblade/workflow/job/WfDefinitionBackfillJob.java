@@ -41,6 +41,7 @@ import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfDetailFilterExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfDetailPermExt;
+import org.springblade.workflow.util.BpmnExtensionUtil.WfDetailTablePermExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfFieldPermExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfLinkExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfNodeExt;
@@ -286,30 +287,51 @@ public class WfDefinitionBackfillJob {
 				d.dtKey = scope;
 				d.field = fp.getFieldName();
 				d.perm = str(fp.getPerm());
+				d.visible = str(fp.getIsVisible());
+				d.editable = str(fp.getIsEditable());
+				d.required = str(fp.getIsRequired());
 				ext.detailPerms.add(d);
 			} else {
 				WfFieldPermExt f = new WfFieldPermExt();
+				f.scope = (scope == null || scope.isBlank()) ? "main" : scope;
 				f.field = fp.getFieldName();
 				f.perm = str(fp.getPerm());
+				f.visible = str(fp.getIsVisible());
+				f.editable = str(fp.getIsEditable());
+				f.required = str(fp.getIsRequired());
 				ext.fieldPerms.add(f);
 			}
 		}
 
-		// 明细表级权限（canAdd/canEdit/canDelete 等，冻结 schema 无独立元素）→ 存节点 extJson 保全
+		// 明细表整表权限（canAdd/canEdit/canDelete 等）→ detailTablePerm 元素
 		List<WfNodeDetailPerm> dtps = detailPermMapper.selectList(new QueryWrapper<WfNodeDetailPerm>()
 			.eq("def_id", node.getDefId()).eq("node_key", node.getNodeKey()));
+		for (WfNodeDetailPerm dp : dtps) {
+			WfDetailTablePermExt d = new WfDetailTablePermExt();
+			d.dtIndex = str(dp.getDtIndex());
+			d.canAdd = str(dp.getCanAdd());
+			d.canEdit = str(dp.getCanEdit());
+			d.canDelete = str(dp.getCanDelete());
+			d.hideEmpty = str(dp.getHideEmpty());
+			d.defaultRows = str(dp.getDefaultRows());
+			d.required = str(dp.getRequired());
+			d.printSerial = str(dp.getPrintSerial());
+			d.allowScroll = str(dp.getAllowScroll());
+			d.openPaging = str(dp.getOpenPaging());
+			ext.detailTablePerms.add(d);
+		}
 
-		// 明细表字段过滤
+		// 明细表字段过滤（逐字段比较规则）→ detailFilter 元素
 		List<WfNodeDetailFilter> dtfs = detailFilterMapper.selectList(new QueryWrapper<WfNodeDetailFilter>()
 			.eq("def_id", node.getDefId()).eq("node_key", node.getNodeKey()));
 		for (WfNodeDetailFilter df : dtfs) {
 			WfDetailFilterExt d = new WfDetailFilterExt();
-			d.dtKey = "dt" + df.getDtIndex();
-			try {
-				d.rowFilter = OM.writeValueAsString(df);
-			} catch (Exception ignored) {
-				// 序列化失败则仅保留原始语义
-			}
+			d.dtIndex = str(df.getDtIndex());
+			d.modeType = str(df.getModeType());
+			d.fieldName = df.getFieldName();
+			d.compareType = str(df.getCompareType());
+			d.compareValue = df.getCompareValue();
+			d.isRequired = str(df.getIsRequired());
 			ext.detailFilters.add(d);
 		}
 

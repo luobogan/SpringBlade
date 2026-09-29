@@ -28,11 +28,16 @@ Flowable 按 `localName` 分发子元素解析（`BpmnXMLUtil#genericChildParser
 
 ### 4.1 `wf:node`（userTask 扩展，替代 wf_process_node / wf_node_*）
 
+> ⚠️ 本节取值以**实现为准**：`nodeType` 见 `WfDefinitionServiceImpl#nodeTypeOf`（0创建 1审批 3归档，6自动处理），
+> `opType`/`signOrder`/`mergeType` 见前端 `wfDict.ts` 与 `wf_node_operator` 存量数据。
+> 本表早期版本曾误写为 1-based（`1创建 2审批…`）与 `opType 1人员 2部门 3角色`，**已按实现校正**；
+> 后续变更仍须同步三处（后端 util、前端 moddle/字典、本文档）并跑通往返测试。
+
 | 属性 | 含义 | 对应原表 |
 |---|---|---|
-| `nodeType` | 1创建 2审批 3提交 4归档 5等待 6自动 | wf_process_node.node_type |
-| `signOrder` | 会签顺序 | wf_process_node |
-| `mergeType` | 0或签 1顺序签 2依次 | wf_process_node |
+| `nodeType` | 0创建 1审批 2提交 3归档 5等待 6自动处理 7网关 | wf_process_node.node_type |
+| `signOrder` | 审批方式：0或签 1会签 2依次 3抄送不需提交 4抄送需提交 | wf_process_node.sign_order |
+| `mergeType` | 分叉/合并：0普通 1分叉起点 2分叉中间 3按分支数合并 4指定分支合并 5比例合并 | wf_process_node.merge_type |
 | `passNum` | 通过数 / 比例 | wf_process_node |
 | `allowReject` | 0/1 允许驳回 | wf_process_node |
 | `allowForward` | 0/1 允许转办 | wf_process_node |
@@ -44,13 +49,13 @@ Flowable 按 `localName` 分发子元素解析（`BpmnXMLUtil#genericChildParser
 
 **子元素**
 
-- `<wf:operator groupNo opType objId bhxj levelMin levelMax/>`（0..n）→ `wf_node_operator`：`opType` 1人员 2部门 3角色 17等；`objId` 逗号分隔 ID。
+- `<wf:operator groupNo opType objId bhxj levelMin levelMax/>`（0..n）→ `wf_node_operator`：`opType` 3人员 1部门 2角色 58岗位 4所有人 17创建人本人 18创建人上级 19本部门；`objId` 逗号分隔 ID。
 - `<wf:fieldPerm field perm/>`（0..n）→ `wf_node_field_perm`：`perm` 取值 `hidden`/`readonly`/`edit`/`required`（兼容 0/1/2/3）。
 - `<wf:detailPerm dtKey field perm/>`（0..n）→ `wf_node_detail_perm`：`dtKey` 明细表标识。
 - `<wf:detailFilter dtKey rowFilter/>`（0..n）→ `wf_node_detail_filter`：`rowFilter` 行过滤表达式。
 - `<wf:timeout seq enabled startType startField endType endFixedTime endField durationMin actionWay opinion operatorIds remindBeforeOperator remindTypes remindPersons/>`（0..n）→ `wf_node_timeout`：`actionWay` ∈ `autoApprove`/`forward`/`assign`/`remind`；`startType` 1相对 2字段；`endType` 1时长 2固定时刻 3字段。
 - `<wf:customAction actionKey name type url expression/>`（0..n）→ `wf_custom_action`：`type` 1URL 2流程操作 3接口。
-- `<wf:operation btnName btnOrder actionType enabled/>` + 子 `<wf:right rightType rightValue/>`（0..n）→ `wf_custom_operation`(+`wf_custom_operation_right`)：`actionType` 1URL 2流程操作 3接口。
+- `<wf:operation btnName btnOrder actionType enabled url httpMethod paramExpr flowOperation interfaceName opinion/>` + 子 `<wf:right rightType rightValue/>`（0..n）→ `wf_custom_operation`(+`wf_custom_operation_right`)：`actionType` 1URL 2流程操作 3接口；动作明细按 `actionType` 使用——1 取 `url`/`httpMethod`/`paramExpr`，2 取 `flowOperation`/`opinion`，3 取 `interfaceName`/`paramExpr`。（早期版本仅 `btnName btnOrder actionType enabled`，已按 CustomOperationModal 实际字段补齐。）
 - `<wf:extJson><![CDATA[...]]></wf:extJson>`（0..1）→ 未结构化字段的自由 JSON（如 remind 配置）。
 
 ### 4.2 `wf:link`（sequenceFlow 扩展，替代 wf_node_link）
