@@ -125,6 +125,16 @@ public final class BpmnExtensionUtil {
 			o.bhxj = attr(op, "bhxj");
 			o.levelMin = attr(op, "levelMin");
 			o.levelMax = attr(op, "levelMax");
+			o.signOrder = attr(op, "signOrder");
+			o.batchNo = attr(op, "batchNo");
+			o.groupName = attr(op, "groupName");
+			o.canView = attr(op, "canView");
+			o.conditionJson = attr(op, "conditionJson");
+			o.isCoadjutant = attr(op, "isCoadjutant");
+			o.coadjutants = attr(op, "coadjutants");
+			o.isPending = attr(op, "isPending");
+			o.isModify = attr(op, "isModify");
+			o.signType = attr(op, "signType");
 			ext.operators.add(o);
 		}
 		for (ExtensionElement fp : allChild(node, "fieldPerm")) {
@@ -218,6 +228,16 @@ public final class BpmnExtensionUtil {
 			setAttr(e, "bhxj", o.bhxj);
 			setAttr(e, "levelMin", o.levelMin);
 			setAttr(e, "levelMax", o.levelMax);
+			setAttr(e, "signOrder", o.signOrder);
+			setAttr(e, "batchNo", o.batchNo);
+			setAttr(e, "groupName", o.groupName);
+			setAttr(e, "canView", o.canView);
+			setAttr(e, "conditionJson", o.conditionJson);
+			setAttr(e, "isCoadjutant", o.isCoadjutant);
+			setAttr(e, "coadjutants", o.coadjutants);
+			setAttr(e, "isPending", o.isPending);
+			setAttr(e, "isModify", o.isModify);
+			setAttr(e, "signType", o.signType);
 			node.addChildElement(e);
 		}
 		for (WfFieldPermExt f : ext.fieldPerms) {
@@ -363,7 +383,9 @@ public final class BpmnExtensionUtil {
 	}
 
 	public static class WfOperatorExt {
-		public String groupNo, opType, objId, bhxj, levelMin, levelMax;
+		public String groupNo, opType, objId, bhxj, levelMin, levelMax,
+			signOrder, batchNo, groupName, canView, conditionJson,
+			isCoadjutant, coadjutants, isPending, isModify, signType;
 	}
 
 	public static class WfFieldPermExt {
