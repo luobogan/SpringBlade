@@ -164,13 +164,17 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
             return;
         }
         String way = rule.getActionWay() == null ? "autoApprove" : rule.getActionWay();
+
+        // 主动作执行；成功与否决定后续是否置位 / 提醒（修复 R4：失败不得误标记"已处理"）。
+        boolean primaryOk;
         try {
             switch (way) {
                 case "assign":
-                    assign(task, rule);
+                    primaryOk = doAssign(task, rule);
                     break;
                 case "remind":
-                    // 仅提醒，不改动流转（提醒在下方统一处理）
+                    // 仅提醒类动作：提醒本身即主动作
+                    primaryOk = doRemind(task, inst, rule, way);
                     break;
                 case "forward":
                 case "autoApprove":
@@ -178,26 +182,40 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
                     String opinion = (rule.getOpinion() == null || rule.getOpinion().isBlank())
                         ? "超时自动通过" : rule.getOpinion();
                     taskService.autoApprove(task.getId(), opinion);
+                    primaryOk = true;
                     break;
             }
         } catch (Exception e) {
-            log.warn("[blade-workflow] 超时动作执行失败. taskId={}, way={}", task.getId(), way, e);
+            log.warn("[blade-workflow] 超时主动作执行失败. taskId={}, way={}", task.getId(), way, e);
+            primaryOk = false;
         }
-        // 提醒（任何动作之后都按配置提醒处理人）
-        try {
-            remind(task, inst, rule, way);
-        } catch (Exception e) {
-            log.warn("[blade-workflow] 超时提醒记录失败. taskId={}", task.getId(), e);
+
+        if (!primaryOk) {
+            // 失败：不置位、不重复提醒，保留 timeout_handled=0 由下一扫描周期重试，
+            // 避免 R4「动作失败却被误标记已处理」导致超时动作永久丢失。
+            // 持久化重试计数 / 死信（防无限重试风暴）由 P3（T-8）迁移到 ACT_RU_TASK 后补（见 D9）。
+            log.warn("[blade-workflow] 超时动作未成功，保留待重试. taskId={}, way={}", task.getId(), way);
+            return;
         }
-        // 标记已执行，避免重复触发
+
+        // 主动作成功：非 remind 类动作仍按配置对处理人做提醒（best-effort，失败不影响已完成的动作）。
+        if (!"remind".equals(way)) {
+            try {
+                doRemind(task, inst, rule, way);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 超时提醒记录失败. taskId={}", task.getId(), e);
+            }
+        }
+
+        // 仅成功才标记已执行，避免重复触发
         task.setTimeoutHandled(1);
         taskMapper.updateById(task);
     }
 
     /** 超时转办：将待办办理人改为指定操作者（取首个；多操作者仅记首人，后续可扩展） */
-    private void assign(WfTask task, WfNodeTimeout rule) {
+    private boolean doAssign(WfTask task, WfNodeTimeout rule) {
         if (rule.getOperatorIds() == null || rule.getOperatorIds().isBlank()) {
-            return;
+            return false;
         }
         String[] ids = rule.getOperatorIds().split(",");
         for (String s : ids) {
@@ -207,18 +225,20 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
                     task.setAssignee(uid);
                     taskMapper.updateById(task);
                     log.info("[blade-workflow] 超时转办. taskId={}, to={}", task.getId(), uid);
-                    return;
+                    return true;
                 }
             } catch (NumberFormatException ignored) {
                 // 跳过非法 ID
             }
         }
+        return false;
     }
 
     /** 超时提醒：节点处理人本人（remindBeforeOperator）+ 指定人员，按 remindTypes 记流转意见留痕 */
-    private void remind(WfTask task, WfInstance inst, WfNodeTimeout rule, String way) {
+    private boolean doRemind(WfTask task, WfInstance inst, WfNodeTimeout rule, String way) {
         if (rule.getRemindTypes() == null || rule.getRemindTypes().isBlank()) {
-            return;
+            // 无提醒配置视为成功（remind 类动作无需副作用）
+            return true;
         }
         List<Long> recipients = new ArrayList<>();
         if (Integer.valueOf(1).equals(rule.getRemindBeforeOperator())
@@ -245,6 +265,7 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
             instanceService.recordLog(inst.getId(), task.getNodeKey(), who,
                 WfApprovalLog.LOG_COMMENT, msg);
         }
+        return true;
     }
 
     private String buildRemindMsg(WfNodeTimeout rule, String way) {
