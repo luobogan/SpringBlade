@@ -8,6 +8,31 @@
 >
 > 🏢 **多业务域共用约定**：电商（`blade-mall` / `blade-order` / `blade-pay`）等**其它行业模块共用同一套引擎与 `ACT_*` 表**。隔离规范见 **§十三**：`ACT_*` 为 **workflow 专用**、按 **`TENANT_ID_`** 隔离、异步执行器**按需隔离**。
 
+---
+
+## 文档导航（快速入口）
+
+| 想找什么 | 看哪一章 |
+|---|---|
+| **整体结论 / 一页纸速查** | §1.2 核心结论、**§17.5 一页纸速查** |
+| `wf_*` 表全景（22 张） | §二 |
+| 能力差异（`wf_*` vs 引擎原生） | §三 |
+| 数据表替换方案 / 加列 DDL | §四、**§十一**（实测 + DDL + 索引 + 回填） |
+| 代码改造点（按模块） | §五、**§12.10.1**（状态写入治本方案） |
+| 迁移步骤 / 风险 | §六、**§15.3**（迁移遗漏） |
+| 分期与任务拆解 | §七、**§15.12 / §17.4** |
+| "列表化"提升检索效率 | §八、**§12.10.2** |
+| 多实例 / 加签 / 跳转 启用路线 | §九、**§12.8.1**（状态写入）、**§12.8.3**（定时器） |
+| 源码可改 / 不可改边界 | **§12.0**、§12.4（改源码 vs 扩展点） |
+| 去 `wf_*` 的连锁影响 / 隐性依赖 | **§12.3** |
+| 多业务域共用与隔离 | **§十三**（含 §13.8 租户列覆盖实测） |
+| 高并发与检索性能 | **§十四** |
+| 遗漏排查（九维度交叉验证） | **§十五** |
+| 前端改造 | **§十六** |
+| 待确认 / 验证点 / 风险 登记表 | **§十七**（§17.1 / §17.2 / §17.3） |
+
+> 📌 **评审最短路径**：先看 **§17.5 一页纸速查** → 再按 **§17.1（D 系列）** 拍板 → 按 **§17.4（任务总表）** 派活 → 按 **§17.2（V 系列）** 排验证。
+
 > 目标：以 **Flowable 8.1.0-SNAPSHOT 现有能力（必要时扩展/修改其源码）**重新实现当前"台账模块"的功能，**不再使用任何以 `wf_` 开头的表**。
 > 本文覆盖：功能差异、需调整的代码逻辑、数据表替换方案、迁移注意事项。
 
@@ -1379,3 +1404,370 @@ Flowable 8 的 `flowable-job-service/.../asyncexecutor/multitenant/` 已原生�
 | **V26** | 检索：历史表到万 / 十万级后带租户复合索引的查询耗时，据此确定分区启动时点 |
 
 > ⚠️ **说明**：本节为**定性评估**，不含实测数据（当前库仅 750 行，不具代表性）。所有结论需经 §14.5 压测验证后方可作为容量与参数依据。
+
+---
+
+## 十五、开发前交叉验证与遗漏排查（评审 / 任务拆解用）
+
+> 本节对照文档与 `D:\workproject\springbladeandreact\flowable-engine` 源码做交叉验证，按九个维度排查遗漏、边界场景与未考虑的改造点，并给出开发前必补的待确认事项与风险清单。
+
+### 15.0 本次交叉验证已确认的关键结论
+
+| 项 | 结论 | 源码证据 |
+|---|---|---|
+| `executeCommand` 是否同事务 | ✅ **是**（在已有 Command 上下文中**复用**上下文） | `CommandContextInterceptor`：L60 取 `Context.getCommandContext()`；L80 仅当 `!config.isContextReusePossible() \|\| commandContext == null \|\| commandContext.getException() != null` 才新建；L89-94 **else 复用**（日志"Valid context found. Reusing it"） |
+| ⚠️ 复用失效的边界 | ① 使用 `contextReusePossible=false` 的自定义 `CommandConfig`；② **当前上下文已处于异常 / 回滚态**（L80 `commandContext.getException() != null`）时会新建上下文 | 同上 |
+| 引擎多租户执行器 | ✅ 原生支持 | `flowable-job-service/.../asyncexecutor/multitenant/`：`ExecutorPerTenantAsyncExecutor`、`SharedExecutorServiceAsyncExecutor`、`TenantAware*` |
+| 异步执行器是否有租户字段 | ❌ `DefaultAsyncJobExecutor` 本身**无** `tenantId`（租户隔离靠 multitenant 包的实现类，非在 Default 上加配置） | 源码核查 |
+
+### 15.1 数据模型映射 —— 遗漏项
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **M1** 🔴 | **业务定义与引擎定义是 1:N（版本）关系，缺桥接** | `wf_process_definition`（业务 `defId`）对应 `ACT_RE_PROCDEF` 的**多个版本**（每次部署生成新 `ID_`，`KEY_` 不变）。§11 只加了 `DEF_ID_`，**无法从引擎 `PROC_DEF_ID_` 反查业务 defId / 版本**。建议：在 `ACT_HI_PROCINST` **同时冗余 `DEF_KEY_`**（= `ACT_RE_PROCDEF.KEY_`），或业务侧维护 `defId ↔ procDefKey` 映射 |
+| **M2** | **`DEF_ID_` 无法区分定义版本** | 版本相关统计须用 `PROC_DEF_ID_`（已存在于 `ACT_HI_PROCINST`），需在查询层明确分工 |
+| **M3** | **`ACT_HI_PROCINST.ID_` 与 `PROC_INST_ID_` 是否相等未验证** | 回填 SQL 用 `w.engine_inst_id = h.PROC_INST_ID_`；需验证两者在历史表中是否恒等（并入 V27） |
+| **M4** | **非任务节点无 `ACT_*` 记录** | 网关 / 事件节点无 task，其"节点信息"仅存在于 BPMN 扩展与 `ACT_RU_EXECUTION.ACT_ID_`；节点维度统计（当前节点分布）对非任务节点无表可查 |
+| **M5** | **`wf_form_snapshot` 无 `ACT_*` 对应** | 必须保留独立**非 `wf_`** 表（§2.2 已列），须明确其与 `DATA_ID_` 的关联口径 |
+| **M6** | 存量回填的**空值 / 类型**处理 | `DEF_ID_` 等用 BIGINT（业务雪花 ID）；存量 `engine_inst_id` 为空的行会**漏回填**，需单独统计与人工核对 |
+
+### 15.2 流程定义与实例的关联 —— 遗漏项
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **P1** 🔴 | **定义删除会连带丢失节点语义** | Flowable 删除 deployment 会级联删除 `ACT_RE_PROCDEF` 与 `ACT_GE_BYTEARRAY` ⇒ **历史实例的节点 / 出口语义无法还原**。须在运维规范中**禁止删除仍有历史实例引用的旧版本定义**（§12.3 已提，此处补充为**具体禁令**） |
+| **P2** | `CATEGORY_` 与 `TENANT_ID_` 职责可能重叠 | 多域共用下需明确：`TENANT_ID_` = 行业/租户隔离；`CATEGORY_` = 业务分类（或不用）。避免两套分类并行造成查询歧义 |
+| **P3** | 定义灰度 `wf_definition_gray` 的新家 | 属平台配置，保留非 `wf_` 表；需明确灰度选择的是 `ACT_RE_PROCDEF` 版本 |
+| **P4** | 在途实例与旧版本并存 | 存量在途实例仍指向旧 `PROC_DEF_ID_`，其节点语义在旧 BYTEARRAY ⇒ 新版本部署后**两套语义并存**，查询须按实例的 `PROC_DEF_ID_` 解析对应版本 |
+
+### 15.3 历史数据迁移 —— 遗漏项
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **H1** 🔴 | **存量会签任务无法 1:1 迁移** | 现状是"单 userTask + `wf_task` 多条待办"自研会签；`ACT_RU_TASK` / `ACT_HI_TASKINST` 中**只有一条任务** ⇒ 存量会签明细**无法还原**。建议：**存量仅迁移实例级**，任务明细保留归档（非 `wf_` 命名只读归档表） |
+| **H2** 🔴 | **`wf_approval_log` → `ACT_HI_COMMENT` 无法冗余租户** | `act_hi_comment` **无 `TENANT_ID_` 列**（§13.8 实测）⇒ 迁移时租户只能靠 `PROC_INST_ID_` 关联实例继承，**无法在 comment 上落租户列**（除非再加列，需决策） |
+| **H3** | 迁移顺序与幂等 | 建议顺序：定义期语义回填 → 实例级回填 → 审批日志 → 任务（仅实例级）/归档。每步须可重跑、可校验计数 |
+| **H4** | `wf_migration_map` 不可随 `wf_*` 一起删 | ecology 存量对账凭据（§12.3 已列） |
+
+### 15.4 事务与并发 —— 遗漏项
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **T1** ✅ | `executeCommand` 同事务**已确认成立**（§15.0），但须注意两个失效边界 | 使用 `contextReusePossible=false` 的配置，或当前上下文已异常 ⇒ 会新建上下文/事务 |
+| **T2** 🔴 | **`WfTimeoutJob` 多副本部署会重复执行** | 现为 Spring `@Scheduled`，**无分布式锁**；服务多副本时每个副本都会扫描并触发超时 ⇒ **重复自动通过 / 重复提醒**。去 `wf_*` 后改为扫 `ACT_RU_TASK` 同样存在此问题。⇒ **必须引入分布式锁或改由单实例调度**（如 XXL-Job / ShedLock / 选主） |
+| **T3** 🔴 | **超时触发与用户手动办理并发** | 扫描到任务并 `autoApprove` 的同时用户手动审批 ⇒ 竞争同一 execution / task ⇒ 一方乐观锁失败。需幂等 + 失败重试/忽略策略（不能静默丢失，见 E1） |
+| **T4** | 会签并发审批 | `REV_` 乐观锁冲突（§14.2 ②），压测验证（V23） |
+
+### 15.5 接口兼容性 —— 遗漏项
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **I1** 🔴 | **"查询契约不变"的承诺需重新审视** | §12.9.4 已决定**不保留投影表** ⇒ 接口返回 JSON 虽可保持，但**实现全变**，且复杂筛选 / 排序 / 分页受 `ACT_*` 索引与 JOIN 能力限制 ⇒ 需**逐个接口**梳理可行性（可能有部分筛选需降级或改走只读物化） |
+| **I2** | `blade-workflow-api` 的实体被上下游依赖 | 22 张 `wf_*` 实体若删除，需确认是否被其它模块 / Feign DTO 引用 ⇒ 需先做依赖扫描 |
+| **I3** | `WfMonitorController` 指标改造 | `listenerRegistered` 等指标需改为反映新架构（异步执行器状态、deadletter 数、BpmnModel 缓存命中率等，§14.5） |
+
+### 15.6 权限与审计 —— 遗漏项
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **A1** | `ACT_ID_*` 全为 0 行 | 项目**不使用 Flowable 身份模块**（人员来自 SpringBlade）⇒ 若将来用引擎原生 `candidateGroups` / identitylink 需先做身份集成 |
+| **A2** | `act_evt_log` 为 0 行 | 引擎事件日志未启用 ⇒ 是否启用 Flowable 事件日志作为审计留痕，需决策（否则审计仅有 `ACT_HI_COMMENT` + 业务日志） |
+| **A3** | 审批日志无租户列 | 见 H2 / §13.8 |
+| **A4** | 字段权限 / 操作者改读 BPMN 扩展 | `WfAuthUtil`、`WfNodeFieldPerm` 等去 `wf_*` 后须改读 BPMN 扩展，需一并改造（此前方案对此着墨不足） |
+
+### 15.7 异常回滚 —— 遗漏项（含现存缺陷）
+
+| # | 遗漏 | 说明与建议 |
+|---|---|---|
+| **E1** 🔴 | **超时动作失败却仍标记"已处理"（现存缺陷）** | `WfTimeoutServiceImpl.fire()` 中：动作执行 `try/catch` 仅 `log.warn`，随后**无论成败都执行** `task.setTimeoutHandled(1)` ⇒ **超时动作失败后不会重试，静默丢失**。迁移到 `ACT_RU_TASK.TIMEOUT_HANDLED_` 时**必须修正**：仅成功才置位，失败走重试 / 死信 |
+| **E2** | 监听器 `isFailOnException` 语义需重定义 | 当前 `true`（强一致）；去 `wf_*` 后监听器若仍用于写 `ACT_HI_COMMENT` 或只读物化，其失败是否回滚引擎操作需重新约定 |
+| **E3** | 异步开启后强一致失效 | 已 §12.8.3 / §3.4；须配套死信告警 |
+| **E4** | 补写失败无补偿 | §11 自定义列补写（即便同事务）仍可能因上下文复用失效（T1）而落到独立事务 ⇒ 需兜底巡检 + 对账 |
+
+### 15.8 测试覆盖 —— 需新增清单
+
+| 类别 | 需覆盖 |
+|---|---|
+| 迁移 | 定义期语义回填对账、实例级回填对账、审批日志迁移、漏回填（`engine_inst_id` 为空）处理 |
+| 保真 | BPMN 扩展往返保真（V7/V13）；定义版本回滚后语义可还原（V14） |
+| 隔离 | 多租户越权（V19）、无租户列表 JOIN 隔离（V22）、`IS_TEST_`+`TENANT_ID_` 组合（V21）、执行器租户隔离（V20） |
+| 并发 | 会签并发审批（V23）、超时与手动办理并发（T3）、连接池（V24）、写入 TPS 衰减（V25） |
+| 语义 | 或签/会签/依次 + 驳回回多实例、驳回、撤回、跳转（含跳到非等待态）、自由流、并行网关汇聚、暂停/恢复/终止 |
+| 超时 | 两类动作（提醒 / 自动通过）各自幂等；动作失败**不**误标记（E1 回归） |
+| 检索 | 历史表万/十万级带租户复合索引耗时（V26） |
+
+### 15.9 上下游模块影响
+
+| 模块 | 影响 | 需做 |
+|---|---|---|
+| **`blade-formmode`** | `WfTimeoutServiceImpl.formDate` 经 Feign 取表单数据 | 不受影响 |
+| **`blade-system`** | 操作者解析依赖组织 / 用户接口 | 不受影响 |
+| **前端设计器（bpmn-js）** 🔴 | 属性面板须改为编辑 BPMN 扩展 ⇒ **必须新增 `wf:` 的 moddle 扩展定义文件**，否则设计器无法解析/保存扩展 | **明确为交付物**（详见 §十六） |
+| **`blade-mall` / `order` / `pay`** | 共用引擎，经 workflow API 接入 | 遵守 §13（`ACT_*` workflow 专用、`TENANT_ID_` 隔离） |
+| **`blade-workflow-api`** | 22 个 `wf_*` 实体可能被引用 | 依赖扫描（I2） |
+| **`ecology-to-blade-migrator`** | 存量迁移工具可能依赖 `wf_*` | 确认并同步改造 |
+
+### 15.10 开发前必补的待确认事项
+
+| 编号 | 事项 | 影响 |
+|---|---|---|
+| **D6** | 是否新增 `DEF_KEY_`（引擎 `KEY_`）以桥接业务 defId 与引擎定义版本？（M1） | 数据模型定稿 |
+| **D7** | 存量会签任务明细是否放弃迁移、改为归档？（H1） | 迁移范围 |
+| **D8** | `ACT_HI_COMMENT` 是否**新增租户列**以支撑审批日志按租户检索？（H2） | 是否再次加列 |
+| **D9** | `WfTimeoutJob` 多副本调度如何治理：分布式锁 / XXL-Job / 选主？（T2） | 并发正确性 |
+| **D10** | 接口筛选能力盘点：哪些筛选在去投影表后**无法实现或需降级**？（I1） | 接口改造范围 |
+| **D11** | 是否启用 Flowable 事件日志作审计？（A2） | 审计方案 |
+| **D12** | 前端 `wf:` moddle 扩展由谁交付、何时交付？（§16） | 设计器改造前置 |
+
+### 15.11 风险清单（开发前）
+
+| 编号 | 风险 | 等级 |
+|---|---|---|
+| **R1** | 业务定义 ↔ 引擎定义 1:N 缺桥接，导致反查 / 版本统计无解 | 🔴 高 |
+| **R2** | 存量会签任务明细无法 1:1 迁移 | 🔴 高 |
+| **R3** | `WfTimeoutJob` 多副本重复触发超时 | 🔴 高 |
+| **R4** | 超时动作失败被误标记"已处理"（现存缺陷，须修） | 🔴 高 |
+| **R5** | 去投影表后接口筛选能力下降，部分接口需降级 | 🟠 中 |
+| **R6** | 定义删除导致历史实例节点语义丢失（须立运维禁令） | 🟠 中 |
+| **R7** | 审批日志（`ACT_HI_COMMENT`）无租户列，隔离须 JOIN | 🟠 中 |
+| **R8** | 前端 `wf:` moddle 扩展未交付 ⇒ 设计器无法编辑扩展 | 🟠 中 |
+
+### 15.12 建议的任务拆解（可评审）
+
+| # | 任务 | 依赖 | 产出 |
+|---|---|---|---|
+| **T-1** | 依赖扫描：`wf_*` 实体在上下游的引用面 | — | 影响清单 |
+| **T-2** | 数据模型定稿（含 D6 `DEF_KEY_`、D8 租户列决策） | T-1 | DDL 终稿 |
+| **T-3** | BPMN 扩展 schema 定稿 + **往返保真测试** | — | schema + 测试 |
+| **T-4** | 前端 `wf:` **moddle 扩展定义**（D12） | T-3 | moddle 文件 + 注册 |
+| **T-5** | 定义期语义回填（节点/出口/操作者/权限/超时 → BPMN）+ 双轨对账 | T-3 | 迁移脚本 + 对账 |
+| **T-6** | `ACT_*` 加列 + 复合（租户）索引 | T-2 | DDL 脚本 |
+| **T-7** | 实例级回填（含 `TENANT_ID_` 赋值）+ 校验 | T-6 | 回填脚本 |
+| **T-8** | 超时链路改造：扫 `ACT_RU_TASK.DUE_DATE_` + **修 E1 缺陷** + **多副本治理（D9）** | T-6 | 代码 + 调度方案 |
+| **T-9** | 审批日志迁移到 `ACT_HI_COMMENT`（含 D8） | T-7 | 迁移脚本 |
+| **T-10** | 接口改造：逐个盘点筛选能力（D10） | T-6/T-7 | 接口实现 |
+| **T-11** | 权限/操作者改读 BPMN 扩展（A4） | T-5 | 代码 |
+| **T-12** | 并发与性能压测（V23–V26） | T-8/T-10 | 压测报告 |
+| **T-13** | 多租户隔离验证（V19–V22） | T-7/T-10 | 验证报告 |
+| **T-14** | 存量 `wf_*` 退役（保留归档与 `wf_migration_map`） | 全部 | 退役清单 |
+
+---
+
+## 十六、前端（`ant-design-pro`）改造分析
+
+> 目标：评估去 `wf_*`、改用 Flowable 原生承载后，前端是否需要同步改造、改哪些、怎么改。
+
+### 16.1 现状盘点（`ant-design-pro/src` 实测）
+
+**流程业务页面**
+
+| 页面 | 作用 |
+|---|---|
+| `pages/Workflow/Todo/Todo.tsx` | 待办 |
+| `pages/Workflow/Done/Done.tsx` | 已办 |
+| `pages/Workflow/Request/Request.tsx` | 我的请求 |
+| `pages/Workflow/Create/{Create,Start,InstanceFlow}.tsx` | 发起 / 实例流转 |
+| `pages/System/Workflow/Workflow.tsx` | 流程管理 |
+| `pages/FormMode/Approval/ApprovalPage.tsx` | 办理页 |
+| `pages/FormMode/ExcelDesign/components/ApprovalFormRender.tsx` | 审批表单渲染 |
+| `pages/FormMode/Test/*` | 测试相关 |
+
+**流程设计器 `pages/FormMode/WorkflowDesign/`（改造重灾区）**
+
+`BpmnDesigner.tsx`、`NodeInfoPanel.tsx`、`NodeInfoTable.tsx`、`NodeSettingModal.tsx`、`NodeDetail.tsx`、`LinkInfoPanel.tsx`、`LinkDetail.tsx`、`useLinkActions.tsx`、`NodeOperatorModal.tsx`、`NodeTimeoutModal.tsx`、`NodeOperateMenuModal.tsx`、`NodeExtraOperateModal.tsx`、`CustomOperationModal.tsx`、`CustomActionRegisterModal.tsx`、`FormContentDesignModal.tsx`、`ConditionBuilder.tsx`、`SimulateModal.tsx`、`WorkflowTestModal.tsx`、`VersionDiffModal.tsx`，以及 `wfDict.ts`、`nodeSettings.ts`、`bpmnZh.ts`
+
+**API 契约层**：`src/services/workflow/index.ts`（实测 **87+ 个接口**）
+
+### 16.2 🔴 核心判断：这批"细粒度 CRUD 接口"在去 `wf_*` 后**失去承载对象**
+
+实测到的、以 `wf_*` 表为中心的接口：
+
+| 类别 | 接口 |
+|---|---|
+| 节点 | `listNodes(id)`、`updateNode(id, nodeKey, node)`、`deleteNode(id, nodeKey)`、`saveNodeTestStatus(id, nodeKey, status)` |
+| 出口 | `listLinks(id)`、`createLink(id, link)`、`updateLink(id, linkId, link)`、`deleteLink(id, linkId)` |
+| 操作者 | `getNodeOperators(id, nodeKey)`、`configOperator(id, nodeKey, operators)`、`syncOperatorToNodes(...)` |
+| 权限 | `getFieldPerm` / `saveFieldPerm`、`getDetailPerm` / `saveDetailPerm`、`getDetailFilter` / `saveDetailFilter` |
+| 自定义操作 | `listCustomActions` / `saveCustomAction` / `deleteCustomAction` |
+| BPMN | `saveBpmn(id, bpmnXml)`、`getBpmn(id)`、`importDefinition({name,bpmnXml})`、`deployDefinition(id)` |
+| 版本 | `saveAsNewVersion`、`activateVersion`、`listVersions`、`diffVersion` |
+| 实例 | `startInstance`、`getInstance`、`getInstanceByBiz`、`getLogs`、`getSnapshot`、`getInstanceNodeOperators`、`markTaskViewed` |
+| 其它 | `simulateDefinition`、`testDefinition`、`withdrawDefinition`、`getDefinitionFormCondition` |
+
+⇒ 去 `wf_*` 后，**节点 / 出口 / 操作者 / 权限 / 超时 / 自定义操作的写入目标从"表"变成"BPMN 扩展"**，上述细粒度写接口不再有表可写。
+
+### 16.3 两条改造路线
+
+| | **路线 A：后端兼容层** | **路线 B：前端直改 BPMN（推荐）** |
+|---|---|---|
+| 做法 | 保留接口签名，后端改为"收请求 → 改 BPMN 扩展 → 存 bpmnXml" | 前端用 bpmn-js + `wf:` moddle **直接编辑扩展**，统一 `saveBpmn` 保存 |
+| 前端改动 | **小**（面板几乎不动） | **大**（`NodeInfoPanel`/`LinkInfoPanel`/`NodeOperatorModal`/`NodeTimeoutModal`/`NodeOperateMenuModal`/`NodeExtraOperateModal`/`CustomOperationModal`/`ConditionBuilder`/`useLinkActions`/`nodeSettings.ts` 等几乎重写） |
+| 后端改动 | 大（需做"BPMN 扩展读写 + 版本管理"适配层） | 中（只需扩展 schema + 导入解析） |
+| 写放大 | ⚠️ 每次改一个节点属性都要读写整份 XML | ✅ 前端批量编辑，一次保存 |
+| 并发编辑 | ⚠️ 多人改同一定义不同节点易冲突，需版本/乐观锁 | ✅ 与设计器天然一致，仍需版本控制 |
+| 单一事实源 | ⚠️ 仍有一层适配，语义间接 | ✅ 真正落地 |
+
+⇒ **推荐路线 B**（与 §八 "BPMN 为唯一事实源"一致），但**工期与风险需充分评估**；若前端资源紧张，可先走 A 过渡。
+
+### 16.4 前端具体改造清单
+
+| # | 改造点 | 说明 |
+|---|---|---|
+| **F1** 🔴 | **新增 `wf:` moddle 扩展定义**（D12，§15.9 已列、此处细化为交付物） | JSON 描述 `wf:node` / `wf:link` / `wf:operator` 及嵌套结构，注册到 bpmn-js，否则设计器无法解析/序列化扩展 |
+| **F2** | 属性面板改为**读写 BPMN 元素扩展属性** | `NodeInfoPanel`、`NodeSettingModal`、`NodeDetail`、`NodeInfoTable` |
+| **F3** | 出口面板改为**读写 `SequenceFlow`** | `LinkInfoPanel`、`LinkDetail`、`useLinkActions`；条件写入**原生 `conditionExpression`**（而非库字段 `conditionExpr`） |
+| **F4** | `ConditionBuilder` 输出改为 BPMN 条件表达式 | 与 F3 联动 |
+| **F5** | 操作者 / 超时 / 操作菜单 / 附加操作面板改为写扩展 | `NodeOperatorModal`、`NodeTimeoutModal`、`NodeOperateMenuModal`、`NodeExtraOperateModal` |
+| **F6** | 保存链路收敛到 `saveBpmn` | 废弃 `updateNode`/`createLink`/`updateLink`/`configOperator`/`saveFieldPerm`/`saveDetailPerm` 等细粒度写接口（或保留为只读兼容） |
+| **F7** | 字典与配置与 `wf:` schema 对齐 | `wfDict.ts`、`nodeSettings.ts`、`bpmnZh.ts` |
+| **F8** | `VersionDiffModal` 支持**对比 BPMN 扩展差异** | 新增能力 |
+| **F9** | 列表 / 办理页 | 若后端保持返回契约（I1），`Todo`/`Done`/`Request`/`InstanceFlow`/`ApprovalPage`/`ApprovalFormRender` 改动小；否则同步改 |
+| **F10** | 雪花 ID 仍按**字符串**透传 | 既有约定（`rowKey` 用 `String(r.id)`、绝不做 `Number()`），新接口须沿用 |
+| **F11** | 审批日志 / 快照 | `getLogs`（→ `ACT_HI_COMMENT`）、`getSnapshot`（保留独立表）若返回结构变化则同步 |
+
+### 16.5 与后端方案的联动
+
+| 后端决策 | 对前端的影响 |
+|---|---|
+| **I1（是否保留投影表）** | 直接决定 F9：不保留则列表接口实现全变，需逐个盘点筛选能力 |
+| **T-3（BPMN 扩展 schema 定稿）** | F1/F7 的**前置**，schema 不定则前端无法开工 |
+| **D13（节点测试态 `saveNodeTestStatus` 存哪）** | 若改存 BPMN 扩展或引擎变量，该接口需重新设计 |
+| **版本管理策略** | 设计期修改存草稿 vs 每次生成新版本 ⇒ 影响 F6 保存逻辑 |
+
+### 16.6 新增待确认与风险
+
+| 编号 | 内容 |
+|---|---|
+| **D13** | 节点测试态（`saveNodeTestStatus`）去 `wf_*` 后存哪里？BPMN 扩展 / 引擎变量 / 独立表？ |
+| **D14** | 走路线 A 还是路线 B？（决定前端工作量量级） |
+| **D15** | 设计期每次修改是否生成新版本？还是草稿累积后统一部署？ |
+| **R9** | 🔴 未交付 `wf:` moddle 扩展 ⇒ 设计器**无法**编辑扩展，前端改造阻塞 |
+| **R10** | 🔴 路线 B 下前端改动面很大（近十个面板重写），工期与回归风险需评估 |
+| **R11** | 🟠 多人并发编辑同一流程定义的不同节点 ⇒ 需版本/乐观锁策略（D15） |
+
+### 16.7 任务拆解补充（前端）
+
+| # | 任务 | 依赖 | 产出 |
+|---|---|---|---|
+| **F-T1** | `wf:` **moddle 扩展定义** | T-3（schema 定稿） | moddle JSON + 注册代码 |
+| **F-T2** | 设计器画布支持扩展读写 | F-T1 | `BpmnDesigner` 改造 |
+| **F-T3** | 节点 / 出口面板改造（F2/F3/F4） | F-T1 | 面板代码 |
+| **F-T4** | 操作者 / 超时 / 菜单 / 附加操作面板改造（F5） | F-T1 | 面板代码 |
+| **F-T5** | 保存链路收敛 + 废弃细粒度写接口（F6） | F-T3/F-T4 | API 层改造 |
+| **F-T6** | 字典 / 版本对比 / 测试态对齐（F7/F8/D13） | F-T1 | 配置与组件 |
+| **F-T7** | 列表 / 办理页契约核对（F9/F10/F11） | I1 决策 | 页面核对报告 |
+
+---
+
+## 十七、附录：评审用登记表（汇总）
+
+> 将散落各章的 **D（待确认事项）/ V（验证点）/ R（风险）** 与任务拆解汇总于此，供开发评审与任务派发直接取用。
+> 整理时修正两处：① **原 R8 与 R9 内容重复**（均为"`wf:` moddle 扩展未交付"）⇒ 合并为 **R8**，原 R9 编号**作废**；② **V27** 被 §15.1（M3）引用但未正式定义 ⇒ 此处补齐。
+
+### 17.1 待确认事项登记表（D1–D15）
+
+| 编号 | 事项 | 出处 | 阻塞对象 |
+|---|---|---|---|
+| **D1** | 业务终态改用原生 `BUSINESS_STATUS_`，需定稿取值规范（`APPROVED`/`REJECTED`/`CANCELED`） | §4.4 / §12.1 | 实例状态口径 |
+| **D2** | `rejectToStarter` 的"合成待办"在多实例模式下如何表达 | §9.5 | 会签 + 驳回 |
+| **D3** | 投影宽表长期保留还是仅过渡？保留则须明确同步时机与失效策略 | §12.9.2 | §11/§12.9.4 方案 |
+| **D4** | `TENANT_ID_` 取值规范：行业编码？还是复用 SpringBlade 租户 ID？ | §13.7 | 多域隔离 |
+| **D5** | 各行业共用同一套流程定义模板，还是各自独立定义？ | §13.7 | `KEY_` 命名与部署 |
+| **D6** | 是否新增 `DEF_KEY_` 以桥接业务 defId 与引擎定义版本？ | §15.1（M1） | **数据模型定稿** |
+| **D7** | 存量会签任务明细是否放弃迁移、改为归档？ | §15.3（H1） | 迁移范围 |
+| **D8** | `ACT_HI_COMMENT` 是否新增租户列以支撑审批日志按租户检索？ | §15.3（H2） | 是否再次加列 |
+| **D9** | `WfTimeoutJob` 多副本调度如何治理：分布式锁 / XXL-Job / 选主？ | §15.4（T2） | **并发正确性** |
+| **D10** | 接口筛选能力盘点：去投影表后哪些筛选无法实现或需降级？ | §15.5（I1） | 接口改造范围 |
+| **D11** | 是否启用 Flowable 事件日志作审计？ | §15.6（A2） | 审计方案 |
+| **D12** | 前端 `wf:` moddle 扩展由谁交付、何时交付？ | §15.9 / §16.4（F1） | **前端开工前置** |
+| **D13** | 节点测试态（`saveNodeTestStatus`）去 `wf_*` 后存哪里？ | §16.5 | 测试态接口 |
+| **D14** | 前端走路线 A（后端兼容层）还是路线 B（直改 BPMN）？ | §16.3 | 前端工作量量级 |
+| **D15** | 设计期每次修改是否生成新版本？还是草稿累积后统一部署？ | §16.6 | 保存链路（F6） |
+
+**优先级建议**：**D6 / D12 / D14** 为开工前必须拍板（分别卡住数据模型、前端开工、前端工作量）；**D3 / D10** 决定接口改造范围；其余可并行推进。
+
+### 17.2 验证点登记表（V1–V27）
+
+| 编号 | 类型 | 内容 |
+|---|---|---|
+| **V1** | 性能 | `BUSINESS_STATUS_` 默认无索引 ⇒ 实测补索引后的查询计划与提升幅度 |
+| **V2** | 结构 | 任务级业务状态如何承载（原 `ACT_RU_TASK.BUSINESS_STATUS_` 经实测**不存在**）⇒ 建议 JOIN 实例表，不新增列 |
+| **V3** | 功能 | `addMultiInstanceExecution` 新增后 `completionCondition` 是否重新求值并把新增者计入 `nrOfInstances` |
+| **V4** | 功能 | `changeState()` 跳回**已执行过**的活动时 `ACT_HI_ACTINST` 是否产生重复/异常记录 |
+| **V5** | 功能 | `moveExecutionsToSingleActivityId` 并行汇聚退回时是否取消其余分支任务 |
+| **V6** | 功能 | 加签后驳回回多实例节点，集合变量如何重建 |
+| **V7** | 保真 | BPMN 扩展往返保真（解析 → 写回 → 断言无损） |
+| **V8** | 功能 | `SetProcessInstanceBusinessStatusCmd` 是否**同时**更新 `ACT_RU_EXECUTION` 与 `ACT_HI_PROCINST` 的 `BUSINESS_STATUS_` |
+| **V9** | 事务 | `executeCommand` 内写自定义列是否与引擎同事务（命令内写列后抛异常，验证是否回滚） |
+| **V10** | 功能 | 并行网关 + 多实例下"当前活动集合"的表达 |
+| **V11** | 回归 | 自定义 `ActivityBehaviorFactory` 替换后 userTask 生命周期是否正常 |
+| **V12** | 回归 | `getPersistentState()` 未登记新字段时的脏检查失效（改源码前必测） |
+| **V13** | 保真 | 往返保真 + 定义版本回滚后语义是否可还原 |
+| **V14** | 保真 | 旧定义版本被清理后，历史实例能否还原节点/出口语义 |
+| **V15** | 并发 | 多节点下 DDL 与投影表同步的幂等性 |
+| **V16** | 性能 | `EXPLAIN` 验证新增索引是否被命中（`BUSINESS_STATUS_`、`DUE_DATE_`） |
+| **V17** | 性能 | `getBpmnModel()` 缓存命中率（评估是否调大 `processDefinitionCacheLimit`） |
+| **V18** | 性能 | 历史表万/十万级后的列表查询耗时（决定分区启动时点） |
+| **V19** | 隔离 | 跨租户越权：A 租户查询不得返回 B 租户数据 |
+| **V20** | 隔离 | 异步执行器租户隔离：A 租户作业不被 B 租户执行器消费 |
+| **V21** | 隔离 | `IS_TEST_` + `TENANT_ID_` 组合过滤正确性 |
+| **V22** | 隔离 | `ACT_HI_COMMENT` / `ACT_RU_VARIABLE` 等**无租户列表**是否通过 JOIN 正确带上租户条件 |
+| **V23** | 并发 | `REV_` 乐观锁冲突率与重试风暴阈值（会签并发） |
+| **V24** | 并发 | 连接池参数调优前后吞吐对比 |
+| **V25** | 性能 | `ACT_RU_TASK` 新增索引后的写入 TPS 衰减幅度 |
+| **V26** | 检索 | 历史表万/十万级带租户复合索引的查询耗时 |
+| **V27** | 数据 | **`ACT_HI_PROCINST.ID_` 与 `PROC_INST_ID_` 是否恒等**（回填 SQL 依赖 `engine_inst_id = PROC_INST_ID_`） |
+
+### 17.3 风险登记表（R1–R10，已去重）
+
+| 编号 | 风险 | 等级 | 缓解 |
+|---|---|---|---|
+| **R1** | 业务定义 ↔ 引擎定义 1:N 缺桥接，反查 / 版本统计无解 | 🔴 高 | D6：新增 `DEF_KEY_` 或维护映射 |
+| **R2** | 存量会签任务明细无法 1:1 迁移 | 🔴 高 | D7：仅迁实例级 + 明细归档 |
+| **R3** | `WfTimeoutJob` 多副本重复触发超时 | 🔴 高 | D9：分布式锁 / 单实例调度 |
+| **R4** | 超时动作失败被误标记"已处理"（**现存缺陷**） | 🔴 高 | 改为仅成功才置位 + 重试/死信 |
+| **R5** | 去投影表后接口筛选能力下降，部分接口需降级 | 🟠 中 | D10：逐个盘点，必要时只读物化 |
+| **R6** | 定义删除导致历史实例节点语义丢失 | 🟠 中 | 立运维禁令：禁止删除仍被引用的旧版本 |
+| **R7** | 审批日志（`ACT_HI_COMMENT`）无租户列，隔离须 JOIN | 🟠 中 | D8：评估是否新增租户列 |
+| **R8** | 🔴 前端 `wf:` moddle 扩展未交付 ⇒ 设计器无法编辑扩展，**前端改造阻塞**（**原 R8 与 R9 合并**） | 🔴 高 | D12：明确交付方与时间 |
+| **R9** | ~~（作废，已并入 R8）~~ | — | — |
+| **R10** | 路线 B 下前端改动面很大（近十个面板重写） | 🔴 高 | D14：评估工期与回归，可先走路线 A |
+| **R11** | 多人并发编辑同一流程定义的不同节点 | 🟠 中 | D15：版本 / 乐观锁策略 |
+
+### 17.4 任务总表（后端 T-1–T-14 + 前端 F-T1–F-T7）
+
+| # | 任务 | 依赖 | 产出 |
+|---|---|---|---|
+| **T-1** | 依赖扫描：`wf_*` 实体在前后端/上下游的引用面 | — | 影响清单 |
+| **T-2** | 数据模型定稿（含 D6、D8） | T-1 | DDL 终稿 |
+| **T-3** | BPMN 扩展 schema 定稿 + 往返保真测试（V7/V13） | — | schema + 测试 |
+| **T-4** | 前端 `wf:` moddle 扩展定义（D12） | T-3 | moddle + 注册 |
+| **T-5** | 定义期语义回填 + 双轨对账 | T-3 | 迁移脚本 + 对账 |
+| **T-6** | `ACT_*` 加列 + 租户复合索引 | T-2 | DDL 脚本 |
+| **T-7** | 实例级回填（含 `TENANT_ID_`）+ 校验（V27） | T-6 | 回填脚本 |
+| **T-8** | 超时链路改造：扫 `DUE_DATE_` + 修 R4 + 多副本治理（D9） | T-6 | 代码 + 调度方案 |
+| **T-9** | 审批日志迁移到 `ACT_HI_COMMENT`（含 D8） | T-7 | 迁移脚本 |
+| **T-10** | 接口改造：逐个盘点筛选能力（D10） | T-6 / T-7 | 接口实现 |
+| **T-11** | 权限/操作者改读 BPMN 扩展（A4） | T-5 | 代码 |
+| **T-12** | 并发与性能压测（V23–V26） | T-8 / T-10 | 压测报告 |
+| **T-13** | 多租户隔离验证（V19–V22） | T-7 / T-10 | 验证报告 |
+| **T-14** | 存量 `wf_*` 退役（保留归档与 `wf_migration_map`） | 全部 | 退役清单 |
+| **F-T1** | `wf:` moddle 扩展定义 | T-3 | moddle JSON + 注册 |
+| **F-T2** | 设计器画布支持扩展读写 | F-T1 | `BpmnDesigner` 改造 |
+| **F-T3** | 节点 / 出口面板改造（F2/F3/F4） | F-T1 | 面板代码 |
+| **F-T4** | 操作者/超时/菜单/附加操作面板改造（F5） | F-T1 | 面板代码 |
+| **F-T5** | 保存链路收敛 + 废弃细粒度写接口（F6） | F-T3 / F-T4 | API 层改造 |
+| **F-T6** | 字典 / 版本对比 / 测试态对齐（F7/F8/D13） | F-T1 | 配置与组件 |
+| **F-T7** | 列表 / 办理页契约核对（F9/F10/F11） | I1 决策 | 页面核对报告 |
+
+**关键路径**：`T-3 → T-4/F-T1 → F-T2~F-T5`（前端） 与 `T-2 → T-6 → T-7 → T-10`（后端主链）并行；`T-12/T-13` 收口验证；`T-14` 最后退役。
+
+### 17.5 一页纸速查（核心结论）
+
+1. **不改源码也能达成目标**：用 `BUSINESS_STATUS_`（原生）+ BPMN `extensionElements`（定义期语义）+ `executeCommand` 同事务写入 + `ActivityBehaviorFactory`（节点行为）+ 多租户执行器（原生）。
+2. **业务字段已可列表化**：`ACT_HI_PROCINST` 加 `DEF_ID_/DATA_ID_/FORM_ID_/TITLE_/IS_TEST_` ⇒ **无需投影表**，方案C 真正退役。
+3. **超时流转不用开定时器**：`WfTimeoutJob` + 原生 `DUE_DATE_` 即可（开 `asyncExecutorActivate=true` 会引入一致性降级、双轨重复、测试态外溢等一组新问题）。
+4. **多域共用靠 `TENANT_ID_`**（逻辑隔离）；注意审批意见/变量表**无租户列**，须 JOIN。
+5. **`ACT_*` 为 workflow 专用**，其它行业经 API 接入。
+6. **四个必须先修/先定的硬问题**：R4（超时误标记缺陷）、R3（多副本重复触发）、R1（定义 1:N 缺桥接）、R8（moddle 未交付）。
+7. **实际版本是 `8.1.0-SNAPSHOT`（本地源码构建）**，且 pom 已标注 `schema.version` 与 `CURRENT_VERSION` 不一致风险 ⇒ 建议加列前先确认。
