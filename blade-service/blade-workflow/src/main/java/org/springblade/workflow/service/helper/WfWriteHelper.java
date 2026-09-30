@@ -68,6 +68,20 @@ public class WfWriteHelper {
     @Value("${blade.workflow.approval-comment.enabled:true}")
     private boolean approvalCommentEnabled;
 
+    /**
+     * P6「停写 {@code wf_approval_log}」开关（迁移阶段3 退役 {@code wf_approval_log} 为读源）：
+     * 默认 {@code true}（双写，零行为变化）。置 {@code false} 后，{@link #appendLog} 仅在
+     * <b>ACT 同步失败</b>（归档/挂起等 {@code AddCommentCmd} 硬校验场景，引擎侧静默丢弃）时
+     * 仍保留 {@code wf_approval_log} 一行作读源=act 的兜底填充，避免意见丢失；
+     * 正常审批意见（ACT 已落账）则不再写 {@code wf_approval_log}，实现「去冗余写」。
+     *
+     * <p>⚠️ 本开关关闭时，{@code WfApprovalLogActReader#readFromAct} 的兜底合并
+     * （{@code mergeMissingFromWf}）仍依赖这些「缺口填充行」才能补全归档/挂起意见，
+     * 故<b>缺口填充行始终写入</b>，绝不可因关闭开关而整体停写导致读源丢单。</p>
+     */
+    @Value("${blade.workflow.approval-log-write.enabled:true}")
+    private boolean approvalLogWriteEnabled;
+
     private static final ObjectMapper COMMENT_MAPPER = new ObjectMapper();
 
     /**
@@ -258,9 +272,14 @@ public class WfWriteHelper {
         log.setLogType(logType);
         log.setOpinion(opinion == null ? "" : opinion);
         log.setOperateTime(new Date());
-        logMapper.insert(log);
+        boolean actOk = false;
         if (approvalCommentEnabled) {
-            syncCommentToEngine(instId, taskId, nodeKey, operator, logType, opinion);
+            actOk = syncCommentToEngine(instId, taskId, nodeKey, operator, logType, opinion);
+        }
+        // P6 停写策略：默认(开关开)仍双写 wf_approval_log；开关关时仅在 ACT 同步失败
+        // （归档/挂起等 AddCommentCmd 硬校验场景）保留 wf 行作读源=act 的兜底填充，避免意见丢失。
+        if (approvalLogWriteEnabled || !actOk) {
+            logMapper.insert(log);
         }
     }
 
@@ -273,12 +292,12 @@ public class WfWriteHelper {
      * 编码为 JSON 写进 {@code MESSAGE_}，{@code TYPE_} 仍保留 {@code logType}（对齐 RequestLogType）。
      * 这样读侧切到 {@code HistoryService.createCommentQuery} 时可直接还原全部维度，无需再加列。</p>
      */
-    private void syncCommentToEngine(Long instId, Long wfTaskId, String nodeKey, Long operator,
+    private boolean syncCommentToEngine(Long instId, Long wfTaskId, String nodeKey, Long operator,
                                      String logType, String opinion) {
         try {
             WfInstance inst = instanceMapper.selectById(instId);
             if (inst == null || inst.getEngineInstId() == null) {
-                return;
+                return false;
             }
             String procInstId = inst.getEngineInstId();
             String engineTaskId = null;
@@ -302,8 +321,10 @@ public class WfWriteHelper {
             payload.put("ts", System.currentTimeMillis());
             String message = COMMENT_MAPPER.writeValueAsString(payload);
             processService.addComment(engineTaskId, procInstId, logType, message);
+            return true;
         } catch (Exception e) {
             log.warn("[WfWriteHelper] 审批意见双写引擎失败（忽略，不影响台账）: {}", e.getMessage());
+            return false;
         }
     }
 }
