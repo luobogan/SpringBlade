@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +52,12 @@ public class WfApprovalLogActReader {
     /**
      * 从 ACT_HI_COMMENT 还原审批日志。engineInstId 为空（实例从未部署到引擎）返回空。
      * wfInstId 仅回填到 {@link WfApprovalLog#getInstId()}，便于下游按 wf 实例维度消费。
+     *
+     * <p><b>兜底合并（去 wf_ 表读源完备性）</b>：{@code AddCommentCmd} 硬校验运行期 execution
+     * 存在且非挂起 —— 因此<b>归档瞬间 / 挂起期间</b>写入的意见只会落在 {@code wf_approval_log}
+     * （引擎侧静默失败，见 {@code IProcessService#addComment}）。本方法在 ACT 读取后按
+     * 「logType + nodeKey + operator + 时间±2s」把 ACT 缺失的 wf 行补进结果，
+     * 保证读源=act 不丢单；P6 停写 {@code wf_approval_log} 前该兜底不可移除。</p>
      */
     public List<WfApprovalLog> readFromAct(String engineInstId, Long wfInstId) {
         if (engineInstId == null) {
@@ -67,7 +74,56 @@ public class WfApprovalLogActReader {
             l.setInstId(wfInstId);
             return l;
         }, engineInstId);
-        return rows.stream().filter(Objects::nonNull).collect(Collectors.toList());
+        List<WfApprovalLog> list = rows.stream().filter(Objects::nonNull).collect(Collectors.toList());
+        if (wfInstId != null) {
+            mergeMissingFromWf(list, wfInstId);
+        }
+        list.sort(Comparator.comparing(WfApprovalLog::getOperateTime,
+            Comparator.nullsLast(Comparator.naturalOrder())));
+        return list;
+    }
+
+    /**
+     * 用 {@code wf_approval_log} 补齐 ACT 缺失的意见（归档/挂起时段，见 {@link #readFromAct}）。
+     * 去重键：logType + nodeKey + operator + opinion 相同且时间±2s（回填与双写的时间同源）。
+     */
+    private void mergeMissingFromWf(List<WfApprovalLog> list, Long wfInstId) {
+        List<WfApprovalLog> wfRows = jdbcTemplate.query(
+            "SELECT id, task_id, node_key, operator, log_type, opinion, operate_time "
+                + "FROM wf_approval_log WHERE inst_id = ? ORDER BY id",
+            (rs, i) -> {
+                WfApprovalLog l = new WfApprovalLog();
+                l.setId(rs.getLong("id"));
+                l.setInstId(wfInstId);
+                l.setTaskId(rs.getObject("task_id") == null ? null : rs.getLong("task_id"));
+                l.setNodeKey(rs.getString("node_key") == null ? "" : rs.getString("node_key"));
+                l.setOperator(rs.getObject("operator") == null ? null : rs.getLong("operator"));
+                l.setLogType(rs.getString("log_type"));
+                l.setOpinion(rs.getString("opinion") == null ? "" : rs.getString("opinion"));
+                l.setOperateTime(rs.getTimestamp("operate_time"));
+                return l;
+            }, wfInstId);
+        if (wfRows.isEmpty()) {
+            return;
+        }
+        for (WfApprovalLog wf : wfRows) {
+            boolean covered = list.stream().anyMatch(act -> sameOpinion(act, wf));
+            if (!covered) {
+                list.add(wf);
+            }
+        }
+    }
+
+    /** ACT 行与 wf 行是否为同一条意见：logType + nodeKey + operator + opinion 相同且时间±2s */
+    private static boolean sameOpinion(WfApprovalLog act, WfApprovalLog wf) {
+        if (!Objects.equals(act.getLogType(), wf.getLogType())
+            || !Objects.equals(act.getNodeKey(), wf.getNodeKey())
+            || !Objects.equals(act.getOperator(), wf.getOperator())
+            || act.getOperateTime() == null || wf.getOperateTime() == null) {
+            return false;
+        }
+        long diff = Math.abs(act.getOperateTime().getTime() - wf.getOperateTime().getTime());
+        return diff <= 2000L && Objects.equals(act.getOpinion(), wf.getOpinion());
     }
 
     /**

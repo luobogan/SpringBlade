@@ -73,6 +73,11 @@ blade:
     #   历史评论已回填（act_backfill_approval_comment.sql，132 条，活跃实例覆盖 100%）；
     #   写侧修复：WfTaskServiceImpl.appendLog 收敛到 WfWriteHelper（此前绕过双写致 ACT_HI_COMMENT 恒空）。
     instance-read-source: act
+    instance-act-write:
+      # 实例业务列「写回 ACT_HI_PROCINST」双写开关（WfInstanceActWriter，默认 false）。
+      # ⚠️ 是 instance-read-source=act 的【硬前置】：不开则新实例业务列全空，
+      # act 读源下新建实例会「流程实例不存在」（实测 77 条压测实例踩坑）。
+      enabled: true
     engine-multi-instance:
       # 会签/或签/依次下沉引擎多实例总开关（去 wf_ 表：让「1 引擎任务 = 1 人」，解锁待办/已办读源=act）。
       # 前置条件（代码均已实现）：① 部署期注入 multiInstanceLoopCharacteristics；

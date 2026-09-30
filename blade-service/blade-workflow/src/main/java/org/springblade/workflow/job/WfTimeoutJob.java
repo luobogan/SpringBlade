@@ -17,8 +17,10 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 超时扫描任务：消费节点超时规则（wf_node_timeout，多条）。
@@ -101,17 +103,8 @@ public class WfTimeoutJob {
         Date now = new Date();
         List<WfTask> dueTasks;
         try {
-            dueTasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-                .isNotNull(WfTask::getDueTime)
-                .le(WfTask::getDueTime, now)
-                .eq(WfTask::getTimeoutHandled, 0)
-                // 测试态任务一律不参与超时扫描（方案 §6.4 C4 / V5）。
-                // 否则测试待办到期后会触发「自动通过 / 转办给真人 / 催办留痕」：
-                // 既干扰测试结果，还会主动给真人新建任务、扩大测试数据的可见面。
-                // 注：wf_task.is_test 为 tinyint NOT NULL DEFAULT 0，不存在 NULL 漏网。
-                .eq(WfTask::getIsTest, 0)
-                .last("LIMIT " + BATCH_LIMIT));
+            // P3-6：扫描源已切原生 ACT_RU_TASK（DUE_DATE_ <= now 且未处理），wf_task 不再参与扫描。
+            dueTasks = scanDueFromAct(now);
         } catch (Exception e) {
             log.warn("[blade-workflow] 超时扫描查询失败，本轮跳过", e);
             return;
@@ -127,6 +120,70 @@ public class WfTimeoutJob {
                 log.warn("[blade-workflow] 超时处理失败. taskId={}, nodeKey={}", task.getId(), task.getNodeKey(), e);
             }
         }
+    }
+
+    /**
+     * P3-6：从原生 {@code ACT_RU_TASK} 扫描到期任务（{@code DUE_DATE_} 已是原生列，双写维护）。
+     *
+     * <p>扫描条件：活跃任务 + 到期 + 未超时处理 + 非测试态。命中后经
+     * {@code BIZ_TASK_ID_}（回退 {@code engine_task_id}）解析回 {@code wf_task}，
+     * 复用既有 {@link #handle(WfTask, Date)} 语义（规则求值 / autoApprove / 转办 / 催办均在
+     * wf_task 维度），本方法只负责「找得到、不重复」。</p>
+     *
+     * <p>引擎任务解析不到 wf_task（理论不应发生）：告警跳过，不阻断本轮。实例测试态由
+     * {@link #handle} 的纵深防御再滤一层。</p>
+     */
+    private List<WfTask> scanDueFromAct(Date now) {
+        String sql = "SELECT r.ID_ AS engine_task_id, r.BIZ_TASK_ID_, r.DUE_DATE_ "
+            + "FROM ACT_RU_TASK r "
+            + "WHERE r.SUSPENSION_STATE_ = 1 AND r.DUE_DATE_ IS NOT NULL AND r.DUE_DATE_ <= ? "
+            + "AND (r.TIMEOUT_HANDLED_ IS NULL OR r.TIMEOUT_HANDLED_ = 0) "
+            + "AND COALESCE(r.IS_TEST_, 0) = 0 "
+            + "ORDER BY r.DUE_DATE_ LIMIT " + BATCH_LIMIT;
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, now);
+        List<WfTask> result = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            WfTask task = resolveBizTask(row);
+            if (task == null) {
+                log.warn("[blade-workflow] 到期引擎任务无对应 wf_task，跳过. engineTaskId={}, bizTaskId={}",
+                    row.get("engine_task_id"), row.get("BIZ_TASK_ID_"));
+                continue;
+            }
+            // 双保险：wf_task 口径复核（待办 / 有到期时间 / 未处理 / 非测试态 / 未删除）
+            if (!Integer.valueOf(WfTask.STATUS_TODO).equals(task.getStatus())
+                || task.getDueTime() == null
+                || task.getDueTime().after(now)
+                || task.getTimeoutHandled() != null && task.getTimeoutHandled() == 1
+                || task.getIsTest() != null && task.getIsTest() == 1
+                || Boolean.TRUE.equals(task.getIsDeleted())) {
+                continue;
+            }
+            result.add(task);
+        }
+        return result;
+    }
+
+    /** 引擎任务 → wf_task 解析：优先 BIZ_TASK_ID_，回退 engine_task_id（取待办态一条） */
+    private WfTask resolveBizTask(Map<String, Object> row) {
+        Object biz = row.get("BIZ_TASK_ID_");
+        if (biz != null && !biz.toString().isBlank()) {
+            try {
+                WfTask byBiz = taskMapper.selectById(Long.valueOf(biz.toString()));
+                if (byBiz != null) {
+                    return byBiz;
+                }
+            } catch (NumberFormatException ignore) {
+                // 脏 BIZ_TASK_ID_：走回退
+            }
+        }
+        Object engineId = row.get("engine_task_id");
+        if (engineId == null) {
+            return null;
+        }
+        return taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getEngineTaskId, engineId.toString())
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .last("LIMIT 1"));
     }
 
     private void handle(WfTask task, Date now) {
