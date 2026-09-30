@@ -6,7 +6,9 @@ import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayDeque;
@@ -21,9 +23,14 @@ import java.util.Set;
 /**
  * 退回（reject）目标节点计算。
  *
- * <p>对齐 ecology {@code RequestRejectManager}：从当前节点沿 {@code wf_node_link}
+ * <p>对齐 ecology {@code RequestRejectManager}：从当前节点沿出口连线
  * <b>反向</b>回溯到创建节点，凡出口 {@code is_reject=1} 的方向不可退（封锁该分支回溯），
  * 并依据节点 {@code settings.reject.nodeKeys} 白名单裁剪。计算结果即「可退回的候选节点集合」。</p>
+ *
+ * <p><b>读源（P3-5）</b>：开关 {@code blade.workflow.definition-from-bpmn.enabled}（与
+ * {@code WfTaskServiceImpl.loadNode} / {@code WfDefinitionServiceImpl.loadNodes} 共用）开启时，
+ * 出口/节点改读引擎部署模型（{@link WfBpmnExtensionReader#links} 含折叠连线 +
+ * {@link WfBpmnExtensionReader#nodes}），空（草稿/未部署）或异常回退 {@code wf_node_link}/{@code wf_process_node}。</p>
  *
  * <p>设计原则：读不到配置就返回「全部上游可达节点」的兜底集合，绝不抛异常阻断退回主链路。</p>
  */
@@ -34,9 +41,26 @@ public class WfRejectManager {
 
     private final WfProcessNodeMapper nodeMapper;
     private final WfNodeLinkMapper linkMapper;
+    /** BPMN wf: 扩展读取收口：定义读源=BPMN 时出口/节点改读引擎部署模型（含折叠连线） */
+    private final WfBpmnExtensionReader bpmnReader;
+
+    /** 定义读源开关：三个消费方（任务/定义/退回）共用同一配置 key，默认关 */
+    @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
+    private boolean definitionFromBpmn;
 
     /**
-     * 计算当前节点可退回的目标节点集合（不含当前节点）。
+     * 计算当前节点可退回的目标节点集合（不含当前节点）——读源收口入口。
+     * 数据加载与算法分离：算法见纯函数 {@link #computeRejectableNodes(Long, String, WfProcessNode, List, List)}。
+     */
+    public List<WfProcessNode> computeRejectableNodes(Long defId, String currentNodeKey, WfProcessNode currentNode) {
+        if (defId == null || currentNodeKey == null) {
+            return List.of();
+        }
+        return computeRejectableNodes(defId, currentNodeKey, currentNode, loadLinks(defId), loadNodes(defId));
+    }
+
+    /**
+     * 计算当前节点可退回的目标节点集合（不含当前节点）——纯函数核心（数据来源无关）。
      *
      * <p>只保留「引擎能停留的节点」：创建(0)/审批(1)/提交(2)。归档(3)/等待(5)/自动处理(6)/网关(7)
      * 在 BPMN 里不是等待态（startEvent/endEvent/receiveTask/serviceTask/gateway），
@@ -46,19 +70,16 @@ public class WfRejectManager {
      * <p>创建节点(0)在引擎里同样是 startEvent，但它有专门的「退回发起人」路径
      * （见 {@code WfTaskServiceImpl#reject} → {@code rejectToStarter}），故保留为候选。</p>
      *
+     * @param links  出口连线（wf_node_link 表或 BPMN wf:link+wf:foldedLink）
+     * @param nodes  节点配置（wf_process_node 表或 BPMN wf:node）
      * @return 候选节点（按离当前节点由近及远排序）；无可退节点返回空列表
      */
-    public List<WfProcessNode> computeRejectableNodes(Long defId, String currentNodeKey, WfProcessNode currentNode) {
-        if (defId == null || currentNodeKey == null) {
-            return List.of();
-        }
+    public static List<WfProcessNode> computeRejectableNodes(Long defId, String currentNodeKey, WfProcessNode currentNode,
+                                                             List<WfNodeLink> links, List<WfProcessNode> nodes) {
         // 白名单：rejectType=2 时限制可选范围
         List<String> whitelist = WfNodeSettingsUtil.rejectableNodeKeys(currentNode);
 
         // 反向邻接表：toNodeKey -> 入边列表
-        List<WfNodeLink> links = linkMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
-            .<WfNodeLink>lambdaQuery()
-            .eq(WfNodeLink::getDefId, defId));
         Map<String, List<WfNodeLink>> incoming = new HashMap<>();
         for (WfNodeLink l : links) {
             if (l.getToNodeKey() == null) {
@@ -99,10 +120,6 @@ public class WfRejectManager {
         }
 
         // 取节点对象并按回溯顺序（由近及远）返回
-        List<WfProcessNode> nodes = nodeMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
-            .<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .in(WfProcessNode::getNodeKey, order));
         Map<String, WfProcessNode> byKey = new HashMap<>();
         for (WfProcessNode n : nodes) {
             byKey.put(n.getNodeKey(), n);
@@ -144,6 +161,44 @@ public class WfRejectManager {
             return false;
         }
         return candidates.stream().anyMatch(n -> targetNodeKey.equals(n.getNodeKey()));
+    }
+
+    // ------------------------------------------------------------------ 读源取数（BPMN 优先，回退 wf_*）
+
+    /** 出口连线：定义源=BPMN 时读引擎部署模型（wf:link + wf:foldedLink），空/异常回退 wf_node_link */
+    private List<WfNodeLink> loadLinks(Long defId) {
+        if (definitionFromBpmn) {
+            try {
+                List<WfNodeLink> links = bpmnReader.links(defId);
+                if (links != null && !links.isEmpty()) {
+                    return links;
+                }
+                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_node_link. defId={}", defId);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 读取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        return linkMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
+            .<WfNodeLink>lambdaQuery()
+            .eq(WfNodeLink::getDefId, defId));
+    }
+
+    /** 节点配置：定义源=BPMN 时读引擎部署模型（wf:node），空/异常回退 wf_process_node */
+    private List<WfProcessNode> loadNodes(Long defId) {
+        if (definitionFromBpmn) {
+            try {
+                List<WfProcessNode> nodes = bpmnReader.nodes(defId);
+                if (nodes != null && !nodes.isEmpty()) {
+                    return nodes;
+                }
+                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_process_node. defId={}", defId);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 读取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        return nodeMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
+            .<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId));
     }
 
 }

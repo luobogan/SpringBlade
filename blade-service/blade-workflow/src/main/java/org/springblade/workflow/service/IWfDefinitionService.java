@@ -55,6 +55,14 @@ public interface IWfDefinitionService {
     List<WfProcessNode> nodes(Long defId);
 
     /**
+     * 节点列表（读源收口）：开关 {@code blade.workflow.definition-from-bpmn.enabled} 开启时
+     * 优先读 BPMN {@code wf:node} 扩展（锚定 def 自己的部署 procDefId），
+     * 草稿/未部署或读取异常时回退 {@link #nodes}（wf_process_node）。
+     * 仅供只读接口使用；内部写路径（deploy/saveBpmn/另存版本/simulate/diff）固定走 {@link #nodes}。
+     */
+    List<WfProcessNode> loadNodes(Long defId);
+
+    /**
      * 配置节点操作者（整体覆盖）
      */
     boolean configOperator(Long defId, String nodeKey, List<WfNodeOperator> operators);
@@ -187,6 +195,12 @@ public interface IWfDefinitionService {
      * 出口列表
      */
     List<WfNodeLink> links(Long defId);
+
+    /**
+     * 出口列表（读源收口）：开关开启时优先读 BPMN（{@code wf:link} + {@code wf:foldedLink} 折叠连线），
+     * 草稿/未部署或读取异常时回退 {@link #links}（wf_node_link）。仅供只读接口使用。
+     */
+    List<WfNodeLink> loadLinks(Long defId);
 
     /**
      * 更新节点基础属性（按 nodeKey），保留操作者与字段权限

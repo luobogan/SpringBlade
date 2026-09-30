@@ -220,16 +220,18 @@ public class WfDefinitionController {
 
     @GetMapping("/{id}/nodes")
     @PreAuth(WorkflowConstant.HAS_AUTH)
-    @Operation(summary = "节点列表", description = "发起页据 nodeType=0 定位开始节点；只读，登录即可")
+    @Operation(summary = "节点列表", description = "发起页据 nodeType=0 定位开始节点；只读，登录即可。"
+        + "开关 blade.workflow.definition-from-bpmn.enabled 开启时读 BPMN wf:node 扩展（草稿/未部署自动回退 wf_process_node）")
     public R<List<WfProcessNode>> nodes(@PathVariable("id") Long id) {
-        return R.data(definitionService.nodes(id));
+        return R.data(definitionService.loadNodes(id));
     }
 
     @GetMapping("/{id}/links")
     @PreAuth(WorkflowConstant.HAS_AUTH)
-    @Operation(summary = "出口列表", description = "流程图连线与条件展示；只读，登录即可")
+    @Operation(summary = "出口列表", description = "流程图连线与条件展示；只读，登录即可。"
+        + "开关 blade.workflow.definition-from-bpmn.enabled 开启时读 BPMN wf:link + wf:foldedLink（草稿/未部署自动回退 wf_node_link）")
     public R<List<WfNodeLink>> links(@PathVariable("id") Long id) {
-        return R.data(definitionService.links(id));
+        return R.data(definitionService.loadLinks(id));
     }
 
     @PostMapping("/{id}/simulate")

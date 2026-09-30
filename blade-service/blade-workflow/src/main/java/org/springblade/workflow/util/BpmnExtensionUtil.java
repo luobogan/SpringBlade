@@ -24,6 +24,8 @@ public final class BpmnExtensionUtil {
 
 	public static final String WF_NS = "http://www.springblade.org/workflow";
 	public static final String WF_PREFIX = "wf";
+	/** 流程级「折叠连线」元素名（A→网关→B 折叠为 A→B，BPMN 无对应 sequenceFlow） */
+	public static final String FOLDED_LINK = "foldedLink";
 
 	private BpmnExtensionUtil() {
 	}
@@ -384,6 +386,7 @@ public final class BpmnExtensionUtil {
 		ext.conditionCn = attr(link, "conditionCn");
 		ext.sortOrder = attr(link, "sortOrder");
 		ext.viaGateway = attr(link, "viaGateway");
+		ext.viaGatewayKey = attr(link, "viaGatewayKey");
 		ExtensionElement extra = firstChild(link, "extraOperations");
 		if (extra != null) {
 			ext.extraOperations = extra.getElementText();
@@ -398,6 +401,7 @@ public final class BpmnExtensionUtil {
 		setAttr(link, "conditionCn", ext.conditionCn);
 		setAttr(link, "sortOrder", ext.sortOrder);
 		setAttr(link, "viaGateway", ext.viaGateway);
+		setAttr(link, "viaGatewayKey", ext.viaGatewayKey);
 		if (ext.extraOperations != null && !ext.extraOperations.isEmpty()) {
 			ExtensionElement e = newElement("extraOperations");
 			e.setElementText(ext.extraOperations);
@@ -493,7 +497,75 @@ public final class BpmnExtensionUtil {
 	}
 
 	public static class WfLinkExt {
-		public String isReject, isMustPass, conditionCn, sortOrder, viaGateway, extraOperations;
+		public String isReject, isMustPass, conditionCn, sortOrder, viaGateway, viaGatewayKey, extraOperations;
+	}
+
+	// ---------------------------------------------------------- wf:foldedLink 读/写
+	//
+	// 背景：wf_node_link 含「A→网关→B 折叠为 A→B」的【合成连线】——BPMN 里真实存在的是
+	// A→网关 与 网关→B 两条 sequenceFlow，并不存在 A→B，因此折叠连线无法挂在 sequenceFlow 上，
+	// 只能作为【流程级】扩展元素承载（挂在 <process> 的 extensionElements 下）。
+	// 回填作业时若按 findSequenceFlow(A,B) 查找会查不到而被跳过，导致折叠连线丢失 —— 本元素即为其载体。
+
+	/** 取流程级全部 wf:foldedLink 元素 */
+	public static List<WfFoldedLinkExt> readFoldedLinks(Process process) {
+		List<WfFoldedLinkExt> result = new ArrayList<>();
+		if (process == null) {
+			return result;
+		}
+		for (ExtensionElement e : allExt(process, FOLDED_LINK)) {
+			WfFoldedLinkExt f = new WfFoldedLinkExt();
+			f.from = attr(e, "from");
+			f.to = attr(e, "to");
+			f.viaGatewayKey = attr(e, "viaGatewayKey");
+			f.isReject = attr(e, "isReject");
+			f.isMustPass = attr(e, "isMustPass");
+			f.conditionCn = attr(e, "conditionCn");
+			f.sortOrder = attr(e, "sortOrder");
+			ExtensionElement extra = firstChild(e, "extraOperations");
+			if (extra != null) {
+				f.extraOperations = extra.getElementText();
+			}
+			result.add(f);
+		}
+		return result;
+	}
+
+	/**
+	 * 写流程级 wf:foldedLink（覆盖式：先清空既有再写入，保证重复回填幂等、不叠加）。
+	 */
+	public static void writeFoldedLinks(Process process, List<WfFoldedLinkExt> list) {
+		if (process == null) {
+			return;
+		}
+		List<ExtensionElement> existing = process.getExtensionElements().get(FOLDED_LINK);
+		if (existing != null) {
+			existing.clear();
+		}
+		if (list == null || list.isEmpty()) {
+			return;
+		}
+		for (WfFoldedLinkExt f : list) {
+			ExtensionElement e = newElement(FOLDED_LINK);
+			setAttr(e, "from", f.from);
+			setAttr(e, "to", f.to);
+			setAttr(e, "viaGatewayKey", f.viaGatewayKey);
+			setAttr(e, "isReject", f.isReject);
+			setAttr(e, "isMustPass", f.isMustPass);
+			setAttr(e, "conditionCn", f.conditionCn);
+			setAttr(e, "sortOrder", f.sortOrder);
+			if (f.extraOperations != null && !f.extraOperations.isEmpty()) {
+				ExtensionElement x = newElement("extraOperations");
+				x.setElementText(f.extraOperations);
+				e.addChildElement(x);
+			}
+			process.addExtensionElement(e);
+		}
+	}
+
+	public static class WfFoldedLinkExt {
+		public String from, to, viaGatewayKey;
+		public String isReject, isMustPass, conditionCn, sortOrder, extraOperations;
 	}
 
 	public static class WfProcessMetaExt {

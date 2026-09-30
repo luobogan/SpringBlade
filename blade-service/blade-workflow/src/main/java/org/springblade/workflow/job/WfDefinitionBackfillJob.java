@@ -207,13 +207,26 @@ public class WfDefinitionBackfillJob {
 			BpmnExtensionUtil.writeNode(task, buildNodeExt(node));
 		}
 
-		// 出口（连线）
+		// 出口（连线）：
+		//  ① 真实连线 → 写 sequenceFlow 上的 wf:link（含 viaGatewayKey）；
+		//  ② 折叠连线（A→网关→B 折叠为 A→B，BPMN 中【没有】A→B sequenceFlow）
+		//     → 写流程级 wf:foldedLink。此前这类连线因查不到 sequenceFlow 被直接跳过而丢失，
+		//       导致「可退回节点 / 下一节点」计算与设计器不一致，故必须落盘。
 		List<WfNodeLink> links = linkMapper.selectList(new QueryWrapper<WfNodeLink>().eq("def_id", def.getId()));
+		java.util.List<BpmnExtensionUtil.WfFoldedLinkExt> folded = new java.util.ArrayList<>();
 		for (WfNodeLink link : links) {
 			SequenceFlow flow = findSequenceFlow(process, link.getFromNodeKey(), link.getToNodeKey());
 			if (flow == null) {
-				log.warn("[blade-workflow] 连线 {}-{} 在 BPMN 中无对应 sequenceFlow，跳过",
-					link.getFromNodeKey(), link.getToNodeKey());
+				BpmnExtensionUtil.WfFoldedLinkExt f = new BpmnExtensionUtil.WfFoldedLinkExt();
+				f.from = link.getFromNodeKey();
+				f.to = link.getToNodeKey();
+				f.viaGatewayKey = link.getViaGatewayKey();
+				f.isReject = str(link.getIsReject());
+				f.isMustPass = str(link.getIsMustPass());
+				f.conditionCn = link.getConditionCn();
+				f.sortOrder = str(link.getSortOrder());
+				f.extraOperations = link.getExtraOperations();
+				folded.add(f);
 				continue;
 			}
 			WfLinkExt lext = new WfLinkExt();
@@ -222,8 +235,14 @@ public class WfDefinitionBackfillJob {
 			lext.conditionCn = link.getConditionCn();
 			lext.sortOrder = str(link.getSortOrder());
 			lext.viaGateway = str(link.getViaGateway());
+			lext.viaGatewayKey = link.getViaGatewayKey();
 			lext.extraOperations = link.getExtraOperations();
 			BpmnExtensionUtil.writeLink(flow, lext);
+		}
+		BpmnExtensionUtil.writeFoldedLinks(process, folded);
+		if (!folded.isEmpty()) {
+			log.info("[blade-workflow] 回填折叠连线 {} 条（BPMN 无对应 sequenceFlow，落到流程级 wf:foldedLink）. defId={}",
+				folded.size(), def.getId());
 		}
 
 		// 序列化并落库（BPMN 现为载体，单一事实源）

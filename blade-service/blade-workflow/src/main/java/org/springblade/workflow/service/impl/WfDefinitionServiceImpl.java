@@ -94,6 +94,7 @@ import org.w3c.dom.NodeList;
 import org.springblade.core.tool.api.R;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -153,6 +154,19 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     /** 节点操作者解析：把配置（人员/部门/角色/岗位/创建人…）展开成具体办理人ID（模拟日志展示用） */
     private final WfOperatorResolver operatorResolver;
+
+    /** BPMN wf: 扩展读取收口：定义读源=BPMN 时 /nodes /links 只读接口改从引擎部署模型读 */
+    private final WfBpmnExtensionReader bpmnReader;
+
+    /**
+     * 定义读源开关（P3-5）：与 {@code WfTaskServiceImpl.loadNode} 共用同一配置 key
+     * {@code blade.workflow.definition-from-bpmn.enabled}（默认 false，一个开关管运行期与定义期）。
+     * 开启后 {@link #loadNodes}/{@link #loadLinks} 优先读 BPMN wf: 扩展；
+     * 但 deploy 条件注入、saveBpmn 合并、另存版本复制、simulate、diff 等<b>内部路径仍读 wf_* 表</b>——
+     * BPMN 读源锚定 def 自己的部署（procDefId），草稿/未部署拿不到数据，写路径不能依赖它。
+     */
+    @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
+    private boolean definitionFromBpmn;
 
     /** 用户中心：模拟日志按用户ID换真实姓名（与「退回候选」展示同源） */
     private final IUserClient userClient;
@@ -274,6 +288,30 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
             .eq(WfProcessNode::getDefId, defId)
             .orderByAsc(WfProcessNode::getSortOrder));
+    }
+
+    /**
+     * 节点列表（读源收口，P3-5 定义期）：开关开启时优先读 BPMN {@code wf:node} 扩展
+     * （锚定 def 自己的部署 procDefId），空（草稿/未部署）或异常时回退 {@code wf_process_node}。
+     *
+     * <p>仅供只读接口（{@code /definition/{id}/nodes}）使用；deploy 条件注入、saveBpmn 合并、
+     * 另存版本复制、simulate、diff 等<b>内部路径必须继续走 {@link #nodes(Long)}</b>
+     * （读 wf_* 表）——BPMN 读源拿不到草稿数据，写路径不能依赖它。</p>
+     */
+    @Override
+    public List<WfProcessNode> loadNodes(Long defId) {
+        if (definitionFromBpmn) {
+            try {
+                List<WfProcessNode> fromBpmn = bpmnReader.nodes(defId);
+                if (fromBpmn != null && !fromBpmn.isEmpty()) {
+                    return fromBpmn;
+                }
+                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_process_node. defId={}", defId);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 读取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        return nodes(defId);
     }
 
     @Override
@@ -1473,6 +1511,28 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
             .eq(WfNodeLink::getDefId, defId)
             .orderByAsc(WfNodeLink::getSortOrder));
+    }
+
+    /**
+     * 出口列表（读源收口，P3-5 定义期）：开关开启时优先读 BPMN
+     * （真实 sequenceFlow 的 {@code wf:link} ＋ 流程级 {@code wf:foldedLink} 折叠连线），
+     * 空（草稿/未部署）或异常时回退 {@code wf_node_link}。仅供只读接口
+     * （{@code /definition/{id}/links}）使用，内部路径（deploy 条件注入等）继续走 {@link #links(Long)}。
+     */
+    @Override
+    public List<WfNodeLink> loadLinks(Long defId) {
+        if (definitionFromBpmn) {
+            try {
+                List<WfNodeLink> fromBpmn = bpmnReader.links(defId);
+                if (fromBpmn != null && !fromBpmn.isEmpty()) {
+                    return fromBpmn;
+                }
+                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_node_link. defId={}", defId);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 读取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        return links(defId);
     }
 
     @Override

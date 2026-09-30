@@ -19,6 +19,7 @@
 | `blade.workflow.timeout-from-bpmn.enabled` | `/node-timeout/list` | ✅ 已完成（默认关） | **该开关同时影响运行期 `WfTimeoutServiceImpl.resolveDueTime`/`firstOverdue` 取数**（见 §3） |
 | `blade.workflow.detail-perm-from-bpmn.enabled` | `/definition/.../detail-perm` | ✅ 已完成（默认关） | 明细表整表权限，读 BPMN `wf:detailTablePerm` |
 | `blade.workflow.detail-filter-from-bpmn.enabled` | `/definition/.../detail-filter` | ✅ 已完成（默认关） | 明细表字段筛选，读 BPMN `wf:detailFilter`（逐字段规则） |
+| `blade.workflow.definition-from-bpmn.enabled` | `/definition/{id}/nodes`、`/definition/{id}/links`、退回可达性（`WfRejectManager`：`/task/{id}/reject-nodes` + reject 动作）+ 运行期 `loadNode()`（doApprove/转办/抄送/列表节点名） | ✅ 已完成（默认关） | 一个开关管定义期+运行期。定义期：`loadNodes` 读 BPMN `wf:node`（全部 UserTask→`WfProcessNode`，含 nodeType=0 开始节点）、`loadLinks` 读 `wf:link`+`wf:foldedLink`（折叠连线）；退回可达性：`WfRejectManager` 出口/节点改读 BPMN（算法抽为纯函数核心，BPMN 与 DB 读源同口径经 `WfRejectManagerBpmnTest` 证明）；**锚定 def 自己的部署 `proc_def_id`**，草稿/未部署自动回退 `wf_process_node`/`wf_node_link`。deploy 条件注入/saveBpmn 合并/另存版本复制/simulate/diff 等**内部写路径固定仍读 `wf_*` 表**（BPMN 读源拿不到草稿数据，不可依赖） |
 
 > 历史 BPMN 元素 `detailPerm`（dt 作用域**字段级**权限）与表 `wf_node_detail_perm`（整表权限）是**两个不同概念**，前者已被 `getFieldPerm` 接线，后者走新建的 `detailTablePerm` 元素，命名已区分避免混淆。
 > BPMN `detailFilter` 元素原仅作回填死表示（`rowFilter` JSON，无接口读取），现**重定义为逐字段比较规则**（dtIndex/modeType/fieldName/compareType/compareValue/isRequired），与 `wf_node_detail_filter` 表语义对齐。
@@ -44,6 +45,7 @@
 | `WfBpmnExtensionRoundTripTest` | 纯单元（无 Spring） | `wf:` 全部扩展元素（`detailTablePerm`/`detailFilter` 新结构、`timeout` 等）解析与往返无损 |
 | `WfBpmnTimeoutSwitchTest` | 纯单元（无 Spring） | `WfBpmnExtensionReader.toNodeTimeouts` 的启用过滤、seq 升序、全字段映射、空/脏数据容错 |
 | `WfBpmnDetailPermSwitchTest` | 纯单元（无 Spring） | `toDetailPermVOs`/`toDetailFilterVOs` 的全字段映射、dtIndex 升序、modeType 过滤、空/脏容错 |
+| `WfBpmnDefNodesTest` | 纯单元（无 Spring） | `toNodes`（节点列表：开始节点 nodeType=0 覆盖、sortOrder 排序、无扩展任务降级）+ `toNodeLinks`（真实连线与 foldedLink 合并、sortOrder 排序） |
 
 > 上述转换方法均被设计为**无 Spring 依赖的静态纯函数**，使开关分支可在 H2/MySQL 之外的环境直接单测回归。
 
