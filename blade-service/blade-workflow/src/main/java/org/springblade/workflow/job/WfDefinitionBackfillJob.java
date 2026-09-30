@@ -113,15 +113,29 @@ public class WfDefinitionBackfillJob {
 	@Value("${blade.workflow.backfill.enabled:false}")
 	private boolean scheduledEnabled;
 
-	/** 手动触发：回填全部流程定义。 */
+	/** 手动触发：回填全部流程定义（幂等跳过已回填）。 */
 	public WfBackfillResult backfillAll() {
+		return backfillAll(false, null);
+	}
+
+	/**
+	 * 手动触发：回填（去 wf_ 表 P3-5）。
+	 *
+	 * <p>{@code force=true} 忽略「已回填」标记（BPMN 含 wf: 命名空间或桥接存在）强制重跑——
+	 * 用于源表清理后重生干净 BPMN（如清掉悬空 {@code wf:foldedLink}）；写扩展为覆盖式幂等，重复回填不叠加。
+	 * {@code targetDefId} 非空时仅处理该定义，便于单条重跑而不影响其他已发布定义。</p>
+	 */
+	public WfBackfillResult backfillAll(boolean force, Long targetDefId) {
 		List<WfProcessDefinition> defs = defMapper.selectList(new QueryWrapper<>());
 		int total = 0, ok = 0, skip = 0, fail = 0;
 		List<String> errors = new ArrayList<>();
 		for (WfProcessDefinition def : defs) {
+			if (targetDefId != null && !targetDefId.equals(def.getId())) {
+				continue;
+			}
 			total++;
 			try {
-				if (isBackfilled(def)) {
+				if (!force && isBackfilled(def)) {
 					skip++;
 					continue;
 				}
@@ -134,7 +148,8 @@ public class WfDefinitionBackfillJob {
 				log.warn("[blade-workflow] 定义期回填失败. {}", msg, e);
 			}
 		}
-		log.info("[blade-workflow] 定义期回填完成. total={}, ok={}, skip={}, fail={}", total, ok, skip, fail);
+		log.info("[blade-workflow] 定义期回填完成. force={}, targetDefId={}, total={}, ok={}, skip={}, fail={}",
+			force, targetDefId, total, ok, skip, fail);
 		return new WfBackfillResult(total, ok, skip, fail, errors);
 	}
 

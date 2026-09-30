@@ -286,6 +286,12 @@ public class WfWriteHelper {
                 WfTask wfTask = taskMapper.selectById(wfTaskId);
                 if (wfTask != null) {
                     engineTaskId = wfTask.getEngineTaskId();
+                    // 合成待办（退回发起人重提交等）engine_task_id 为空串而非 NULL：
+                    // 空串传给 AddCommentCmd 会按 taskId 去查任务 → FlowableObjectNotFoundException（被吞，评论静默丢失），
+                    // 故空串归一为 null（AddCommentCmd 仅对非 null taskId 做任务校验）。
+                    if (engineTaskId != null && engineTaskId.isBlank()) {
+                        engineTaskId = null;
+                    }
                 }
             }
             Map<String, Object> payload = new LinkedHashMap<>(8);

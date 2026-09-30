@@ -43,6 +43,7 @@ import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfOperatorResolver;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfSubflowService;
@@ -77,6 +78,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Comparator;
 import java.util.stream.Collectors;
 
 /**
@@ -109,6 +111,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfWriteHelper writeHelper;
     private final WfOperatorResolver operatorResolver;
     private final WfNodeLinkMapper linkMapper;
+    private final WfBpmnExtensionReader bpmnReader;
     /**
      * 会签/或签/依次下沉引擎多实例总开关（与 WfTaskServiceImpl / WfDefinitionServiceImpl 同源）。
      * 默认 false。开启后：部署期已注入多实例；本类 advance 须按「每条引擎任务=一人」生成 wf_task，
@@ -116,6 +119,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      */
     @Value("${blade.workflow.engine-multi-instance.enabled:false}")
     private boolean multiInstanceEnabled;
+    /** 定义读源开关（P3-5）：与 rejectManager/task/definition 共用同一 key，默认关；开启后本类节点/出口读取优先 BPMN wf: 扩展，回退 wf_* */
+    @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
+    private boolean definitionFromBpmn;
     /** 节点操作组：用于判定会签/依次（{@code wf_node_operator.sign_order}） */
     private final WfNodeOperatorMapper operatorMapper;
     private final NodeActionExecutor nodeActionExecutor;
@@ -807,10 +813,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 节点信息 → 运行时消费：按「当前节点」的「表单日志查看范围」过滤可见节点的日志。
         // null = 不限制（保持既有行为）。
         WfProcessNode curNode = (inst == null || inst.getCurrentNodeKey() == null) ? null
-            : nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, inst.getDefId())
-            .eq(WfProcessNode::getNodeKey, inst.getCurrentNodeKey())
-            .last("LIMIT 1"));
+            : loadNodeReadOnly(inst.getDefId(), inst.getCurrentNodeKey());
         List<String> visibleNodeKeys = WfNodeSettingsUtil.formLogVisibleNodeKeys(curNode);
 
         // 预取「出口 from→to」一次，用于算每条日志的「下一节点办理人」（接收人）。
@@ -821,15 +824,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 节点 → 节点对象：用于判定「会签/依次」（本节点未签完时接收人＝本节点待签人）
         Map<String, WfProcessNode> nodeMap = new HashMap<>();
         if (inst != null) {
-            for (WfNodeLink lk : linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
-                .eq(WfNodeLink::getDefId, inst.getDefId()))) {
+            for (WfNodeLink lk : loadLinks(inst.getDefId())) {
                 if (lk.getFromNodeKey() == null) {
                     continue;
                 }
                 fromTo.computeIfAbsent(lk.getFromNodeKey(), k -> new ArrayList<>()).add(lk.getToNodeKey());
             }
-            for (WfProcessNode n : nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, inst.getDefId()))) {
+            for (WfProcessNode n : loadNodes(inst.getDefId())) {
                 if (n.getNodeKey() != null) {
                     nodeTypeMap.put(n.getNodeKey(), n.getNodeType());
                     nodeMap.put(n.getNodeKey(), n);
@@ -848,16 +849,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // ⚠️ 不能写成「只要停在开始节点，就把开始节点的日志全部隐藏」：「退回发起人」会让流程再次停在
         //    开始节点（status 仍是运行中），那样会把历史各轮已提交的意见一起藏掉 ——
         //    表现为「退回之后流程信息里意见都没了」（实测反馈）。
-        String startNodeKey = null;
-        if (inst != null) {
-            WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, inst.getDefId())
-                .eq(WfProcessNode::getNodeType, 0)
-                .last("LIMIT 1"));
-            if (startNode != null) {
-                startNodeKey = startNode.getNodeKey();
-            }
-        }
+        String startNodeKey = (inst != null) ? findStartNodeKey(inst.getDefId()) : null;
         String curNodeKey = (inst != null) ? inst.getCurrentNodeKey() : null;
         boolean atStartNode = startNodeKey != null && startNodeKey.equals(curNodeKey);
 
@@ -1657,7 +1649,87 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     /**
-     * 取节点在 {@code wf_node_link} 上的首个下游节点（按 {@code sortOrder} 升序）。
+     * 出口连线（定义源收口）：开关 {@code blade.workflow.definition-from-bpmn.enabled} 开启时
+     * 读引擎部署模型（{@link WfBpmnExtensionReader#links} 含折叠连线），空/异常回退 {@code wf_node_link}。
+     */
+    private List<WfNodeLink> loadLinks(Long defId) {
+        if (definitionFromBpmn) {
+            try {
+                List<WfNodeLink> links = bpmnReader.links(defId);
+                if (links != null && !links.isEmpty()) {
+                    return links;
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        return linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
+    }
+
+    /**
+     * 节点配置（定义源收口）：开关开启时读引擎部署模型（{@link WfBpmnExtensionReader#nodes}），
+     * 空/异常回退 {@code wf_process_node}。
+     */
+    private List<WfProcessNode> loadNodes(Long defId) {
+        if (definitionFromBpmn) {
+            try {
+                List<WfProcessNode> nodes = bpmnReader.nodes(defId);
+                if (nodes != null && !nodes.isEmpty()) {
+                    return nodes;
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+    }
+
+    /** 开始节点 key（nodeType=0）：定义源=BPMN 时从 nodes 里取，回退 wf_process_node */
+    private String findStartNodeKey(Long defId) {
+        if (defId == null) {
+            return null;
+        }
+        if (definitionFromBpmn) {
+            try {
+                for (WfProcessNode n : bpmnReader.nodes(defId)) {
+                    if (n.getNodeType() != null && n.getNodeType() == 0) {
+                        return n.getNodeKey();
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 取开始节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeType, 0)
+            .last("LIMIT 1"));
+        return startNode == null ? null : startNode.getNodeKey();
+    }
+
+    /** 节点（只读收口）：开关开启时读 BPMN wf:node，回退 wf_process_node；高风险 write 路径仍用 {@link #loadNode} */
+    private WfProcessNode loadNodeReadOnly(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null) {
+            return null;
+        }
+        if (definitionFromBpmn) {
+            try {
+                WfProcessNode node = bpmnReader.node(defId, nodeKey);
+                if (node != null) {
+                    return node;
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 取节点失败，回退 wf_process_node. defId={}, nodeKey={}, {}", defId, nodeKey, e.getMessage());
+            }
+        }
+        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .eq(WfProcessNode::getNodeKey, nodeKey)
+            .last("LIMIT 1"));
+    }
+
+    /**
+     * 取节点在出口上的首个下游节点（按 {@code sortOrder} 升序）。
      *
      * <p>多出口（含网关）时取第一条并记 warn——「自动流转至下一节点」本身即兜底语义，
      * 不做条件求值；条件分流由引擎在 token 到达网关时自行判定。</p>
@@ -1666,11 +1738,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (defId == null || nodeKey == null) {
             return null;
         }
-        List<WfNodeLink> links = linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
-            .eq(WfNodeLink::getDefId, defId)
-            .eq(WfNodeLink::getFromNodeKey, nodeKey)
-            .orderByAsc(WfNodeLink::getSortOrder));
-        if (links == null || links.isEmpty()) {
+        List<WfNodeLink> links = loadLinks(defId).stream()
+            .filter(l -> nodeKey.equals(l.getFromNodeKey()))
+            .sorted(Comparator.comparingInt(l -> l.getSortOrder() == null ? Integer.MAX_VALUE : l.getSortOrder()))
+            .collect(Collectors.toList());
+        if (links.isEmpty()) {
             return null;
         }
         if (links.size() > 1) {
@@ -1960,10 +2032,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (nodeKey == null || nodeKey.isEmpty()) {
             return "";
         }
-        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(defId != null, WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
+        WfProcessNode node = loadNodeReadOnly(defId, nodeKey);
         return node == null ? nodeKey : node.getNodeName();
     }
 

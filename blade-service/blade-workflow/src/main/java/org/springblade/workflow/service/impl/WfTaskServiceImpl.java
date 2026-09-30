@@ -32,6 +32,7 @@ import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springblade.workflow.service.helper.WfTaskActWriter;
+import org.springblade.workflow.service.helper.WfWriteHelper;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.system.user.entity.UserInfo;
@@ -124,6 +125,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfTaskActReader taskActReader;
     /** 定义期节点配置读取（BPMN wf: 扩展） */
     private final WfBpmnExtensionReader bpmnReader;
+    /** 流转日志唯一写入口（含 ACT_HI_COMMENT 审批意见双写） */
+    private final WfWriteHelper writeHelper;
 
     /**
      * 定义源开关：false=读 wf_process_node（默认，零行为变化）；true=从 BPMN {@code wf:node} 扩展读。
@@ -1268,15 +1271,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
     private void appendLog(Long instId, Long taskId, String nodeKey, Long operator,
                            String logType, String opinion) {
-        WfApprovalLog log = new WfApprovalLog();
-        log.setInstId(instId);
-        log.setTaskId(taskId);
-        log.setNodeKey(nodeKey == null ? "" : nodeKey);
-        log.setOperator(operator);
-        log.setLogType(logType);
-        log.setOpinion(opinion == null ? "" : opinion);
-        log.setOperateTime(new Date());
-        logMapper.insert(log);
+        // 委托 WfWriteHelper 唯一实现：wf_approval_log + ACT_HI_COMMENT 审批意见双写（P3-4）。
+        // 此前本类自带 logMapper.insert 直写、绕过双写，导致引擎侧评论恒为空、读源=act 时流转意见无数据。
+        writeHelper.appendLog(instId, taskId, nodeKey, operator, logType, opinion);
     }
 
     // ------------------------------------------------------------------ 二次认证 + 字段校验
