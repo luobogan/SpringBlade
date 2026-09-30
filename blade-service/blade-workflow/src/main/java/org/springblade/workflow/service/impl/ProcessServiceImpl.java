@@ -138,13 +138,94 @@ public class ProcessServiceImpl implements IProcessService {
         if (procKey == null || procKey.isBlank() || bpmnXml == null || bpmnXml.isBlank()) {
             throw new IllegalArgumentException("部署 BPMN 失败：procKey 与 bpmnXml 均不能为空");
         }
+        String safeXml = sanitizeForDeploy(bpmnXml);
         Deployment deployment = repositoryService.createDeployment()
             .name(procKey)
             .key(procKey)
-            .addString(procKey + ".bpmn20.xml", bpmnXml)
+            .addString(procKey + ".bpmn20.xml", safeXml)
             .deploy();
         log.info("[blade-workflow] BPMN 已部署到引擎. procKey={}, deploymentId={}", procKey, deployment.getId());
         return deployment.getId();
+    }
+
+    /**
+     * 清理前端画布导出的<b>非标准 BPMNDI 属性</b>，使 XML 能通过 Flowable 生产部署的
+     * XML Schema 校验（{@code deployProcess} 不关校验；测试部署 {@link #deployProcessForTest}
+     * 已 {@code disableSchemaValidation} 故不受影响）。
+     *
+     * <p>根因：画布保存的 {@code bpmndi:BPMNEdge / BPMNShape} 上带 {@code strokeWidth="..."}
+     * 等扩展属性，BPMNDI XSD 未定义该属性，Schema 校验直接拒绝部署——
+     * 报 {@code cvc-complex-type.3.2.2: 元素 'bpmndi:BPMNEdge' 中不允许出现属性 'strokeWidth'}，
+     * 所有<b>导入类流程</b>（如 comprehensiveApproval 系列）正式发布必挂。
+     * 清理只删图形装饰属性、不改流程语义（节点/连线/条件表达式均原样保留）。</p>
+     */
+    public static String sanitizeBpmnDiForSchema(String bpmnXml) {
+        if (bpmnXml == null || bpmnXml.indexOf("strokeWidth") < 0) {
+            return bpmnXml;
+        }
+        // 连同前导空白一并删除，避免留下游离空白
+        String cleaned = bpmnXml.replaceAll("\\s+strokeWidth=\"[^\"]*\"", "");
+        if (!cleaned.equals(bpmnXml)) {
+            log.info("[blade-workflow] 已清理 BPMN 非标准 DI 属性 strokeWidth（前端画布扩展，Schema 校验不允许）");
+        }
+        return cleaned;
+    }
+
+    /**
+     * 生产部署前的 BPMN 消毒总入口（保持<b>流程语义不变</b>，只修「画布/导入器产出
+     * 但 Flowable 严格校验不允许」的冗余/非法写法）：
+     * <ul>
+     *   <li>{@link #sanitizeBpmnDiForSchema}：剥离非标准 BPMNDI 属性（如 {@code strokeWidth}）；</li>
+     *   <li>{@link #stripDefaultFlowCondition}：剥离「网关 default 流」上的冗余条件表达式。</li>
+     * </ul>
+     * 仅 {@code deployProcess}（生产发布，保留完整 Schema + 语义校验）需要；
+     * 测试部署 {@link #deployProcessForTest} 已双关校验，不必消毒。
+     */
+    public static String sanitizeForDeploy(String bpmnXml) {
+        return stripDefaultFlowCondition(sanitizeBpmnDiForSchema(bpmnXml));
+    }
+
+    /** 网关标签（含 default 属性）：exclusive / inclusive 两种，标签可自闭合 */
+    private static final java.util.regex.Pattern GATEWAY_WITH_DEFAULT = java.util.regex.Pattern.compile(
+        "<(exclusiveGateway|inclusiveGateway)\\b[^>]*\\bdefault=\"([^\"]+)\"[^>]*/?>");
+
+    /**
+     * 剔除「网关 default 流」上的 {@code conditionExpression}。
+     *
+     * <p>根因：BPMN 语义上 default 流只在<b>其余条件全部不成立</b>时被选中，
+     * 它自身的条件恒冗余；Flowable 语义校验集
+     * {@code flowable-exclusive-gateway-condition-on-seq-flow} 直接拒绝部署——
+     * 报 {@code Default sequenceflow has a condition, which is not allowed}。
+     * 画布/导入器会把分支条件同时冗余写到 default 流上（如 comprehensiveApproval 的
+     * {@code Gateway_Amount default="Flow_6"} 且 Flow_6 带 {@code ${amount > 5000}}）。
+     * 剥离后行为不变：default 分支依旧在其它条件全假时命中。</p>
+     *
+     * <p>只处理「确实被 default 引用」的流；普通条件流原样保留。采用 tempered 匹配
+     * （{@code (?!</sequenceFlow>).}）确保条件一定取自该流自身块内，绝不越界误删相邻流的条件。</p>
+     */
+    static String stripDefaultFlowCondition(String bpmnXml) {
+        if (bpmnXml == null || !bpmnXml.contains("default=")) {
+            return bpmnXml;
+        }
+        java.util.LinkedHashSet<String> defaultFlowIds = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher gw = GATEWAY_WITH_DEFAULT.matcher(bpmnXml);
+        while (gw.find()) {
+            defaultFlowIds.add(gw.group(2));
+        }
+        String result = bpmnXml;
+        for (String flowId : defaultFlowIds) {
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                "(?s)(<sequenceFlow\\b[^>]*\\bid=\"" + java.util.regex.Pattern.quote(flowId)
+                    + "\"[^>]*>(?:(?!</sequenceFlow>).)*?)"
+                    + "<conditionExpression\\b[^>]*>.*?</conditionExpression>"
+                    + "(.*?</sequenceFlow>)");
+            java.util.regex.Matcher m = p.matcher(result);
+            if (m.find()) {
+                result = m.replaceAll("$1$2");
+                log.info("[blade-workflow] 已剥离网关 default 流上的冗余条件. flowId={}", flowId);
+            }
+        }
+        return result;
     }
 
     @Override
