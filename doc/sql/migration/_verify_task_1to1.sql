@@ -43,12 +43,30 @@ SELECT '④ 无 engineTaskId 的合成待办' AS item, COUNT(*) AS val
 FROM wf_task
 WHERE engine_task_id IS NULL OR engine_task_id = '';
 
--- ⑤ 双写覆盖：1:1 且引擎侧存在 HI 行，但业务列未写回（双写开启后应趋近 0）
-SELECT '⑤ 双写未覆盖（1:1 但 ACT_HI_TASKINST 业务列为空）' AS item, COUNT(*) AS val
+-- ⑤ 双写覆盖（达标项）：【必须限定 1:1 口径】—— N:1 按设计无法回填（ACT 单行放不下多人），
+--    若不限定，⑤ 会把 N:1 一并计入而永远到不了 0，误导验收。
+SELECT '⑤ 双写未覆盖-1:1口径（达标应=0）' AS item, COUNT(*) AS val
 FROM wf_task t
 JOIN ACT_HI_TASKINST h ON h.ID_ = t.engine_task_id
 WHERE t.engine_task_id IS NOT NULL AND t.engine_task_id <> ''
-  AND h.BUSINESS_STATUS_ IS NULL;
+  AND h.BUSINESS_STATUS_ IS NULL
+  AND t.engine_task_id IN (
+      SELECT engine_task_id FROM wf_task
+      WHERE engine_task_id IS NOT NULL AND engine_task_id <> ''
+      GROUP BY engine_task_id HAVING COUNT(*) = 1
+  );
+
+-- ⑤b 参考项：N:1 且业务列为空（按设计不可回填，需待存量 N:1 自然办结；不计入达标）
+SELECT '⑤b N:1未回填（参考，按设计不可回填）' AS item, COUNT(*) AS val
+FROM wf_task t
+JOIN ACT_HI_TASKINST h ON h.ID_ = t.engine_task_id
+WHERE t.engine_task_id IS NOT NULL AND t.engine_task_id <> ''
+  AND h.BUSINESS_STATUS_ IS NULL
+  AND t.engine_task_id IN (
+      SELECT engine_task_id FROM wf_task
+      WHERE engine_task_id IS NOT NULL AND engine_task_id <> ''
+      GROUP BY engine_task_id HAVING COUNT(*) > 1
+  );
 
 -- ⑥ 双写漂移：业务列状态与 wf_task.status 不一致（映射 0/2/4/6/7/8/11）
 SELECT '⑥ 双写漂移（ACT 子状态 ≠ wf_task.status 映射）' AS item, COUNT(*) AS val

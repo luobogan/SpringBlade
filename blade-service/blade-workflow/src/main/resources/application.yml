@@ -46,6 +46,19 @@ blade:
   flowable:
     database-schema-update: true
   workflow:
+    # 待办/已办读源（注意：是【直接值】，不是 .enabled —— WfTaskActReader 读 ${blade.workflow.task-read-source}）：
+    #   wf  = wf_task（默认，零行为变化）
+    #   act = ACT_RU_TASK / ACT_HI_TASKINST（去 wf_ 表）
+    # 翻 act 前必须满足 doc/md/去wf_表-任务读源翻源上线检查.md 的达标阈值；
+    # 读源=act 时对 ACT 表达不了的行（存量 N:1 会签 / 孤儿 / 合成待办）自动兜底合并 wf_task 保证【零丢单】；
+    # 读取异常同样自动降级回 wf_task。回退改回 wf 并重启即可。
+    # dev 验证已完成（18/28 与基线一致、操作链路正常），现【改回 wf】，原因见下行注释。
+    # 为什么不留在 act：dev 数据不满足达标阈值（①N:1=137、⑦孤儿=344、覆盖率仅约 30%），
+    #   139 条真实列表行里 108 条是存量 N:1 会签（ACT 单行表达不了），翻 act 后几乎全靠
+    #   「兜底合并」回读 wf_task —— 名义上读 ACT、实际仍绕回 wf_task，既没真正翻源，
+    #   又会掩盖真实覆盖率缺口，不利于观察。故回到诚实默认 wf，等预发/生产数据达标
+    #   （N:1→0、孤儿→0 或全测试态、ACT可读≥99%）再翻 act。
+    task-read-source: wf
     task-act-write:
       # 任务业务列双写 ACT_RU_TASK / ACT_HI_TASKINST（去 wf_ 表 P4/P5 写侧）。
       # 依赖 doc/sql/migration/act_add_task_biz_columns.sql 已执行的 6 个自定义列（已执行）。
@@ -71,6 +84,14 @@ blade:
       # 注意：若 Nacos blade-workflow-dev.yaml 也配置了该键，以 Nacos 为准（届时需在 Nacos 侧同步修改）。
       # 回退路径验证已通过（2026-09-27）：enabled=false 时 WfWriteHelper 兜底显式写可独立撑住状态。
       # 现恢复 true，处于阶段 3「切单写」生效状态。
+      enabled: true
+    definition-from-bpmn:
+      # 定义读源总开关（去 wf_ 表 P3-5：一个 key 管三处消费方，默认 false）：
+      #   ① /definition/{id}/nodes|links（loadNodes/loadLinks，读 BPMN wf:node + wf:link + wf:foldedLink）；
+      #   ② 运行期 loadNode()（doApprove/转办/抄送/列表节点名）；
+      #   ③ 退回可达性 WfRejectManager（/task/{id}/reject-nodes + reject 目标校验）。
+      # 锚定 def 自己的部署 proc_def_id：草稿/未部署（procDefId 为空）自动回退 wf_process_node/wf_node_link，
+      # 读取异常同样降级；deploy 条件注入/saveBpmn/另存版本/simulate/diff 等内部写路径固定仍读 wf_* 表。
       enabled: true
   data-scope:
     mapper-exclude:

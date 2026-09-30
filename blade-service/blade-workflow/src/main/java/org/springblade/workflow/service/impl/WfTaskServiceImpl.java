@@ -29,6 +29,7 @@ import org.springblade.workflow.entity.WfSubflowRequest;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.core.tool.api.R;
@@ -121,6 +122,17 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfTaskActWriter taskActWriter;
     /** 待办/已办读源=act 时的 ACT_* 读取器（含读源开关，默认 wf，零行为变化） */
     private final WfTaskActReader taskActReader;
+    /** 定义期节点配置读取（BPMN wf: 扩展） */
+    private final WfBpmnExtensionReader bpmnReader;
+
+    /**
+     * 定义源开关：false=读 wf_process_node（默认，零行为变化）；true=从 BPMN {@code wf:node} 扩展读。
+     *
+     * <p>切 true 前须确认设计器保存/回填已把节点配置写入 BPMN（{@code writeNode}），
+     * 否则读到的维度为空会被当成「未配置」处理。</p>
+     */
+    @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
+    private boolean definitionFromBpmn;
 
     /**
      * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
@@ -716,6 +728,15 @@ public class WfTaskServiceImpl implements IWfTaskService {
         Map<String, Long> result = new HashMap<>(4);
         // 记录级鉴权：非流程管理员只能看自己的角标数（顶栏待办红点）
         Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
+        // 读源=act：角标计数读 ACT_*（含 wf_task 兜底，保证数字与翻源前一致）；失败降级走 wf_task
+        if (taskActReader.actRead()) {
+            try {
+                return taskActReader.countFromAct(target);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 读源=act 角标计数读取 ACT_* 失败，降级走 wf_task. assignee={}, {}",
+                    target, e.getMessage());
+            }
+        }
         // 测试态任务不计入角标（方案 §6.4 C1 / V2）：否则顶栏红点会把测试单算进去，
         // 把用户引去「办理」一条根本不该出现在生产面的单子
         Long todo = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
@@ -742,7 +763,32 @@ public class WfTaskServiceImpl implements IWfTaskService {
             try {
                 boolean onlyTodo = statuses.size() == 1 && statuses.get(0) != null
                     && statuses.get(0) == WfTask.STATUS_TODO;
-                return onlyTodo ? taskActReader.todoFromAct(target) : taskActReader.doneFromAct(target);
+                List<WfTaskVO> merged = new ArrayList<>(
+                    onlyTodo ? taskActReader.todoFromAct(target) : taskActReader.doneFromAct(target));
+                // 兜底合并：ACT 单行表达不了的场景仍从 wf_task 取，保证翻源【零丢单】：
+                //   ① 存量 N:1 会签（同一引擎任务多人，ACT 只有一行）—— 主要来源；
+                //   ② 孤儿（引擎侧已无对应任务）；③ 无 engineTaskId 的合成待办（退回发起人重提交）。
+                // 随存量 N:1 自然办结、新会签已是 1:1，兜底贡献逐步趋零，wf_task 才真正退役。
+                java.util.Set<Long> seen = merged.stream().map(WfTaskVO::getId)
+                    .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
+                List<WfTask> residue = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                    .eq(WfTask::getAssignee, target)
+                    .in(WfTask::getStatus, statuses)
+                    .eq(WfTask::getIsTest, 0)
+                    .notIn(!seen.isEmpty(), WfTask::getId, seen)
+                    .orderByDesc(WfTask::getCreateTime));
+                if (!residue.isEmpty()) {
+                    for (WfTask t : residue) {
+                        merged.add(toVO(t));
+                    }
+                    log.info("[blade-workflow] 读源=act 兜底合并 wf_task 残留 {} 条（N:1/孤儿/合成待办）. assignee={}",
+                        residue.size(), target);
+                }
+                // 合并后统一按时间倒序（待办按接收时间、已办按处理时间），与翻源前观感一致
+                merged.sort(java.util.Comparator.comparing(
+                    v -> onlyTodo ? v.getReceiveTime() : v.getOperateTime(),
+                    java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+                return merged;
             } catch (Exception e) {
                 log.warn("[blade-workflow] 任务读源=act 读取 ACT_* 失败，降级走 wf_task. assignee={}, {}",
                     target, e.getMessage());
@@ -789,10 +835,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
             vo.setInstStatus(inst.getStatus());
             // ⚠️ 必须带 defId：bpmn-js 的 id（Activity_xxx 等）在不同流程间会重复，
             //    只按 nodeKey 查会命中别的流程的节点，待办/已办列表节点名串味。
-            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, inst.getDefId())
-                .eq(WfProcessNode::getNodeKey, t.getNodeKey())
-                .last("LIMIT 1"));
+            // 复用 loadNode：定义源开关（BPMN / wf_process_node）在此统一收口，避免两处读法漂移
+            WfProcessNode node = loadNode(inst.getDefId(), t.getNodeKey());
             if (node != null) {
                 vo.setNodeName(node.getNodeName());
             }
@@ -806,6 +850,19 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private WfProcessNode loadNode(Long defId, String nodeKey) {
         if (defId == null || nodeKey == null) {
             return null;
+        }
+        // 定义源=BPMN：节点维度（nodeType/signOrder/allowReject/extJson…）改从 wf:node 扩展读。
+        // BPMN 里没有该节点（或读取异常）时回退 wf_process_node，保证流转不被阻断。
+        if (definitionFromBpmn) {
+            try {
+                WfProcessNode fromBpmn = bpmnReader.node(defId, nodeKey);
+                if (fromBpmn != null) {
+                    return fromBpmn;
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义源=BPMN 读取节点失败，回退 wf_process_node. "
+                    + "defId={}, nodeKey={}, {}", defId, nodeKey, e.getMessage());
+            }
         }
         return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
             .eq(WfProcessNode::getDefId, defId)

@@ -101,6 +101,48 @@ public class WfTaskActReader {
         }, String.valueOf(assignee));
     }
 
+    /**
+     * 角标计数（顶栏待办红点 / 监控）：待办读 {@code ACT_RU_TASK}、已办读 {@code ACT_HI_TASKINST}。
+     *
+     * <p>与列表同口径保留【兜底】：ACT 表达不了的（存量 N:1 会签 / 孤儿 / 无引擎任务的合成待办）
+     * 仍按 {@code wf_task.id NOT IN (ACT 已覆盖的 BIZ_TASK_ID_)} 补计，保证角标数字与翻源前一致。</p>
+     *
+     * <p>注意「已办」口径与原实现一致：{@code status <> 0}（非待办即已办），而非仅限 2/4/6/7/8/11。</p>
+     *
+     * <p>⚠️ 前提：会签/或签/依次须已<b>全面下沉引擎多实例</b>，否则引擎任务生命周期与 blade 任务状态
+     * 不一致（自研 {@code closeSiblings} 只改 {@code wf_task.status}、不完成引擎任务），
+     * 会导致<b>待办多算</b>。详见 {@code doc/md/去wf_表-任务读源翻源上线检查.md} §4.5。</p>
+     */
+    public java.util.Map<String, Long> countFromAct(Long assignee) {
+        String a = String.valueOf(assignee);
+        long todoAct = countOne(
+            "SELECT COUNT(*) FROM ACT_RU_TASK "
+                + "WHERE COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) = ? AND COALESCE(IS_TEST_, 0) = 0", a);
+        long doneAct = countOne(
+            "SELECT COUNT(*) FROM ACT_HI_TASKINST "
+                + "WHERE COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) = ? AND COALESCE(IS_TEST_, 0) = 0 "
+                + "AND END_TIME_ IS NOT NULL", a);
+        long todoResidue = countOne(
+            "SELECT COUNT(*) FROM wf_task t WHERE t.assignee = ? AND t.status = 0 AND t.is_test = 0 "
+                + "AND t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_RU_TASK "
+                + "  WHERE COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) = ? AND COALESCE(IS_TEST_, 0) = 0 "
+                + "  AND BIZ_TASK_ID_ IS NOT NULL)", assignee, a);
+        long doneResidue = countOne(
+            "SELECT COUNT(*) FROM wf_task t WHERE t.assignee = ? AND t.status <> 0 AND t.is_test = 0 "
+                + "AND t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_HI_TASKINST "
+                + "  WHERE COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) = ? AND COALESCE(IS_TEST_, 0) = 0 "
+                + "  AND END_TIME_ IS NOT NULL AND BIZ_TASK_ID_ IS NOT NULL)", assignee, a);
+        java.util.Map<String, Long> r = new java.util.LinkedHashMap<>();
+        r.put("todo", todoAct + todoResidue);
+        r.put("done", doneAct + doneResidue);
+        return r;
+    }
+
+    private Long countOne(String sql, Object... args) {
+        Long v = jdbcTemplate.queryForObject(sql, Long.class, args);
+        return v == null ? 0L : v;
+    }
+
     /** 两表共有的实例维度 + 任务维度回填 */
     private static void fillCommon(WfTaskVO vo, ResultSet rs) throws SQLException {
         vo.setId(getLong(rs, "bizTaskId"));
