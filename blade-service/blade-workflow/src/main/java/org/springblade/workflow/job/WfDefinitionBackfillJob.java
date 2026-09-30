@@ -87,6 +87,15 @@ public class WfDefinitionBackfillJob {
 	private static final BpmnXMLConverter CONVERTER = new BpmnXMLConverter();
 	private static final Pattern PROCDEF_VERSION = Pattern.compile(":(\\d+):");
 
+	/**
+	 * 纯结构/合成节点类型（旧模型 nodeType → 不承载定义期业务配置）：
+	 * 0=开始、3=结束、5=中间事件、6=Service/Script/Send/Manual 等自动化节点、7=网关。
+	 * 这些由 BPMN 元素 1:1 合成（见 {@link WfBpmnExtensionReader#toNodes}），没有操作者/权限/超时等业务维度，
+	 * 纳入对账只会产生「合成节点假阳性」，故对账仅比对业务节点（如审批/办理类）。
+	 */
+	private static final java.util.Set<Integer> STRUCTURAL_NODE_TYPES = java.util.Set.of(0, 3, 5, 6, 7);
+
+
 	private final WfProcessDefinitionMapper defMapper;
 	private final WfProcessNodeMapper nodeMapper;
 	private final WfNodeOperatorMapper operatorMapper;
@@ -434,15 +443,19 @@ public class WfDefinitionBackfillJob {
 			return diff;
 		}
 
-		// 对账口径对齐【读取侧】：BPMN 侧节点集 = toNodes 全集（UserTask wf:node 扩展 + 非 UserTask 元素合成），
-		// 而非仅统计带 wf:node 的 UserTask —— 否则开始/结束/网关等合成节点会被误报为不一致。
-		List<WfProcessNode> nodes = nodeMapper.selectList(new QueryWrapper<WfProcessNode>().eq("def_id", def.getId()));
-		List<WfProcessNode> bpmnNodes = WfBpmnExtensionReader.toNodes(def.getId(), model);
+		// 对账口径：仅比对承载定义期业务配置的真实节点（审批/办理类），排除 start/end/中间事件/
+		// Service·Manual/网关 等纯结构或合成节点 —— 这些由 BPMN 元素合成、不承载操作者/权限/超时等业务维度，
+		// 纳入比对只会产生「合成节点假阳性」。两侧同口径过滤，保证计数与存在性比对在同一集合上。
+		List<WfProcessNode> nodes = nodeMapper.selectList(new QueryWrapper<WfProcessNode>().eq("def_id", def.getId()))
+			.stream().filter(n -> n.getNodeType() == null || !STRUCTURAL_NODE_TYPES.contains(n.getNodeType()))
+			.collect(java.util.stream.Collectors.toList());
+		List<WfProcessNode> bpmnNodes = WfBpmnExtensionReader.toNodes(def.getId(), model)
+			.stream().filter(n -> n.getNodeType() == null || !STRUCTURAL_NODE_TYPES.contains(n.getNodeType()))
+			.collect(java.util.stream.Collectors.toList());
 		int srcNodeCount = nodes.size();
 		int tgtNodeCount = bpmnNodes.size();
 		if (srcNodeCount != tgtNodeCount) {
-			diff.add("节点数不一致 src=" + srcNodeCount + " tgt=" + tgtNodeCount
-				+ "（BPMN 侧含 UserTask 扩展 + 非 UserTask 元素合成）");
+			diff.add("业务节点数不一致 src=" + srcNodeCount + " tgt=" + tgtNodeCount);
 		}
 		java.util.Set<String> bpmnKeys = new java.util.HashSet<>();
 		java.util.Map<String, UserTask> bpmnTasks = new java.util.HashMap<>();
