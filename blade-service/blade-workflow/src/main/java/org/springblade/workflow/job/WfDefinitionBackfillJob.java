@@ -38,6 +38,7 @@ import org.springblade.workflow.mapper.WfNodeTimeoutMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.service.IWfDefinitionService;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfDetailFilterExt;
 import org.springblade.workflow.util.BpmnExtensionUtil.WfDetailPermExt;
@@ -199,9 +200,14 @@ public class WfDefinitionBackfillJob {
 		// 节点（含操作者/字段权限/明细/超时/自定义操作）
 		List<WfProcessNode> nodes = nodeMapper.selectList(new QueryWrapper<WfProcessNode>().eq("def_id", def.getId()));
 		for (WfProcessNode node : nodes) {
-			UserTask task = (UserTask) process.getFlowElement(node.getNodeKey());
-			if (task == null) {
-				log.warn("[blade-workflow] 节点 {} 在 BPMN 中无对应 userTask，跳过", node.getNodeKey());
+			// ⚠️ instanceof 判断而非强转：wf_process_node 的 nodeKey 也可能指向 EndEvent/BoundaryEvent
+			// 等非 UserTask 元素（如「结束(3)/等待(5)」节点），直接强转会 ClassCastException 中断整条回填。
+			// wf:node 扩展仅承载于 UserTask；非 UserTask 节点不写扩展，读取侧由
+			// WfBpmnExtensionReader.toNodes 按元素类型合成（nodeType 0/3/5/6/7），覆盖不受影响。
+			FlowElement fe = process.getFlowElement(node.getNodeKey());
+			if (!(fe instanceof UserTask task)) {
+				log.warn("[blade-workflow] 节点 {} 非 BPMN userTask（{}），wf:node 扩展仅承载于 UserTask，跳过（读取侧按元素类型合成）",
+					node.getNodeKey(), fe == null ? "无对应元素" : fe.getClass().getSimpleName());
 				continue;
 			}
 			BpmnExtensionUtil.writeNode(task, buildNodeExt(node));
@@ -255,15 +261,26 @@ public class WfDefinitionBackfillJob {
 
 		// 记录桥接（D6）
 		WfProcessDefinition after = defMapper.selectById(def.getId());
-		FlowDefBridge bridge = new FlowDefBridge();
-		bridge.setDefKey(def.getProcKey());
+		// ⚠️ 幂等（存在即更新）：唯一键 uk_def_key_tenant(def_key, tenant_id) 是【procKey 级】，
+		// 而同一版本组（同 procKey）有多个 defId 行（v1/v2…），后回填的版本再 insert 会唯一键冲突。
+		// 桥接语义与唯一键对齐：一行 = 该 procKey 的最新部署，重跑/新版本回填时更新指向。
+		FlowDefBridge bridge = bridgeMapper.selectOne(new QueryWrapper<FlowDefBridge>()
+			.eq("def_key", def.getProcKey()).eq("tenant_id", def.getTenantId()).last("LIMIT 1"));
+		if (bridge == null) {
+			bridge = new FlowDefBridge();
+			bridge.setDefKey(def.getProcKey());
+			bridge.setTenantId(def.getTenantId());
+		}
 		bridge.setDefId(def.getId());
 		bridge.setEngineDefKey(def.getProcKey());
 		bridge.setEngineDefId(after.getProcDefId());
 		bridge.setEngineVersion(extractVersion(after.getProcDefId()));
-		bridge.setTenantId(def.getTenantId());
 		bridge.setStatus(1);
-		bridgeMapper.insert(bridge);
+		if (bridge.getId() != null) {
+			bridgeMapper.updateById(bridge);
+		} else {
+			bridgeMapper.insert(bridge);
+		}
 
 		log.info("[blade-workflow] 定义期回填完成并部署. defId={}, procKey={}, engineDefId={}",
 			def.getId(), def.getProcKey(), after.getProcDefId());
@@ -417,21 +434,38 @@ public class WfDefinitionBackfillJob {
 			return diff;
 		}
 
+		// 对账口径对齐【读取侧】：BPMN 侧节点集 = toNodes 全集（UserTask wf:node 扩展 + 非 UserTask 元素合成），
+		// 而非仅统计带 wf:node 的 UserTask —— 否则开始/结束/网关等合成节点会被误报为不一致。
 		List<WfProcessNode> nodes = nodeMapper.selectList(new QueryWrapper<WfProcessNode>().eq("def_id", def.getId()));
+		List<WfProcessNode> bpmnNodes = WfBpmnExtensionReader.toNodes(def.getId(), model);
 		int srcNodeCount = nodes.size();
-		int tgtNodeCount = countUserTasksWithWfNode(process);
+		int tgtNodeCount = bpmnNodes.size();
 		if (srcNodeCount != tgtNodeCount) {
-			diff.add("节点数不一致 src=" + srcNodeCount + " tgt=" + tgtNodeCount);
+			diff.add("节点数不一致 src=" + srcNodeCount + " tgt=" + tgtNodeCount
+				+ "（BPMN 侧含 UserTask 扩展 + 非 UserTask 元素合成）");
+		}
+		java.util.Set<String> bpmnKeys = new java.util.HashSet<>();
+		java.util.Map<String, UserTask> bpmnTasks = new java.util.HashMap<>();
+		for (WfProcessNode b : bpmnNodes) {
+			bpmnKeys.add(b.getNodeKey());
+		}
+		for (UserTask t : process.findFlowElementsOfType(UserTask.class, true)) {
+			bpmnTasks.put(t.getId(), t);
 		}
 		for (WfProcessNode node : nodes) {
-			UserTask task = (UserTask) process.getFlowElement(node.getNodeKey());
+			// DB 节点在 BPMN 侧（toNodes 全集）缺失 → 读源切换后该节点不可见，真实不一致
+			if (!bpmnKeys.contains(node.getNodeKey())) {
+				diff.add("节点 " + node.getNodeKey() + " 在 BPMN 侧缺失（读源切换后将不可见）");
+				continue;
+			}
+			UserTask task = bpmnTasks.get(node.getNodeKey());
 			if (task == null) {
-				diff.add("节点 " + node.getNodeKey() + " 在 BPMN 无 userTask");
+				// 合成节点（非 UserTask，如开始/结束/网关）：读取侧按元素类型合成，无需 wf:node 扩展维度校验
 				continue;
 			}
 			WfNodeExt tgt = BpmnExtensionUtil.readNode(task);
 			if (tgt == null) {
-				diff.add("节点 " + node.getNodeKey() + " 在 BPMN 无 wf:node");
+				diff.add("节点 " + node.getNodeKey() + " 在 BPMN 无 wf:node（应为 UserTask 却无扩展）");
 				continue;
 			}
 			int srcOps = operatorMapper.selectCount(
