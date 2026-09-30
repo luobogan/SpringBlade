@@ -101,11 +101,11 @@ public class WfBpmnExtensionReader {
      * <p>解析走 {@link #resolveOwnProcDefId}（def 自己的部署）：草稿/未部署返回空列表，由调用方回退 wf_* 表。</p>
      */
     public List<WfNodeLink> links(Long defId) {
-        String procDefId = resolveOwnProcDefId(defId);
-        if (procDefId == null) {
+        BpmnModel model = loadOwnModel(defId);
+        if (model == null || !nodeExtsComplete(model)) {
+            logIncompleteFallback(defId, model);
             return List.of();
         }
-        BpmnModel model = modelCache.computeIfAbsent(procDefId, this::loadModel);
         return toNodeLinks(defId, model);
     }
 
@@ -117,12 +117,46 @@ public class WfBpmnExtensionReader {
      * <p>解析走 {@link #resolveOwnProcDefId}（def 自己的部署）：草稿/未部署返回空列表，由调用方回退 wf_* 表。</p>
      */
     public List<WfProcessNode> nodes(Long defId) {
-        String procDefId = resolveOwnProcDefId(defId);
-        if (procDefId == null) {
+        BpmnModel model = loadOwnModel(defId);
+        if (model == null || !nodeExtsComplete(model)) {
+            logIncompleteFallback(defId, model);
             return List.of();
         }
-        BpmnModel model = modelCache.computeIfAbsent(procDefId, this::loadModel);
         return toNodes(defId, model);
+    }
+
+    /** 加载 def 自己部署的模型（无部署返回 null） */
+    private BpmnModel loadOwnModel(Long defId) {
+        String procDefId = resolveOwnProcDefId(defId);
+        return procDefId == null ? null : modelCache.computeIfAbsent(procDefId, this::loadModel);
+    }
+
+    /**
+     * 完整性守卫（P3-5 灰度期安全阀）：任一 UserTask 缺 {@code wf:node} 扩展 → 视为该定义的
+     * BPMN 未配置完整（回填作业未跑 / 画布未携带扩展），返回 false 让调用方整体回退 {@code wf_*} 表。
+     *
+     * <p>⚠️ 没有这个守卫时，「有节点但没扩展」会返回<b>骨架节点</b>（nodeType/signOrder/extJson 全 null）
+     * 而不是回退 —— 运行期会把 DB 里已配置的会签方式/操作菜单/扩展设置<b>静默降级为系统默认值</b>
+     * （dev 实测踩坑：2026-09-30，已发布定义引擎模型是裸 BPMN）。无 UserTask 的模型视为完整（空真）。</p>
+     */
+    public static boolean nodeExtsComplete(BpmnModel model) {
+        if (model == null || model.getMainProcess() == null) {
+            return false;
+        }
+        for (UserTask t : model.getMainProcess().findFlowElementsOfType(UserTask.class, true)) {
+            if (BpmnExtensionUtil.readNode(t) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void logIncompleteFallback(Long defId, BpmnModel model) {
+        if (model == null) {
+            log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_* 表. defId={}", defId);
+        } else {
+            log.info("[blade-workflow] 定义读源=BPMN：BPMN 缺 wf:node 扩展（未回填/画布未携带），回退 wf_* 表. defId={}", defId);
+        }
     }
 
     /**

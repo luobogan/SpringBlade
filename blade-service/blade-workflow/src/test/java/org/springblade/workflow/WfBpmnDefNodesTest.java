@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -113,6 +114,23 @@ class WfBpmnDefNodesTest {
 	void nullModelReturnsEmpty() {
 		assertTrue(WfBpmnExtensionReader.toNodes(101L, null).isEmpty());
 		assertTrue(WfBpmnExtensionReader.toNodes(101L, new BpmnModel()).isEmpty());
+	}
+
+	@Test
+	@DisplayName("完整性守卫：任一 UserTask 缺 wf:node 扩展 → false（灰度期回退 wf_* 的安全阀）")
+	void extCompletenessGuard() {
+		// BPMN 中 taskC 未写 wf:node 扩展 → 不完整
+		assertFalse(WfBpmnExtensionReader.nodeExtsComplete(parse(BPMN)));
+		assertFalse(WfBpmnExtensionReader.nodeExtsComplete(null), "null 模型不完整");
+		// 全部 UserTask 均带扩展 → 完整
+		String complete = BPMN.replace("<userTask id=\"taskC\" name=\"无扩展任务\"/>",
+			"<userTask id=\"taskC\" name=\"无扩展任务\">"
+				+ "<extensionElements><wf:node nodeType=\"1\" sortOrder=\"3\"/></extensionElements>"
+				+ "</userTask>");
+		assertTrue(WfBpmnExtensionReader.nodeExtsComplete(parse(complete)));
+		// 无 UserTask 的模型（仅开始/结束）：视为完整（空真）
+		assertTrue(WfBpmnExtensionReader.nodeExtsComplete(parse(
+			BPMN.substring(0, BPMN.indexOf("<userTask")) + "</process>\n</definitions>")));
 	}
 
 	@Test
