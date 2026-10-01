@@ -52,6 +52,8 @@ import org.springblade.workflow.service.helper.WfWriteHelper;
 import org.springblade.workflow.service.helper.WfInstanceActWriter;
 import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.workflow.service.helper.WfApprovalLogActReader;
+import org.springblade.workflow.service.helper.ActInstanceConverter;
+import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.config.WfRetirementProperties;
@@ -144,6 +146,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * 否则 ACT_* 业务列为空。读侧与写侧独立开关，便于灰度验证。
      */
     private final WfApprovalLogActReader actLogReader;
+    /** 任务业务列读器（去 wf_ 表读侧）：nodeOperators / fresh 的任务维度读源=act 由此还原 */
+    private final WfTaskActReader taskActReader;
 
     /**
      * 子流程服务：与 {@link WfSubflowServiceImpl}（亦注入本服务）存在循环依赖，
@@ -670,8 +674,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         if (actRead()) {
             // 读源=act：台账从原生 ACT_HI_PROCINST 取（BUSINESS_ID_=雪花业务ID，与鉴权用的 wf_instance.id 同源）
-            ActHiProcinst t = actProcinstMapper.selectOne(Wrappers.<ActHiProcinst>lambdaQuery()
-                .eq(ActHiProcinst::getBusinessId, id).last("LIMIT 1"));
+            ActHiProcinst t = actProcinstMapper.selectOne(ActInstanceConverter.queryByBusinessId(id));
             if (t == null) {
                 throw new ServiceException("流程实例不存在(ACT)");
             }
@@ -783,8 +786,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             return null;
         }
         if (actRead()) {
-            ActHiProcinst t = actProcinstMapper.selectOne(Wrappers.<ActHiProcinst>lambdaQuery()
-                .eq(ActHiProcinst::getBusinessId, instId).last("LIMIT 1"));
+            ActHiProcinst t = actProcinstMapper.selectOne(ActInstanceConverter.queryByBusinessId(instId));
             if (t == null) {
                 return null;
             }
@@ -1070,9 +1072,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 界面所在节点：显式入参 > 界面持有的任务所属节点 > 实例当前节点
         String uiNodeKey = (nodeKey != null && !nodeKey.isEmpty()) ? nodeKey : null;
         if (uiNodeKey == null && taskId != null) {
-            WfTask task = taskMapper.selectById(taskId);
-            if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
-                uiNodeKey = task.getNodeKey();
+            if (actRead()) {
+                uiNodeKey = taskActReader.findNodeKeyByBizIdFromAct(taskId);
+            } else {
+                WfTask task = taskMapper.selectById(taskId);
+                if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
+                    uiNodeKey = task.getNodeKey();
+                }
             }
         }
         boolean uiNodeKnown = uiNodeKey != null && !uiNodeKey.isEmpty();
@@ -1103,8 +1109,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         //     这不是「界面太久没刷新」——刷新也回不到可办理状态，只能从「待办」打开最新任务。
         //     提示必须与此区分，否则用户会照着「请刷新」反复操作却毫无变化。
         if (taskId != null) {
-            WfTask uiTask = taskMapper.selectById(taskId);
-            if (uiTask != null && !Integer.valueOf(WfTask.STATUS_TODO).equals(uiTask.getStatus())) {
+            boolean uiTaskDone;
+            if (actRead()) {
+                uiTaskDone = taskActReader.isTaskDoneFromAct(taskId);
+            } else {
+                WfTask uiTask = taskMapper.selectById(taskId);
+                uiTaskDone = uiTask != null && !Integer.valueOf(WfTask.STATUS_TODO).equals(uiTask.getStatus());
+            }
+            if (uiTaskDone) {
                 String curText = (vo.getCurrentNodeName() == null || vo.getCurrentNodeName().isEmpty())
                     ? "" : "，流程当前节点为「" + vo.getCurrentNodeName() + "」";
                 vo.setNodeActive(false);
@@ -1146,6 +1158,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         if (uiNodeKey.equals(inst.getCurrentNodeKey())) {
             return true;
+        }
+        if (actRead() && inst.getEngineInstId() != null) {
+            // 读源=act：并行分支安全——该节点在 ACT_RU_TASK 仍有待办即活动
+            return taskActReader.countActiveNodeTasksFromAct(inst.getEngineInstId(), uiNodeKey) > 0;
         }
         Long todo = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, inst.getId())
@@ -2116,28 +2132,48 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 记录级鉴权：流程图「操作者」面板会暴露办理人名单，同样只对参与人开放
         WfInstance inst = requireVisible(instId, "查看节点操作者");
 
-        // ① 待办任务：按状态归组
-        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .orderByAsc(WfTask::getId));
-        for (WfTask t : tasks) {
-            if (t.getNodeKey() == null || t.getNodeKey().isEmpty() || t.getAssignee() == null) {
-                continue;
-            }
-            WfNodeOperatorVO vo = result.computeIfAbsent(t.getNodeKey(), k -> new WfNodeOperatorVO());
-            int st = (t.getStatus() == null) ? WfTask.STATUS_TODO : t.getStatus();
-            if (st == WfTask.STATUS_TODO) {
-                // 待办：打开过待办 → 已查看；从未打开 → 未操作
-                if (t.getViewTime() != null) {
-                    addOperatorId(vo.getViewed(), t.getAssignee());
-                } else {
-                    addOperatorId(vo.getTodo(), t.getAssignee());
+        // ① 待办任务：按状态归组（读源=act 时从 ACT_RU_TASK/ACT_HI_TASKINST 还原，与 todo/done 同源）
+        if (actRead() && inst != null && inst.getEngineInstId() != null) {
+            for (WfTaskActReader.NodeOpRow t : taskActReader.nodeOperatorTasksFromAct(inst.getEngineInstId())) {
+                if (t.getNodeKey() == null || t.getNodeKey().isEmpty() || t.getAssignee() == null) {
+                    continue;
                 }
-            } else if (st == WfTask.STATUS_DONE || st == WfTask.STATUS_FINISHED
-                || st == WfTask.STATUS_AUTO_SUBMIT || st == WfTask.STATUS_COADJUTANT) {
-                addOperatorId(vo.getHandled(), t.getAssignee());
+                WfNodeOperatorVO vo = result.computeIfAbsent(t.getNodeKey(), k -> new WfNodeOperatorVO());
+                int st = (t.getStatus() == null) ? WfTask.STATUS_TODO : t.getStatus();
+                if (st == WfTask.STATUS_TODO) {
+                    // 待办：打开过待办 → 已查看；从未打开 → 未操作
+                    if (t.getViewTime() != null) {
+                        addOperatorId(vo.getViewed(), t.getAssignee());
+                    } else {
+                        addOperatorId(vo.getTodo(), t.getAssignee());
+                    }
+                } else if (st == WfTask.STATUS_DONE || st == WfTask.STATUS_FINISHED
+                    || st == WfTask.STATUS_AUTO_SUBMIT || st == WfTask.STATUS_COADJUTANT) {
+                    addOperatorId(vo.getHandled(), t.getAssignee());
+                }
+                // 抄送(8) / 传阅(11) 属知会性质，不计入「操作者」面板
             }
-            // 抄送(8) / 传阅(11) 属知会性质，不计入「操作者」面板
+        } else {
+            List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, instId)
+                .orderByAsc(WfTask::getId));
+            for (WfTask t : tasks) {
+                if (t.getNodeKey() == null || t.getNodeKey().isEmpty() || t.getAssignee() == null) {
+                    continue;
+                }
+                WfNodeOperatorVO vo = result.computeIfAbsent(t.getNodeKey(), k -> new WfNodeOperatorVO());
+                int st = (t.getStatus() == null) ? WfTask.STATUS_TODO : t.getStatus();
+                if (st == WfTask.STATUS_TODO) {
+                    if (t.getViewTime() != null) {
+                        addOperatorId(vo.getViewed(), t.getAssignee());
+                    } else {
+                        addOperatorId(vo.getTodo(), t.getAssignee());
+                    }
+                } else if (st == WfTask.STATUS_DONE || st == WfTask.STATUS_FINISHED
+                    || st == WfTask.STATUS_AUTO_SUBMIT || st == WfTask.STATUS_COADJUTANT) {
+                    addOperatorId(vo.getHandled(), t.getAssignee());
+                }
+            }
         }
 
         // ② 审批日志：真实办理人（加签/转办/退回等不一定留下本人 task 行，靠日志补齐）

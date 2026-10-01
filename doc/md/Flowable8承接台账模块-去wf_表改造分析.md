@@ -786,6 +786,87 @@ UPDATE ACT_HI_PROCINST h
 | `ACT_HI_VARINST` 无 name 索引 | ⚠️ 部分修正：有 `ACT_IDX_HI_PROCVAR_NAME_TYPE`(`NAME_`,`VAR_TYPE_`)，但按**值**检索仍无索引 |
 | 任务级业务状态需新增列 | 改为**不新增**，通过 `PROC_INST_ID_` JOIN 实例表获取（决策 2） |
 
+### 11.6 T-2 数据模型定稿（去 `wf_` 表改造 · 模型终稿）
+
+> 将 §11.3（加列 / 索引 / 回填）、§13.3（租户复合索引）、D6（`DEF_KEY_` 桥接）、D8（`ACT_HI_COMMENT` 租户列）收敛为一版可执行终稿，作为 T-2 交付物。
+
+#### 11.6.1 决策定稿
+
+| 决策 | 结论 | 理由 |
+|---|---|---|
+| **D6** | ✅ 新增 `DEF_KEY_` 列（= 引擎 `ACT_RE_PROCDEF.KEY_`）落到 `ACT_HI_PROCINST` | 桥接业务 defId ↔ 引擎定义版本，解决 M1/R1 的 1:N 反查缺口 |
+| **D8** | ⚠️ 暂不加列 | `ACT_HI_COMMENT` 无 `TENANT_ID_`（§13.8 实测），审批意见租户过滤统一经 `PROC_INST_ID_` JOIN `ACT_HI_PROCINST` 借其 `TENANT_ID_`；若高频租户内意见查询压测不达标再评估补列 |
+| **索引策略** | 所有自定义列索引改为 `TENANT_ID_` 引导的复合索引（§13.3） | `ACT_HI_PROCINST` / `ACT_RU_TASK` / `ACT_HI_TASKINST` 原生带 `TENANT_ID_`，可直接复合 |
+
+#### 11.6.2 加列 DDL
+
+```sql
+USE blade;   -- ⚠️ 必须显式指定：jeelowcode 库也有 ACT_* 表
+
+-- A. ACT_HI_PROCINST：业务字段主存 + 1:N 桥接（BUSINESS_STATUS_ 为原生列，不新增）
+ALTER TABLE ACT_HI_PROCINST
+  ADD COLUMN DEF_ID_   BIGINT       NULL     COMMENT '业务定义ID(wf_process_definition.id)',
+  ADD COLUMN DEF_KEY_  VARCHAR(255) NULL     COMMENT '引擎定义KEY_(=procDefKey,桥接1:N版本)',
+  ADD COLUMN DATA_ID_  BIGINT       NULL     COMMENT '表单数据ID',
+  ADD COLUMN FORM_ID_  BIGINT       NULL     COMMENT '表单定义ID',
+  ADD COLUMN TITLE_    VARCHAR(500) NULL     COMMENT '流程标题',
+  ADD COLUMN IS_TEST_  TINYINT      NOT NULL DEFAULT 0 COMMENT '测试态 1=是',
+  ALGORITHM=INSTANT, LOCK=NONE;
+
+-- B. ACT_RU_TASK：超时已处理标记（决策 3）
+ALTER TABLE ACT_RU_TASK
+  ADD COLUMN TIMEOUT_HANDLED_ TINYINT NOT NULL DEFAULT 0 COMMENT '超时已处理 1=是',
+  ALGORITHM=INSTANT, LOCK=NONE;
+```
+
+#### 11.6.3 复合索引（TENANT_ID_ 引导）
+
+```sql
+USE blade;
+
+CREATE INDEX IDX_HI_PRO_T_BIZSTATUS ON ACT_HI_PROCINST(TENANT_ID_, BUSINESS_STATUS_);
+CREATE INDEX IDX_HI_PRO_T_ISTEST    ON ACT_HI_PROCINST(TENANT_ID_, IS_TEST_);
+CREATE INDEX IDX_HI_PRO_T_DEFID     ON ACT_HI_PROCINST(TENANT_ID_, DEF_ID_);
+CREATE INDEX IDX_HI_PRO_T_DEFKEY    ON ACT_HI_PROCINST(TENANT_ID_, DEF_KEY_);
+CREATE INDEX IDX_HI_PRO_T_DATAID    ON ACT_HI_PROCINST(TENANT_ID_, DATA_ID_);
+CREATE INDEX IDX_RU_TASK_T_DUE      ON ACT_RU_TASK(TENANT_ID_, DUE_DATE_);
+CREATE INDEX IDX_RU_TASK_T_TIMEOUT  ON ACT_RU_TASK(TENANT_ID_, TIMEOUT_HANDLED_, DUE_DATE_);
+CREATE INDEX IDX_HI_TASK_T_ASSIGNEE ON ACT_HI_TASKINST(TENANT_ID_, ASSIGNEE_);
+```
+
+#### 11.6.4 存量回填（含 TENANT_ID_ 映射与 DEF_KEY_）
+
+```sql
+USE blade;
+
+-- 回填前先验证匹配数（防 engine_inst_id 为空漏填）
+SELECT COUNT(*) FROM ACT_HI_PROCINST h
+  JOIN wf_instance w ON w.engine_inst_id = h.PROC_INST_ID_;
+
+UPDATE ACT_HI_PROCINST h
+  JOIN wf_instance w ON w.engine_inst_id = h.PROC_INST_ID_
+   SET h.DEF_ID_  = w.def_id,
+       h.DEF_KEY_ = (SELECT p.KEY_ FROM ACT_RE_PROCDEF p WHERE p.ID_ = h.PROC_DEF_ID_),
+       h.DATA_ID_ = w.data_id,
+       h.FORM_ID_ = w.form_id,
+       h.TITLE_   = w.title,
+       h.IS_TEST_ = IFNULL(w.is_test, 0);
+
+-- 业务终态回填（wf_instance.status → 原生 BUSINESS_STATUS_）
+UPDATE ACT_HI_PROCINST h
+  JOIN wf_instance w ON w.engine_inst_id = h.PROC_INST_ID_
+   SET h.BUSINESS_STATUS_ = CASE w.status
+        WHEN 1 THEN 'APPROVED' WHEN 2 THEN 'REJECTED' WHEN 3 THEN 'CANCELED' END
+ WHERE w.status IN (1,2,3);
+```
+
+#### 11.6.5 前置硬约束（执行前必须确认）
+
+- ⚠️ 先处置 §11 的 **schema 版本不一致**（`schema.version=8.0.0.0` vs `CURRENT_VERSION=8.1.0.1`，`databaseSchemaUpdate=none` 跳过校验）—— 加列会叠加其上。
+- DDL 须在 Flowable 建表**之后**执行；禁止 `create-drop`。
+- 新列一律"可空 + DEFAULT"，不可 `NOT NULL` 无默认（否则引擎 `INSERT` 失败）。
+- 回填前先 `SELECT COUNT(*)` 验证匹配数。
+
 ---
 
 ## 十二、源码可修改性完整评估（不考虑升级兼容前提）

@@ -3,6 +3,7 @@ package org.springblade.workflow.service.helper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.workflow.entity.WfInstance;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -37,6 +38,26 @@ public class WfInstanceActWriter {
     @Value("${blade.workflow.instance-act-write.enabled:false}")
     private boolean enabled;
 
+    /**
+     * 解析实例租户（T-13）。
+     *
+     * <p>Flowable 发起流程时<b>不带租户</b>，ACT_HI_PROCINST.TENANT_ID_ 会为空；
+     * 而读源=act 的实例查询（{@code ActInstanceConverter#queryByBusinessId}）已按租户过滤，
+     * 空租户会导致新发起的实例<b>查不到</b>。故写回时必须补上租户。</p>
+     *
+     * @param tenantId 实例自带租户（可为 null/空）
+     */
+    private static String resolveTenant(String tenantId) {
+        if (tenantId != null && !tenantId.isBlank()) {
+            return tenantId;
+        }
+        String current = WfAuthUtil.tenantId();
+        if (current != null && !current.isBlank()) {
+            return current;
+        }
+        return "000000";
+    }
+
     /** 业务终态状态码 → 原生 BUSINESS_STATUS_ 字符串 */
     private static String statusStr(int status) {
         return switch (status) {
@@ -70,13 +91,13 @@ public class WfInstanceActWriter {
                 "UPDATE ACT_HI_PROCINST SET BUSINESS_ID_=?, DEF_ID_=?, DATA_ID_=?, FORM_ID_=?, "
                     + "TITLE_=?, IS_TEST_=?, BUSINESS_STATUS_=?, STARTER_=?, CURRENT_NODE_KEY_=?, "
                     + "URGENCY_=?, BUSINESS_ROW_READY_=?, ENGINE_DEPLOY_MATCHED_=?, PARENT_ID_=?, "
-                    + "TEST_DEPLOYMENT_ID_=?, PROC_DEF_ID_=?, "
+                    + "TEST_DEPLOYMENT_ID_=?, PROC_DEF_ID_=?, TENANT_ID_=?, "
                     + "DEF_KEY_=(SELECT KEY_ FROM ACT_RE_PROCDEF WHERE ID_=?) WHERE ID_=?",
                 inst.getId(), inst.getDefId(), inst.getDataId(), inst.getFormId(),
                 inst.getTitle(), inst.getIsTest(), statusStr(status), inst.getStarter(),
                 inst.getCurrentNodeKey(), inst.getUrgency(), inst.getBusinessRowReady(),
                 inst.getEngineDeploymentMatched(), inst.getParentId(), inst.getTestDeploymentId(),
-                inst.getProcDefId(), inst.getProcDefId(), engineInstId);
+                inst.getProcDefId(), resolveTenant(inst.getTenantId()), inst.getProcDefId(), engineInstId);
         } catch (Exception e) {
             log.warn("[WfInstanceActWriter] 发起写回 ACT_HI_PROCINST 失败（双写预热，不影响台账）. engineInstId={}",
                 engineInstId, e);

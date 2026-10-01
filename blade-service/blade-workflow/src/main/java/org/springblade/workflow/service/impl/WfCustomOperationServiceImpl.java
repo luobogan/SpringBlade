@@ -20,6 +20,10 @@ import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfNodeDefaultSignMapper;
 import org.springblade.workflow.service.IWfCustomOperationService;
 import org.springblade.workflow.service.IWfInstanceService;
+import org.springblade.workflow.entity.ActHiProcinst;
+import org.springblade.workflow.mapper.ActHiProcinstMapper;
+import org.springblade.workflow.service.helper.ActInstanceConverter;
+import org.springblade.workflow.service.helper.WfApprovalLogActReader;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -50,6 +54,8 @@ public class WfCustomOperationServiceImpl implements IWfCustomOperationService {
     private final IWfInstanceService instanceService;
     private final WfInstanceMapper instanceMapper;
     private final IFormmodeClient formmodeClient;
+    private final ActHiProcinstMapper actProcinstMapper;
+    private final WfApprovalLogActReader actLogReader;
 
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -173,7 +179,10 @@ public class WfCustomOperationServiceImpl implements IWfCustomOperationService {
             return R.fail("无权限执行该自定义操作");
         }
 
-        WfInstance inst = instanceMapper.selectById(instId);
+        WfInstance inst = actLogReader.actRead()
+            ? ActInstanceConverter.fromAct(actProcinstMapper.selectOne(
+                ActInstanceConverter.queryByBusinessId(instId)))
+            : instanceMapper.selectById(instId);
         if (inst == null) {
             return R.fail("流程实例不存在");
         }

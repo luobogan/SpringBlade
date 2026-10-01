@@ -15,6 +15,7 @@ import org.springblade.workflow.dto.WfBackfillResult;
 import org.springblade.workflow.dto.WfReconcileResult;
 import org.springblade.workflow.entity.FlowDefBridge;
 import org.springblade.workflow.entity.WfCustomOperation;
+import org.springblade.workflow.entity.WfCustomOperationAction;
 import org.springblade.workflow.entity.WfCustomOperationRight;
 import org.springblade.workflow.entity.WfDefinitionGray;
 import org.springblade.workflow.entity.WfNodeDetailFilter;
@@ -27,6 +28,7 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.mapper.FlowDefBridgeMapper;
 import org.springblade.workflow.mapper.WfCustomOperationMapper;
+import org.springblade.workflow.mapper.WfCustomOperationActionMapper;
 import org.springblade.workflow.mapper.WfCustomOperationRightMapper;
 import org.springblade.workflow.mapper.WfDefinitionGrayMapper;
 import org.springblade.workflow.mapper.WfNodeDetailFilterMapper;
@@ -106,6 +108,7 @@ public class WfDefinitionBackfillJob {
 	private final WfNodeTimeoutMapper timeoutMapper;
 	private final WfCustomOperationMapper customOperationMapper;
 	private final WfCustomOperationRightMapper customOperationRightMapper;
+	private final WfCustomOperationActionMapper customOperationActionMapper;
 	private final WfDefinitionGrayMapper definitionGrayMapper;
 	private final FlowDefBridgeMapper bridgeMapper;
 	private final IWfDefinitionService definitionService;
@@ -417,7 +420,7 @@ public class WfDefinitionBackfillJob {
 			ext.timeouts.add(e);
 		}
 
-		// 自定义操作（按钮 + 权限矩阵）
+		// 自定义操作（按钮 + 动作明细 + 权限矩阵）
 		List<WfCustomOperation> cos = customOperationMapper.selectList(new QueryWrapper<WfCustomOperation>()
 			.eq("def_id", node.getDefId()).eq("node_key", node.getNodeKey()).orderByAsc("btn_order"));
 		for (WfCustomOperation co : cos) {
@@ -426,6 +429,18 @@ public class WfDefinitionBackfillJob {
 			o.btnOrder = str(co.getBtnOrder());
 			o.actionType = str(co.getActionType());
 			o.enabled = str(co.getEnabled());
+			// 动作明细（URL / 流程操作 / 接口）：wf_custom_operation_action 按 op_id 关联，回填 url/httpMethod/
+			// paramExpr/flowOperation/interfaceName/opinion 到 wf:operation 扩展（此前漏接，导致回填后动作丢失）
+			List<WfCustomOperationAction> actions = customOperationActionMapper.selectList(
+				new QueryWrapper<WfCustomOperationAction>().eq("op_id", co.getId()));
+			for (WfCustomOperationAction a : actions) {
+				if (a.getUrl() != null) o.url = a.getUrl();
+				if (a.getHttpMethod() != null) o.httpMethod = a.getHttpMethod();
+				if (a.getParamExpr() != null) o.paramExpr = a.getParamExpr();
+				if (a.getFlowOperation() != null) o.flowOperation = a.getFlowOperation();
+				if (a.getInterfaceName() != null) o.interfaceName = a.getInterfaceName();
+				if (a.getOpinion() != null) o.opinion = a.getOpinion();
+			}
 			List<WfCustomOperationRight> rights = customOperationRightMapper.selectList(
 				new QueryWrapper<WfCustomOperationRight>().eq("op_id", co.getId()));
 			for (WfCustomOperationRight r : rights) {

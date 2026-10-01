@@ -38,6 +38,11 @@ import org.springblade.workflow.vo.FieldPermVO;
 import org.springblade.workflow.vo.FormRenderVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.config.WfRetirementProperties;
+import org.springblade.workflow.entity.ActHiProcinst;
+import org.springblade.workflow.mapper.ActHiProcinstMapper;
+import org.springblade.workflow.service.helper.ActInstanceConverter;
+import org.springblade.workflow.service.helper.WfApprovalLogActReader;
+import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -82,6 +87,9 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final WfProcessDefinitionMapper defMapper;
     /** BPMN 扩展读取（定义读源=BPMN 时取节点 wf:node 扩展，替代 wf_process_node 直读） */
     private final WfBpmnExtensionReader bpmnReader;
+    private final ActHiProcinstMapper actProcinstMapper;
+    private final WfApprovalLogActReader actLogReader;
+    private final WfTaskActReader taskActReader;
     /**
      * 渲染层节点读源开关（T-10 孤立缺口闭环）：与定义期总开关 {@code definition-from-bpmn} 解耦，仅影响
      * {@code /form/render} 与 {@code /form/preview} 的节点配置读取（操作菜单/签字意见/打印设置/意见显示）。
@@ -96,7 +104,10 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
 
     @Override
     public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam, boolean testMode) {
-        WfInstance inst = instanceMapper.selectById(instanceId);
+        WfInstance inst = actLogReader.actRead()
+            ? ActInstanceConverter.fromAct(actProcinstMapper.selectOne(
+                ActInstanceConverter.queryByBusinessId(instanceId)))
+            : instanceMapper.selectById(instanceId);
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
         }
@@ -114,9 +125,16 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         String nodeKey = inst.getCurrentNodeKey();
         WfTask task = null;
         if (taskId != null) {
-            task = taskMapper.selectById(taskId);
-            if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
-                nodeKey = task.getNodeKey();
+            if (actLogReader.actRead()) {
+                task = taskActReader.toWfTaskByBizIdFromAct(taskId);
+                if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
+                    nodeKey = task.getNodeKey();
+                }
+            } else {
+                task = taskMapper.selectById(taskId);
+                if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
+                    nodeKey = task.getNodeKey();
+                }
             }
         }
         // 显式指定节点（测试页直显某节点布局）优先级最高

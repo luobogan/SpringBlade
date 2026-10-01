@@ -11,19 +11,61 @@
 -- ⚠️ 硬约束（§11.1.5）：新增列必须 NULL-able 且带 DEFAULT，
 --    否则 MySQL 严格模式下引擎 INSERT 会因缺列失败，直接导致流程发起失败。
 -- ⚠️ 必须显式 USE blade：jeelowcode 库同样存在 ACT_* 表。
+-- ⚠️ 幂等：加列/加索引经 INFORMATION_SCHEMA 守卫，重复执行 SKIP，不报 duplicate。
 -- =============================================================
 USE blade;
 
--- 1) 加列（INSTANT，秒级；重复执行报 duplicate column 属预期，人工确认即可）
--- 注：MySQL 8 不允许 ALGORITHM=INSTANT 与 LOCK 子句同用（INSTANT 已隐含不加锁）；
---     若环境不支持 INSTANT 会报错，去掉该子句即可（数据量极小，常规 ALTER 同为秒级）。
-ALTER TABLE ACT_HI_PROCINST
-  ADD COLUMN DEF_KEY_ VARCHAR(255) NULL DEFAULT NULL
-  COMMENT '引擎流程定义KEY（ACT_RE_PROCDEF.KEY_）；桥接业务defId与引擎版本组',
-  ALGORITHM=INSTANT;
+DELIMITER $$
+
+-- 幂等加列：仅当列不存在时才 ALTER。
+DROP PROCEDURE IF EXISTS blade_add_col$$
+CREATE PROCEDURE blade_add_col(
+  IN p_tbl VARCHAR(64), IN p_col VARCHAR(64), IN p_def VARCHAR(512))
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = 'blade' AND TABLE_NAME = p_tbl AND COLUMN_NAME = p_col
+  ) THEN
+    SET @sql = CONCAT('ALTER TABLE ', p_tbl, ' ADD COLUMN ', p_col, ' ', p_def, ', ALGORITHM=INSTANT');
+    PREPARE stmt FROM @sql;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+    SELECT CONCAT('ADDED ', p_tbl, '.', p_col) AS result;
+  ELSE
+    SELECT CONCAT('SKIP  ', p_tbl, '.', p_col, ' (exists)') AS result;
+  END IF;
+END$$
+
+-- 幂等加索引：仅当索引不存在时才创建。
+DROP PROCEDURE IF EXISTS blade_add_idx$$
+CREATE PROCEDURE blade_add_idx(
+  IN p_tbl VARCHAR(64), IN p_idx VARCHAR(64), IN p_cols VARCHAR(512))
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = 'blade' AND TABLE_NAME = p_tbl AND INDEX_NAME = p_idx
+  ) THEN
+    SET @sql = CONCAT('ALTER TABLE ', p_tbl, ' ADD INDEX ', p_idx, ' (', p_cols, '), ALGORITHM=INPLACE, LOCK=NONE');
+    PREPARE stmt FROM @sql;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+    SELECT CONCAT('ADDED INDEX ', p_tbl, '.', p_idx) AS result;
+  ELSE
+    SELECT CONCAT('SKIP  INDEX ', p_tbl, '.', p_idx, ' (exists)') AS result;
+  END IF;
+END$$
+
+DELIMITER ;
+
+-- 1) 加列（幂等守卫：列已存在则 SKIP，可重复执行）
+CALL blade_add_col('ACT_HI_PROCINST', 'DEF_KEY_', "VARCHAR(255) NULL DEFAULT NULL COMMENT '引擎流程定义KEY（ACT_RE_PROCDEF.KEY_）；桥接业务defId与引擎版本组'");
 
 -- 2) 索引：多域共用按 TENANT_ID_ 复合（§13.3 修订口径）
-CREATE INDEX IDX_HI_PROC_T_DEFKEY ON ACT_HI_PROCINST(TENANT_ID_, DEF_KEY_);
+CALL blade_add_idx('ACT_HI_PROCINST', 'IDX_HI_PROC_T_DEFKEY', 'TENANT_ID_, DEF_KEY_');
+
+-- 清理临时过程
+DROP PROCEDURE IF EXISTS blade_add_col;
+DROP PROCEDURE IF EXISTS blade_add_idx;
 
 -- 3) 存量回填（幂等：仅补 DEF_KEY_ 为空且有 PROC_DEF_ID_ 的行）
 --    先核对匹配行数，再 UPDATE（防漏回填）
