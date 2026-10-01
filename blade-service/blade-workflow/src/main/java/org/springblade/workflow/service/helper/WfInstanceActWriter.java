@@ -61,16 +61,22 @@ public class WfInstanceActWriter {
             return;
         }
         try {
+            // DEF_KEY_（R1/D6/M1）：冗余引擎 KEY_（= ACT_RE_PROCDEF.KEY_），
+            // 解决「业务 defId ↔ 引擎定义 1:N 版本」无法反查的问题 —— 只有 DEF_ID_ 时，
+            // 拿到引擎 PROC_DEF_ID_ 也无法定位业务定义/版本组。
+            // 由 PROC_DEF_ID_ 派生，故不新增调用方入参；procDefId 为空时写 NULL，不影响主流程。
+            // ⚠️ 测试态部署的 KEY_ 形如 procKey__test，这是引擎侧真实 key，如实记录。
             jdbcTemplate.update(
                 "UPDATE ACT_HI_PROCINST SET BUSINESS_ID_=?, DEF_ID_=?, DATA_ID_=?, FORM_ID_=?, "
                     + "TITLE_=?, IS_TEST_=?, BUSINESS_STATUS_=?, STARTER_=?, CURRENT_NODE_KEY_=?, "
                     + "URGENCY_=?, BUSINESS_ROW_READY_=?, ENGINE_DEPLOY_MATCHED_=?, PARENT_ID_=?, "
-                    + "TEST_DEPLOYMENT_ID_=?, PROC_DEF_ID_=? WHERE ID_=?",
+                    + "TEST_DEPLOYMENT_ID_=?, PROC_DEF_ID_=?, "
+                    + "DEF_KEY_=(SELECT KEY_ FROM ACT_RE_PROCDEF WHERE ID_=?) WHERE ID_=?",
                 inst.getId(), inst.getDefId(), inst.getDataId(), inst.getFormId(),
                 inst.getTitle(), inst.getIsTest(), statusStr(status), inst.getStarter(),
                 inst.getCurrentNodeKey(), inst.getUrgency(), inst.getBusinessRowReady(),
                 inst.getEngineDeploymentMatched(), inst.getParentId(), inst.getTestDeploymentId(),
-                inst.getProcDefId(), engineInstId);
+                inst.getProcDefId(), inst.getProcDefId(), engineInstId);
         } catch (Exception e) {
             log.warn("[WfInstanceActWriter] 发起写回 ACT_HI_PROCINST 失败（双写预热，不影响台账）. engineInstId={}",
                 engineInstId, e);

@@ -54,6 +54,8 @@ import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.workflow.service.helper.WfApprovalLogActReader;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
@@ -122,6 +124,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 定义读源开关（P3-5）：与 rejectManager/task/definition 共用同一 key，默认关；开启后本类节点/出口读取优先 BPMN wf: 扩展，回退 wf_* */
     @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
     private boolean definitionFromBpmn;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
     /** 节点操作组：用于判定会签/依次（{@code wf_node_operator.sign_order}） */
     private final WfNodeOperatorMapper operatorMapper;
     private final NodeActionExecutor nodeActionExecutor;
@@ -1663,7 +1668,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 log.warn("[blade-workflow] 定义读源=BPMN 取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
             }
         }
-        return linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
+        // T-14 退役：主开关开启时禁用 wf_node_link 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
+        }
+        return new ArrayList<>();
     }
 
     /**
@@ -1681,7 +1690,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 log.warn("[blade-workflow] 定义读源=BPMN 取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
             }
         }
-        return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+        }
+        return new ArrayList<>();
     }
 
     /** 开始节点 key（nodeType=0）：定义源=BPMN 时从 nodes 里取，回退 wf_process_node */
@@ -1700,11 +1713,15 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 log.warn("[blade-workflow] 定义读源=BPMN 取开始节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
             }
         }
-        WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeType, 0)
-            .last("LIMIT 1"));
-        return startNode == null ? null : startNode.getNodeKey();
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展返回 null）。
+        if (!retirement.isEnabled()) {
+            WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeType, 0)
+                .last("LIMIT 1"));
+            return startNode == null ? null : startNode.getNodeKey();
+        }
+        return null;
     }
 
     /** 节点（只读收口）：开关开启时读 BPMN wf:node，回退 wf_process_node；高风险 write 路径仍用 {@link #loadNode} */
@@ -1722,10 +1739,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 log.warn("[blade-workflow] 定义读源=BPMN 取节点失败，回退 wf_process_node. defId={}, nodeKey={}, {}", defId, nodeKey, e.getMessage());
             }
         }
-        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展返回 null）。
+        if (!retirement.isEnabled()) {
+            return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+        }
+        return null;
     }
 
     /**

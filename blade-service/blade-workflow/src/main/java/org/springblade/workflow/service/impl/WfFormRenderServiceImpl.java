@@ -27,6 +27,7 @@ import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.exception.WfAccessDeniedException;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfPermService;
@@ -36,6 +37,9 @@ import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
 import org.springblade.workflow.vo.FormRenderVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -76,6 +80,19 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final IWfInstanceService instanceService;
     /** 保存时按 defId 回退表单ID */
     private final WfProcessDefinitionMapper defMapper;
+    /** BPMN 扩展读取（定义读源=BPMN 时取节点 wf:node 扩展，替代 wf_process_node 直读） */
+    private final WfBpmnExtensionReader bpmnReader;
+    /**
+     * 渲染层节点读源开关（T-10 孤立缺口闭环）：与定义期总开关 {@code definition-from-bpmn} 解耦，仅影响
+     * {@code /form/render} 与 {@code /form/preview} 的节点配置读取（操作菜单/签字意见/打印设置/意见显示）。
+     * 开启时读 BPMN {@code wf:node} 扩展；草稿/未部署/缺扩展自动回退 {@code wf_process_node}
+     * （与 nodes/reject 同源，零行为变化）。不影响 /definition/nodes、/definition/links、reject。
+     */
+    @Value("${blade.workflow.render-node-from-bpmn.enabled:false}")
+    private boolean renderNodeFromBpmn;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
 
     @Override
     public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam, boolean testMode) {
@@ -121,10 +138,19 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         vo.setReadonly(!canOperate(task));
 
         // 节点信息 → 运行时消费：操作菜单（可用操作）与签字意见必填
-        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, inst.getDefId())
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
+        // 渲染层读源=BPMN（开关 blade.workflow.render-node-from-bpmn.enabled，与定义期总开关解耦）时读 wf:node 扩展；
+        // 草稿/未部署/缺扩展自动回退 wf_process_node（与 /definition/nodes、reject 同源）。
+        WfProcessNode node = null;
+        if (renderNodeFromBpmn) {
+            node = bpmnReader.node(inst.getDefId(), nodeKey);
+        }
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (node == null && !retirement.isEnabled()) {
+            node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, inst.getDefId())
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+        }
         vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
         fillSignOpinion(vo, node);
         // 节点信息 → 运行时消费：打印内容设置（打印模板页签的「打印内容设置」）
@@ -187,11 +213,20 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         vo.setReadonly(true);
 
         // 节点信息（操作菜单 / 签字意见必填）：依赖定义 + 节点
+        // 渲染层读源=BPMN（开关 blade.workflow.render-node-from-bpmn.enabled，与定义期总开关解耦）时读 wf:node 扩展，
+        // 否则回退 wf_process_node（与 render 同源）。
         if (defId != null && nodeKey != null && !nodeKey.isEmpty()) {
-            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, defId)
-                .eq(WfProcessNode::getNodeKey, nodeKey)
-                .last("LIMIT 1"));
+            WfProcessNode node = null;
+            if (renderNodeFromBpmn) {
+                node = bpmnReader.node(defId, nodeKey);
+            }
+            // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+            if (node == null && !retirement.isEnabled()) {
+                node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                    .eq(WfProcessNode::getDefId, defId)
+                    .eq(WfProcessNode::getNodeKey, nodeKey)
+                    .last("LIMIT 1"));
+            }
             vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
             fillSignOpinion(vo, node);
             vo.setPrintSet(WfNodeSettingsUtil.printSet(node));

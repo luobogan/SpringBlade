@@ -450,7 +450,9 @@ public class WfBpmnExtensionReader {
     }
 
     private UserTask findUserTask(Long defId, String nodeKey) {
-        String procDefId = resolveProcDefId(defId);
+        // 锚定 def 自身的部署（与 nodes/links 一致），草稿/未部署返回 null 让调用方回退 wf_* 表，
+        // 并避免按 procKey 取「最新版本」时把同 procKey 其他定义的模型错串到本 def（跨 def 串数据）。
+        String procDefId = resolveOwnProcDefId(defId);
         if (procDefId == null) {
             return null;
         }

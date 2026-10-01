@@ -13,6 +13,8 @@ import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.util.BpmnExtensionUtil;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -105,6 +107,9 @@ public class WfOperatorResolver {
     @Value("${blade.workflow.operator-from-bpmn.enabled:false}")
     private boolean operatorFromBpmn;
 
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
+
     /**
      * 解析某节点的操作者为办理人ID集合（已去重、已剔除 0/null）。
      *
@@ -133,16 +138,17 @@ public class WfOperatorResolver {
         if (formData == null) {
             formData = Map.of();
         }
-        List<WfNodeOperator> operators;
+        // P3-5：优先读 BPMN wf: 扩展（替代 wf_node_operator 表）；
+        // BPMN 无数据（草稿/缺扩展/缺 operator 子元素）回退 wf_node_operator 表，避免静默降级。
+        // dev 实测踩坑：2026-10-01 草稿定义若按「读源是否就绪」整体切换，会缺失操作者 → 逐节点回退根治。
+        List<WfNodeOperator> operators = List.of();
         if (operatorFromBpmn) {
-            // P3-5：从 BPMN wf: 扩展读取操作者（替代 wf_node_operator 表）
             operators = bpmnReader.operators(defId, nodeKey).stream()
                 .map(this::toNodeOperator)
                 .toList();
-            if (operators.isEmpty()) {
-                return List.of();
-            }
-        } else {
+        }
+        // T-14 退役：主开关开启时禁用 wf_node_operator 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled() && operators.isEmpty()) {
             WfProcessNode node = nodeMapper.selectOne(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
                     .eq(WfProcessNode::getDefId, defId)
@@ -154,9 +160,9 @@ public class WfOperatorResolver {
             operators = operatorMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfNodeOperator>()
                     .eq(WfNodeOperator::getNodeId, node.getId()));
-            if (operators.isEmpty()) {
-                return List.of();
-            }
+        }
+        if (operators.isEmpty()) {
+            return List.of();
         }
         Set<Long> ids = new LinkedHashSet<>();
         for (WfNodeOperator op : operators) {
@@ -276,14 +282,15 @@ public class WfOperatorResolver {
         if (defId == null || nodeKey == null) {
             return List.of();
         }
-        List<WfNodeOperator> operators;
+        // P3-5：优先读 BPMN wf: 扩展（isCoadjutant=1）；BPMN 无数据回退 wf_node_operator 表，避免静默降级。
+        List<WfNodeOperator> operators = List.of();
         if (operatorFromBpmn) {
-            // P3-5：从 BPMN wf: 扩展读取协办/征询意见人（isCoadjutant=1）
             operators = bpmnReader.operators(defId, nodeKey).stream()
                 .filter(e -> "1".equals(e.isCoadjutant))
                 .map(this::toNodeOperator)
                 .toList();
-        } else {
+        }
+        if (operators.isEmpty()) {
             WfProcessNode node = nodeMapper.selectOne(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfProcessNode>()
                     .eq(WfProcessNode::getDefId, defId)

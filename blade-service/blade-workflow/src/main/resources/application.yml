@@ -122,6 +122,53 @@ blade:
       # 锚定 def 自己的部署 proc_def_id：草稿/未部署（procDefId 为空）自动回退 wf_process_node/wf_node_link，
       # 读取异常同样降级；deploy 条件注入/saveBpmn/另存版本/simulate/diff 等内部写路径固定仍读 wf_* 表。
       enabled: true
+    # T-10 孤立缺口闭环：渲染层（/form/render、/form/preview）节点配置读源开关，与上方定义期总开关解耦。
+    # 仅影响 render/preview 的操作菜单/签字意见/打印设置/意见显示读取；不牵动 /definition/nodes、/definition/links、reject。
+    # 开启时读 BPMN wf:node 扩展，草稿/未部署/缺扩展自动回退 wf_process_node（与 nodes/reject 同源）。
+    # 默认 false（零行为变化）；翻转后仅 render/preview 走 BPMN，其余按定义期总开关走。
+    # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（届时需同步）。
+    render-node-from-bpmn:
+      enabled: true
+    # T-14（决策 B · 2026-10-01）：运行期去依赖、表保留——放弃 DROP。
+    # 经全量 Mapper 读写盘点，wf_process_node/link/operator/timeout/field_perm/detail_perm/detail_filter/approval_log
+    # 仍被设计期 store（WfDefinitionServiceImpl）、节点测试（WfTestServiceImpl）、回填桥（WfDefinitionBackfillJob）、
+    # 运行期直读（节点名 tooltip / 多实例判定与集合注入 / NodeActionExecutor）直接主用读写；
+    # 仅闸控「回退分支」不足以 DROP（翻转+DROP 会让 wf_process_node 变空 → 多实例失效、测试/编辑出错）。
+    # 故本期仅做到「运行期读源不再静默回退 wf_*」，wf_* 表作为遗留设计期镜像/测试存储长期保留，不 DROP。
+    # 主开关默认 false（零行为变化、可回滚）：运行期仍允许「BPMN 读到空 → 回退 wf_*」的兼容行为。
+    # 翻转 true 时（可选加固，非退役）：禁用回退分支——BPMN/ACT 读空即按空/报错，不再触碰 wf_* 回退读；
+    #   wf_task/wf_instance 双写、wf_approval_log 合并（mergeMissingFromWf）一并禁用。
+    #   注意：开关只闸控「回退」分支，设计期 store / 节点测试 / 回填桥对 wf_* 的直接读写不受影响（表仍被写）。
+    # 前置（翻转 true 时）：草稿/未部署定义必须先部署再发起（前端保证）。
+    # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（届时需同步）。
+    wf-table-retirement:
+      enabled: false
+    # T-11（P3-5）：定义期读源从 wf_* 表切到 BPMN wf: 扩展。
+    # 前置：① BPMN 已回填/前端已保存对应扩展；② 回归测试通过（WfBpmn*SwitchTest / RoundTripTest）。
+    # 回退：改回 false 并重启即回到 wf_* 读源（扩展只增不删，回退不影响数据）。
+    # 安全护栏（2026-10-01 补）：消费方（WfPermServiceImpl / WfOperatorResolver / WfTimeoutServiceImpl）
+    #   采用「逐节点 BPMN 读到空即回退 wf_* 表」策略——草稿/缺扩展/缺子元素都不会静默降级为零权限/零操作者/零超时。
+    #   findUserTask 已锚定 def 自身部署（resolveOwnProcDefId），杜绝跨 def 串数据
+    #   （dev 实测：草稿定义翻转 perm 曾静默降级为零权限，已根治）。
+    # 2026-10-01 已翻转：dev 实测数据覆盖情况如下 ——
+    #   detail-perm / detail-filter / timeout：dev 库【0 行】数据、BPMN 亦无对应扩展
+    #     ⇒ 翻转后两侧均为空，属零行为变化（先行翻转，为后续有数据时铺路）；
+    #   perm（字段权限）：dev 有 96 行 wf_node_field_perm、3 个定义带 wf:fieldPerm
+    #     ⇒ 翻转后由护栏保证「草稿定义回退 wf_node_field_perm、已部署完整定义读 BPMN」，
+    #        不再出现无差别降级为零的问题（已实地比对：草稿 2104053607105081345 回退 DB 5/4 条、
+    #        已部署 2104056294928363521 走 BPMN 值一致）；
+    #   operator（节点操作者）：backfill 已回填 wf:operator 且带 reconcile 对账（BPMN 与 DB 等价），
+    #     ⇒ 翻转后流转期 WfOperatorResolver 读 BPMN，草稿/缺扩展回退 wf_node_operator。
+    detail-perm-from-bpmn:
+      enabled: true
+    detail-filter-from-bpmn:
+      enabled: true
+    timeout-from-bpmn:
+      enabled: true
+    perm-from-bpmn:
+      enabled: true
+    operator-from-bpmn:
+      enabled: true
   data-scope:
     mapper-exclude:
       - FlowMapper

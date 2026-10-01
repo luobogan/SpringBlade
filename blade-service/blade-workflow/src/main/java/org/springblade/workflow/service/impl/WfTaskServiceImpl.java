@@ -42,6 +42,8 @@ import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.reject.WfRejectManager;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springblade.workflow.vo.RejectCandidateVO;
 import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.TaskVO;
@@ -136,6 +138,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
      */
     @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
     private boolean definitionFromBpmn;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
 
     /**
      * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
@@ -867,10 +872,14 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     + "defId={}, nodeKey={}, {}", defId, nodeKey, e.getMessage());
             }
         }
-        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展返回 null）。
+        if (!retirement.isEnabled()) {
+            return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .eq(WfProcessNode::getNodeKey, nodeKey)
+                .last("LIMIT 1"));
+        }
+        return null;
     }
 
     /**

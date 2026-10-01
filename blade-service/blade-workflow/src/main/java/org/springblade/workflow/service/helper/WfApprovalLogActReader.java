@@ -3,6 +3,8 @@ package org.springblade.workflow.service.helper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.workflow.entity.WfApprovalLog;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -37,6 +39,9 @@ public class WfApprovalLogActReader {
     /** 实例/日志读源：wf=遗留 wf_*（默认，零行为变化）；act=原生 ACT_HI_*（去 wf_ 表） */
     @Value("${blade.workflow.instance-read-source:wf}")
     private String instanceReadSource;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -75,7 +80,8 @@ public class WfApprovalLogActReader {
             return l;
         }, engineInstId);
         List<WfApprovalLog> list = rows.stream().filter(Objects::nonNull).collect(Collectors.toList());
-        if (wfInstId != null) {
+        // T-14 退役：主开关开启时禁用 wf_approval_log 兜底合并（读源=act 为唯一源）。
+        if (wfInstId != null && !retirement.isEnabled()) {
             mergeMissingFromWf(list, wfInstId);
         }
         list.sort(Comparator.comparing(WfApprovalLog::getOperateTime,

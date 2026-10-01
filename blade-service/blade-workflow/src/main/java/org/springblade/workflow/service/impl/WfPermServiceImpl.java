@@ -19,6 +19,8 @@ import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,34 +65,46 @@ public class WfPermServiceImpl implements IWfPermService {
     @Value("${blade.workflow.detail-filter-from-bpmn.enabled:false}")
     private boolean detailFilterFromBpmn;
 
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
+
     @Override
     public List<FieldPermVO> getFieldPerm(Long defId, String nodeKey) {
+        // 优先读 BPMN；BPMN 无数据（草稿/缺扩展/缺 fieldPerm 子元素）回退 wf_node_field_perm 表，避免静默降级。
+        // dev 实测踩坑：2026-10-01 草稿定义翻转 perm 后字段权限被降级为空，逐节点回退可根治。
         if (permFromBpmn) {
-            return fieldPermFromBpmn(defId, nodeKey);
-        }
-        List<WfNodeFieldPerm> list = fieldPermMapper.selectList(
-            Wrappers.<WfNodeFieldPerm>lambdaQuery()
-                .eq(WfNodeFieldPerm::getDefId, defId)
-                .eq(WfNodeFieldPerm::getNodeKey, nodeKey));
-        List<FieldPermVO> result = new ArrayList<>(list.size());
-        for (WfNodeFieldPerm p : list) {
-            FieldPermVO vo = new FieldPermVO();
-            vo.setScope(p.getScope());
-            vo.setFieldName(p.getFieldName());
-            if (p.getIsVisible() == null && p.getIsEditable() == null && p.getIsRequired() == null) {
-                // 存量行（V2026.09.21_001 迁移前写入的数据）：按 perm 现推三维度，
-                // 读取行为与升级前完全一致，避免历史流程配置「变脸」。
-                vo.applyPerm(p.getPerm());
-            } else {
-                vo.setVisible(isOn(p.getIsVisible()));
-                vo.setEditable(isOn(p.getIsEditable()));
-                vo.setRequired(isOn(p.getIsRequired()));
-                // perm 兼容列与三维度保持派生一致（老消费方/巡检仍可读）
-                vo.setPerm(vo.derivePerm());
+            List<FieldPermVO> bpmn = fieldPermFromBpmn(defId, nodeKey);
+            if (!bpmn.isEmpty()) {
+                return bpmn;
             }
-            result.add(vo);
         }
-        return result;
+        // T-14 退役：主开关开启时禁用 wf_node_field_perm 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            List<WfNodeFieldPerm> list = fieldPermMapper.selectList(
+                Wrappers.<WfNodeFieldPerm>lambdaQuery()
+                    .eq(WfNodeFieldPerm::getDefId, defId)
+                    .eq(WfNodeFieldPerm::getNodeKey, nodeKey));
+            List<FieldPermVO> result = new ArrayList<>(list.size());
+            for (WfNodeFieldPerm p : list) {
+                FieldPermVO vo = new FieldPermVO();
+                vo.setScope(p.getScope());
+                vo.setFieldName(p.getFieldName());
+                if (p.getIsVisible() == null && p.getIsEditable() == null && p.getIsRequired() == null) {
+                    // 存量行（V2026.09.21_001 迁移前写入的数据）：按 perm 现推三维度，
+                    // 读取行为与升级前完全一致，避免历史流程配置「变脸」。
+                    vo.applyPerm(p.getPerm());
+                } else {
+                    vo.setVisible(isOn(p.getIsVisible()));
+                    vo.setEditable(isOn(p.getIsEditable()));
+                    vo.setRequired(isOn(p.getIsRequired()));
+                    // perm 兼容列与三维度保持派生一致（老消费方/巡检仍可读）
+                    vo.setPerm(vo.derivePerm());
+                }
+                result.add(vo);
+            }
+            return result;
+        }
+        return new ArrayList<>();
     }
 
     /**
@@ -182,29 +196,37 @@ public class WfPermServiceImpl implements IWfPermService {
 
     @Override
     public List<DetailPermVO> getDetailPerm(Long defId, String nodeKey) {
+        // 优先读 BPMN；无数据回退 wf_node_detail_perm 表（避免静默降级）。
         if (detailPermFromBpmn) {
-            return WfBpmnExtensionReader.toDetailPermVOs(bpmnReader.detailTablePerms(defId, nodeKey));
+            List<DetailPermVO> bpmn = WfBpmnExtensionReader.toDetailPermVOs(bpmnReader.detailTablePerms(defId, nodeKey));
+            if (!bpmn.isEmpty()) {
+                return bpmn;
+            }
         }
-        List<WfNodeDetailPerm> list = detailPermMapper.selectList(
-            Wrappers.<WfNodeDetailPerm>lambdaQuery()
-                .eq(WfNodeDetailPerm::getDefId, defId)
-                .eq(WfNodeDetailPerm::getNodeKey, nodeKey));
-        List<DetailPermVO> result = new ArrayList<>(list.size());
-        for (WfNodeDetailPerm p : list) {
-            DetailPermVO vo = new DetailPermVO();
-            vo.setDtIndex(p.getDtIndex());
-            vo.setCanAdd(p.getCanAdd());
-            vo.setCanEdit(p.getCanEdit());
-            vo.setCanDelete(p.getCanDelete());
-            vo.setHideEmpty(p.getHideEmpty());
-            vo.setDefaultRows(p.getDefaultRows());
-            vo.setRequired(p.getRequired());
-            vo.setPrintSerial(p.getPrintSerial());
-            vo.setAllowScroll(p.getAllowScroll());
-            vo.setOpenPaging(p.getOpenPaging());
-            result.add(vo);
+        // T-14 退役：主开关开启时禁用 wf_node_detail_perm 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            List<WfNodeDetailPerm> list = detailPermMapper.selectList(
+                Wrappers.<WfNodeDetailPerm>lambdaQuery()
+                    .eq(WfNodeDetailPerm::getDefId, defId)
+                    .eq(WfNodeDetailPerm::getNodeKey, nodeKey));
+            List<DetailPermVO> result = new ArrayList<>(list.size());
+            for (WfNodeDetailPerm p : list) {
+                DetailPermVO vo = new DetailPermVO();
+                vo.setDtIndex(p.getDtIndex());
+                vo.setCanAdd(p.getCanAdd());
+                vo.setCanEdit(p.getCanEdit());
+                vo.setCanDelete(p.getCanDelete());
+                vo.setHideEmpty(p.getHideEmpty());
+                vo.setDefaultRows(p.getDefaultRows());
+                vo.setRequired(p.getRequired());
+                vo.setPrintSerial(p.getPrintSerial());
+                vo.setAllowScroll(p.getAllowScroll());
+                vo.setOpenPaging(p.getOpenPaging());
+                result.add(vo);
+            }
+            return result;
         }
-        return result;
+        return new ArrayList<>();
     }
 
     @Override
@@ -240,26 +262,34 @@ public class WfPermServiceImpl implements IWfPermService {
 
     @Override
     public List<DetailFilterVO> getDetailFilter(Long defId, String nodeKey, Integer modeType) {
+        // 优先读 BPMN；无数据回退 wf_node_detail_filter 表（避免静默降级）。
         if (detailFilterFromBpmn) {
-            return WfBpmnExtensionReader.toDetailFilterVOs(modeType, bpmnReader.detailFilters(defId, nodeKey));
+            List<DetailFilterVO> bpmn = WfBpmnExtensionReader.toDetailFilterVOs(modeType, bpmnReader.detailFilters(defId, nodeKey));
+            if (!bpmn.isEmpty()) {
+                return bpmn;
+            }
         }
-        List<WfNodeDetailFilter> list = detailFilterMapper.selectList(
-            Wrappers.<WfNodeDetailFilter>lambdaQuery()
-                .eq(WfNodeDetailFilter::getDefId, defId)
-                .eq(WfNodeDetailFilter::getNodeKey, nodeKey)
-                .eq(modeType != null, WfNodeDetailFilter::getModeType, modeType)
-                .orderByAsc(WfNodeDetailFilter::getDtIndex, WfNodeDetailFilter::getId));
-        List<DetailFilterVO> result = new ArrayList<>(list.size());
-        for (WfNodeDetailFilter p : list) {
-            DetailFilterVO vo = new DetailFilterVO();
-            vo.setDtIndex(p.getDtIndex());
-            vo.setFieldName(p.getFieldName());
-            vo.setCompareType(p.getCompareType());
-            vo.setCompareValue(p.getCompareValue());
-            vo.setIsRequired(p.getIsRequired());
-            result.add(vo);
+        // T-14 退役：主开关开启时禁用 wf_node_detail_filter 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            List<WfNodeDetailFilter> list = detailFilterMapper.selectList(
+                Wrappers.<WfNodeDetailFilter>lambdaQuery()
+                    .eq(WfNodeDetailFilter::getDefId, defId)
+                    .eq(WfNodeDetailFilter::getNodeKey, nodeKey)
+                    .eq(modeType != null, WfNodeDetailFilter::getModeType, modeType)
+                    .orderByAsc(WfNodeDetailFilter::getDtIndex, WfNodeDetailFilter::getId));
+            List<DetailFilterVO> result = new ArrayList<>(list.size());
+            for (WfNodeDetailFilter p : list) {
+                DetailFilterVO vo = new DetailFilterVO();
+                vo.setDtIndex(p.getDtIndex());
+                vo.setFieldName(p.getFieldName());
+                vo.setCompareType(p.getCompareType());
+                vo.setCompareValue(p.getCompareValue());
+                vo.setIsRequired(p.getIsRequired());
+                result.add(vo);
+            }
+            return result;
         }
-        return result;
+        return new ArrayList<>();
     }
 
     @Override

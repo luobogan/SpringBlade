@@ -64,6 +64,8 @@ import org.springblade.workflow.utils.WfConditionUtil;
 import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -167,6 +169,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
      */
     @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
     private boolean definitionFromBpmn;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
 
     /** 用户中心：模拟日志按用户ID换真实姓名（与「退回候选」展示同源） */
     private final IUserClient userClient;
@@ -311,7 +316,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 log.warn("[blade-workflow] 定义读源=BPMN 读取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
             }
         }
-        return nodes(defId);
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return nodes(defId);
+        }
+        return new ArrayList<>();
     }
 
     @Override
@@ -1532,7 +1541,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 log.warn("[blade-workflow] 定义读源=BPMN 读取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
             }
         }
-        return links(defId);
+        // T-14 退役：主开关开启时禁用 wf_node_link 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return links(defId);
+        }
+        return new ArrayList<>();
     }
 
     @Override

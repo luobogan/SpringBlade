@@ -13,7 +13,9 @@ import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.IProcessService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springblade.workflow.config.WfRetirementProperties;
 
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -81,6 +83,9 @@ public class WfWriteHelper {
      */
     @Value("${blade.workflow.approval-log-write.enabled:true}")
     private boolean approvalLogWriteEnabled;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
 
     private static final ObjectMapper COMMENT_MAPPER = new ObjectMapper();
 
@@ -278,7 +283,8 @@ public class WfWriteHelper {
         }
         // P6 停写策略：默认(开关开)仍双写 wf_approval_log；开关关时仅在 ACT 同步失败
         // （归档/挂起等 AddCommentCmd 硬校验场景）保留 wf 行作读源=act 的兜底填充，避免意见丢失。
-        if (approvalLogWriteEnabled || !actOk) {
+        // T-14 退役：主开关开启时彻底不写 wf_approval_log（读源=act 为唯一源，合并已禁用）。
+        if (!retirement.isEnabled() && (approvalLogWriteEnabled || !actOk)) {
             logMapper.insert(log);
         }
     }

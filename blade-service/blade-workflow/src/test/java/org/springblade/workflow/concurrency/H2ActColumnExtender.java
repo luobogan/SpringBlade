@@ -35,7 +35,9 @@ public class H2ActColumnExtender {
 			{"ENGINE_DEPLOY_MATCHED_", "INT"},
 			{"PARENT_ID_", "VARCHAR(64)"},
 			{"TEST_DEPLOYMENT_ID_", "VARCHAR(64)"},
-			{"REQUEST_ID_BOUND_", "INT"}
+			{"REQUEST_ID_BOUND_", "INT"},
+			// R1/D6/M1 桥接列：引擎 KEY_（= ACT_RE_PROCDEF.KEY_），与 act_add_def_key_bridge.sql 对齐
+			{"DEF_KEY_", "VARCHAR(255)"}
 		};
 		for (String[] c : cols) {
 			try {

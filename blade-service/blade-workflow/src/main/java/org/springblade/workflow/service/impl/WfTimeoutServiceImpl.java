@@ -20,6 +20,8 @@ import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.service.IWfTimeoutService;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.config.WfRetirementProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -59,19 +61,30 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
     @Value("${blade.workflow.timeout-from-bpmn.enabled:false}")
     private boolean timeoutFromBpmn;
 
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
+
     @Override
     public List<WfNodeTimeout> listEnabled(Long defId, String nodeKey) {
         if (defId == null || nodeKey == null) {
             return new ArrayList<>();
         }
         if (timeoutFromBpmn) {
-            return timeoutsFromBpmn(defId, nodeKey);
+            // 优先读 BPMN；BPMN 无数据（草稿/缺扩展/缺 timeout 子元素）回退 wf_node_timeout 表，避免静默降级。
+            List<WfNodeTimeout> bpmn = timeoutsFromBpmn(defId, nodeKey);
+            if (!bpmn.isEmpty()) {
+                return bpmn;
+            }
         }
-        return timeoutMapper.selectList(Wrappers.<WfNodeTimeout>lambdaQuery()
-            .eq(WfNodeTimeout::getDefId, defId)
-            .eq(WfNodeTimeout::getNodeKey, nodeKey)
-            .eq(WfNodeTimeout::getEnabled, 1)
-            .orderByAsc(WfNodeTimeout::getSeq));
+        // T-14 退役：主开关开启时禁用 wf_node_timeout 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return timeoutMapper.selectList(Wrappers.<WfNodeTimeout>lambdaQuery()
+                .eq(WfNodeTimeout::getDefId, defId)
+                .eq(WfNodeTimeout::getNodeKey, nodeKey)
+                .eq(WfNodeTimeout::getEnabled, 1)
+                .orderByAsc(WfNodeTimeout::getSeq));
+        }
+        return new ArrayList<>();
     }
 
     /**

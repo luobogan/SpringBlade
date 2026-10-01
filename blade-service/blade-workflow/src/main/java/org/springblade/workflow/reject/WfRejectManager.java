@@ -9,7 +9,9 @@ import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springblade.workflow.config.WfRetirementProperties;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -47,6 +49,9 @@ public class WfRejectManager {
     /** 定义读源开关：三个消费方（任务/定义/退回）共用同一配置 key，默认关 */
     @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
     private boolean definitionFromBpmn;
+
+    @Autowired
+    private WfRetirementProperties retirement = new WfRetirementProperties();
 
     /**
      * 计算当前节点可退回的目标节点集合（不含当前节点）——读源收口入口。
@@ -178,9 +183,13 @@ public class WfRejectManager {
                 log.warn("[blade-workflow] 定义读源=BPMN 读取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
             }
         }
-        return linkMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
-            .<WfNodeLink>lambdaQuery()
-            .eq(WfNodeLink::getDefId, defId));
+        // T-14 退役：主开关开启时禁用 wf_node_link 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return linkMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<WfNodeLink>lambdaQuery()
+                .eq(WfNodeLink::getDefId, defId));
+        }
+        return new ArrayList<>();
     }
 
     /** 节点配置：定义源=BPMN 时读引擎部署模型（wf:node），空/异常回退 wf_process_node */
@@ -196,9 +205,13 @@ public class WfRejectManager {
                 log.warn("[blade-workflow] 定义读源=BPMN 读取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
             }
         }
-        return nodeMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
-            .<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId));
+        // T-14 退役：主开关开启时禁用 wf_process_node 回退读（BPMN 为唯一源；草稿/缺扩展按空返回）。
+        if (!retirement.isEnabled()) {
+            return nodeMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId));
+        }
+        return new ArrayList<>();
     }
 
 }
