@@ -27,4 +27,8 @@ public class BpmnSaveDTO implements Serializable {
     @Schema(description = "bpmn-js 导出的 BPMN 2.0 XML")
     private String bpmnXml;
 
+    @Schema(description = "草稿修订号基线（D15/R11 乐观锁）：客户端上次读取/保存时的 draftRevision；"
+        + "NULL = 不做并发校验（兼容旧前端/脚本调用）")
+    private Long baseRevision;
+
 }

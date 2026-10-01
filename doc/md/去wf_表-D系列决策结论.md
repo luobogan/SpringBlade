@@ -14,7 +14,7 @@
 | D5 | 各行业共用模板 vs 独立定义 | ✅ 各租户/行业**独立定义**；`KEY_` 按 `tenantId:bizKey` 命名空间 | 已拍板 |
 | D6 | 是否新增 `DEF_KEY_` 桥接 | ✅ 新增 `ACT_HI_PROCINST.DEF_KEY_`（可空+默认） | 已落地 |
 | D7 | 存量会签明细迁移 | ✅ 放弃 1:1 明细迁移，仅迁实例级；明细留**只读归档表**（非 `wf_` 命名，如 `wf_countersign_archive`） | 已拍板 |
-| D8 | `ACT_HI_COMMENT` 租户列 | ✅ **新增 `TENANT_ID_` 列**（支撑"按租户横扫审批意见"高频场景） | 已拍板，待实施 |
+| D8 | `ACT_HI_COMMENT` 租户列 | ✅ **新增 `TENANT_ID_` 列**（支撑"按租户横扫审批意见"高频场景） | 已实施（2026-10-01） |
 | D9 | `WfTimeoutJob` 多副本治理 | ✅ MySQL `GET_LOCK` 选主 | 已落地 |
 | D10 | 接口筛选能力盘点 | ✅ 已逐接口盘点（见 T-10 交付） | 已落地 |
 | D11 | 启用 Flowable 事件日志作审计 | ✅ **暂不启用** `act_evt_log`；审计 = `ACT_HI_COMMENT` + 业务日志 | 已拍板 |
@@ -85,8 +85,11 @@
 
 | 来源 | 行动 | 优先级 |
 |---|---|---|
-| D8 | `ACT_HI_COMMENT` 加列 DDL + 回填 + 写侧落租户 + 回归 V22 | P1 |
-| D14 | F-T1 前端 moddle 交付（关键路径）→ F-T2~F-T6 全量改造 | P1 |
-| D15 | 保存链路收敛 `saveBpmn` + 草稿乐观锁（配合 F-T5/F-T6） | P2 |
+| D8 | `ACT_HI_COMMENT` 加列 DDL + 回填 + 写侧落租户 + 回归 V22 | ✅ **已完成（2026-10-01）**：`act_add_comment_tenant.sql` 执行成功（存量 234 条全部回填，missing=0，V22 mismatch=0，`FORCE INDEX` 确认 `IDX_HI_COMMENT_TENANT` 计划有效 type=ref 无 filesort）；写侧 `WfCommentTenantWriter`（`ProcessServiceImpl.addComment` 唯一写入口接线，ObjectProvider 可选依赖兼容精简测试上下文）+ 开关 `blade.workflow.comment-tenant-write.enabled=true` + 单测 `WfCommentTenantWriterTest`（5 场景全绿）；全模块 104 用例 103 通过（1 失败为存量 `WfCompApprovalBpmnReproTest` BPMN DI `strokeWidth` 校验问题，与 D8 无关） |
+| D14 | F-T1 前端 moddle 交付（关键路径）→ F-T2~F-T6 全量改造 | ✅ **F-T1 已交付（2026-10-01）**：`wfModdle.json` 与后端 `BpmnExtensionUtil` 冻结契约逐字段对账 PASS（15 类型全量，含 `detailTablePerm`/`foldedLink`/`viaGatewayKey`/P3-5 三维度；`detailFilter` 修正为定稿契约；全类型补 `superClass: ["Element"]`）；`bpmnExtension.ts` 共享读写层同步对齐，并修复 `extJson`/`extraOperations` 误经 extensionElements 查找导致恒取不到的静默丢失 bug；新增折叠连线 `getWfFoldedLinks`/`setWfFoldedLinks`。F-T2~F-T6 面板改造待做 |
+| D15 | 保存链路收敛 `saveBpmn` + 草稿乐观锁（配合 F-T5/F-T6） | ✅ **已完成（2026-10-01）**：① 收敛核实——细粒度写接口（updateNode/createLink/updateLink/configOperator/saveFieldPerm/saveDetailPerm/saveDetailFilter/saveNodeTestStatus/syncOperatorToNodes）前端已**零调用**且全部标 `@deprecated 路线B`，保存主路径 = 画布自动保存（commandStack.changed → saveBpmn）；② 乐观锁——`wf_process_definition` 加 `draft_revision BIGINT NOT NULL DEFAULT 0`（dev 已执行，26 行存量全部 0），`saveBpmn(defId, bpmnXml, baseRevision)` 前置快速失败 + 文末**原子条件递增 gate**（`WHERE draft_revision = base`，不命中抛异常整体回滚，竞态由 MySQL 行锁串行化兜底；`baseRevision=NULL` 兼容旧调用仅无条件递增），前端 `BpmnDesigner.handleSave` 懒加载修订号、成功本地 +1、**冲突阻断后续自动保存**防覆盖他人修改；后端 103 测试全绿，前端 Lints 零诊断。**dev 实测通过（2026-10-01，API 全序列 10/10）**：rev0=0 保存成功→rev1=1；旧基线保存被拒（提示「定义已被他人修改（草稿修订 0 → 1），请刷新页面后重试」）；冲突后修订号不变（事务回滚验证）；最新基线保存成功；无基线兼容调用成功且递增；`detail-filter` 读路径 200 可达 |
 | D5 | `KEY_` 命名空间规范落地（部署侧） | P2 |
 | D7 | 会签明细归档表设计与存量归档脚本（P4 迁移启动时） | P3 |
+| F-T6（部分） | **字段权限三维度 + 明细筛选接线（2026-10-01）**：① `NodeDetail` 保存 `wf:fieldPerm` 补写 P3-5 三维度（visible/editable/required，权威值此前被压缩成 perm 派生列丢失），读取三维度齐备时优先于 perm；② `FormContentDesignModal` 明细筛选双写 `wf:detailFilter`（modeType 1=显示 2=打印，与后端 `WfPermController` 口径一致），extJson 侧留 `detailFilterSynced` 迁移标记，旧数据回退无感升级；③ `detailTablePerm` 共享层已透传（前端暂无编辑 UI，后端回填数据可无损往返），UI 待表单设计页批次。**UI 读回闭环已于 2026-10-01 Playwright 实测打通**：保存→BPMN 落 `wf:detailFilter`（dtIndex=1, fieldName=amount, compareValue=999）→reload 重拉→重开弹窗读回无误，且重开不再破坏服务端数据（此前因下方 moddle 根因 bug 表现为「读回为空 + 误覆盖」，已随该 bug 修复一并解决） | 已完成（①②，③ UI 待做） |
+| **BUG-根因（2026-10-01，P0）** | **`wfModdle.json` 类型名全小写导致 `importXML` 丢弃全部 `wf:*` 扩展**：bpmn-moddle 的解析器按 XML 标签 `wf:node` 推导类型时会对首字母大写（`wf:Node`），而 `wfModdle.json` 把 15 个类型名全写成小写（`node`/`link`/`operator`/`detailFilter`…）并配 `tagAlias:"lowerCase"`，致使 `importXML` 报 `unknown type <wf:Node>`、把整段 `wf:*` 扩展静默丢弃——表现为「画布重加载后节点配置（操作者/字段权限/明细筛选/超时/自定义操作…）全部读空」，且 `FormContentDesignModal` 打开时把空读数写回 → 破坏服务端 BPMN（与路线 B「BPMN 为唯一真相源」直接冲突）。**修复**：① 15 个类型名首字母大写（`Node`/`Link`/`ProcessMeta`/`FoldedLink`/`Operator`/`FieldPerm`/`DetailPerm`/`DetailTablePerm`/`DetailFilter`/`Timeout`/`CustomAction`/`Operation`/`Right`/`ExtJson`/`ExtraOperations`），同步把属性 `type` 引用一并大写；② `moddle.create('wf:xxx')` 调用同步改大写标签（`moddle.create` 不解析 tagAlias，须用类型名）；③ `bpmnExtension.isWf` 改为 `$type` 大小写不敏感。写路径（`moddle.create`）与读路径（`importXML`）现已统一，`detailFilter` 读写闭环实测通过。**教训**：bpmn-moddle 自定义扩展类型名必须首字母大写（对齐 camunda 约定），否则 import 静默丢扩展、且会在保存时反向破坏数据 | 已修复 |
+| F-T8 | **版本对比扩展差异（2026-10-01）**：后端 `diff()` 数据源本已随 `definition-from-bpmn` 读 BPMN 扩展，但比较范围窄；本轮扩展——节点变更判定 + 操作者构成摘要（`opType#objId@groupNo` 升序串，经 `nodeOperators` 读取）、extJson（键序/空白归一化后比较）、mergeType/passNum/allowReject/allowForward/autoApprove；出口 + viaGatewayKey/extraOperations；`VersionDiffVO` 增 `sourceOperators/targetOperators`、`sourceIsMustPass/targetIsMustPass`、`sourceViaGatewayKey/targetViaGatewayKey`；前端 `VersionDiffModal` 展示操作者数量变化与必经/折叠网关标记。后端 103 测试全绿 | 已完成 |

@@ -103,8 +103,14 @@ public interface IWfDefinitionService {
      * 保存 BPMN 2.0 定义（bpmn-js 画布产出）
      *
      * <p>持久化 XML，并解析其中的 userTask 重建流程节点，以 BPMN process id 校正 procKey。</p>
+     *
+     * @param defId        流程定义ID
+     * @param bpmnXml      BPMN XML（base64 或原文）
+     * @param baseRevision 草稿修订号基线（D15/R11 乐观锁）：与当前 draftRevision 比对，
+     *                     不一致抛 {@code ServiceException} 提示刷新；NULL = 不校验（兼容旧调用）
+     * @return defId
      */
-    Long saveBpmn(Long defId, String bpmnXml);
+    Long saveBpmn(Long defId, String bpmnXml, Long baseRevision);
 
     /**
      * 获取已保存的 BPMN 2.0 定义 XML

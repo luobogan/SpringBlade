@@ -93,6 +93,14 @@ blade:
     #   预发/生产回退只需改回 true 即恢复双写。
     approval-log-write:
       enabled: false
+    comment-tenant-write:
+      # D8（2026-10-01 拍板）：审批意见写侧落租户 —— 意见写入 ACT_HI_COMMENT 后，
+      # 由 WfCommentTenantWriter 从 ACT_HI_PROCINST.TENANT_ID_ 反查回填 TENANT_ID_ 列，
+      # 支撑「按租户横扫审批意见」不再 JOIN 实例表（既有按 PROC_INST_ID_ 的查询不受影响）。
+      # 前置：先执行 doc/sql/migration/act_add_comment_tenant.sql（加列 + 索引 + 幂等回填）；
+      #       列未建时回填失败被兜底吞掉（debug 日志），由脚本幂等回填补齐。
+      # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（届时需同步）。
+      enabled: true
     engine-multi-instance:
       # 会签/或签/依次下沉引擎多实例总开关（去 wf_ 表：让「1 引擎任务 = 1 人」，解锁待办/已办读源=act）。
       # 前置条件（代码均已实现）：① 部署期注入 multiInstanceLoopCharacteristics；

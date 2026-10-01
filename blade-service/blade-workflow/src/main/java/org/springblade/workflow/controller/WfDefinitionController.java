@@ -115,7 +115,7 @@ public class WfDefinitionController {
     @PutMapping("/{id}/bpmn")
     @Operation(summary = "保存 BPMN（画布产出）", description = "持久化 bpmn-js 画布 XML 并解析节点、出口")
     public R<String> saveBpmn(@PathVariable("id") Long id, @RequestBody BpmnSaveDTO body) {
-        return R.data(String.valueOf(definitionService.saveBpmn(id, body.getBpmnXml())), "保存成功");
+        return R.data(String.valueOf(definitionService.saveBpmn(id, body.getBpmnXml(), body.getBaseRevision())), "保存成功");
     }
 
     @PostMapping("/import")

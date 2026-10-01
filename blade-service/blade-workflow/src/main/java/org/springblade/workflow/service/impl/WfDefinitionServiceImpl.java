@@ -464,10 +464,17 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Long saveBpmn(Long defId, String bpmnXml) {
+    public Long saveBpmn(Long defId, String bpmnXml, Long baseRevision) {
         WfProcessDefinition def = defMapper.selectById(defId);
         if (def == null) {
             throw new ServiceException("流程定义不存在");
+        }
+        // D15/R11 乐观锁·前置快速失败：在解析 BPMN 之前先比修订号，冲突立即提示刷新（省解析开销）。
+        // 原子 gate 在文末条件 UPDATE（check-then-act 竞态由 MySQL 行锁串行化兜底），失败整体回滚。
+        if (baseRevision != null && def.getDraftRevision() != null
+            && !baseRevision.equals(def.getDraftRevision())) {
+            throw new ServiceException("定义已被他人修改（草稿修订 " + baseRevision + " → "
+                + def.getDraftRevision() + "），请刷新页面后重试");
         }
         if (bpmnXml == null || bpmnXml.isBlank()) {
             throw new ServiceException("BPMN 内容不能为空");
@@ -538,6 +545,24 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         def.setBpmnXml(xmlInput);
         defMapper.updateById(def);
+
+        // D15/R11 乐观锁·原子 gate：条件递增草稿修订号（check-then-act 残余竞态由
+        // MySQL 行锁把并发同 key 的条件 UPDATE 串行化兜底：另一请求先递增后，本请求
+        // 的 WHERE 不再命中 → rows=0 → 抛异常回滚本事务，XML 覆盖一并撤销）。
+        // baseRevision 为 NULL（兼容旧前端/脚本）时无条件递增、不校验。
+        if (baseRevision == null) {
+            defMapper.update(null, Wrappers.<WfProcessDefinition>lambdaUpdate()
+                .eq(WfProcessDefinition::getId, defId)
+                .setSql("draft_revision = COALESCE(draft_revision, 0) + 1"));
+        } else {
+            int rows = defMapper.update(null, Wrappers.<WfProcessDefinition>lambdaUpdate()
+                .eq(WfProcessDefinition::getId, defId)
+                .eq(WfProcessDefinition::getDraftRevision, baseRevision)
+                .setSql("draft_revision = draft_revision + 1"));
+            if (rows == 0) {
+                throw new ServiceException("定义已被他人修改，请刷新页面后重试");
+            }
+        }
 
         // 解析画布元素 → 按 nodeKey upsert 节点。
         // 关键：不能整体 delete+insert，否则节点信息（类型/审批方式/扩展/操作者）会被清空。
@@ -805,7 +830,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             throw new ServiceException("流程定义不存在");
         }
         // 1) 复用 saveBpmn：落库 BPMN、按节点/出口 upsert（节点信息 / 出口信息），procKey 校正
-        saveBpmn(defId, bpmnXml);
+        //    baseRevision=null：导入属系统内部写，不做草稿乐观锁校验
+        saveBpmn(defId, bpmnXml, null);
         // 2) 重新读取已解码落库的 XML，解析 wf: 扩展并填充三张表
         WfProcessDefinition saved = defMapper.selectById(defId);
         String xml = saved.getBpmnXml();
@@ -1374,7 +1400,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         vo.setTargetDefId(t.getId());
         vo.setTargetVersion(t.getVersion());
 
-        // 节点对比：按 nodeKey 匹配
+        // 节点对比：按 nodeKey 匹配；操作者摘要随比对（F-T8 扩展语义范围）
         Map<String, WfProcessNode> sn = new LinkedHashMap<>();
         for (WfProcessNode n : nodes(defId)) {
             sn.putIfAbsent(n.getNodeKey(), n);
@@ -1383,17 +1409,19 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         for (WfProcessNode n : nodes(targetId)) {
             tn.putIfAbsent(n.getNodeKey(), n);
         }
+        Map<String, String> sOps = operatorSummaries(defId, sn.keySet());
+        Map<String, String> tOps = operatorSummaries(targetId, tn.keySet());
         for (Map.Entry<String, WfProcessNode> e : sn.entrySet()) {
             WfProcessNode ts = tn.get(e.getKey());
             if (ts == null) {
-                vo.getRemovedNodes().add(toNodeDiff(e.getValue(), null));
-            } else if (nodeChanged(e.getValue(), ts)) {
-                vo.getChangedNodes().add(toNodeDiff(e.getValue(), ts));
+                vo.getRemovedNodes().add(toNodeDiff(e.getValue(), null, sOps.get(e.getKey()), null));
+            } else if (nodeChanged(e.getValue(), ts, sOps.get(e.getKey()), tOps.get(e.getKey()))) {
+                vo.getChangedNodes().add(toNodeDiff(e.getValue(), ts, sOps.get(e.getKey()), tOps.get(e.getKey())));
             }
         }
         for (Map.Entry<String, WfProcessNode> e : tn.entrySet()) {
             if (!sn.containsKey(e.getKey())) {
-                vo.getAddedNodes().add(toNodeDiff(null, e.getValue()));
+                vo.getAddedNodes().add(toNodeDiff(null, e.getValue(), null, tOps.get(e.getKey())));
             }
         }
 
@@ -1466,26 +1494,77 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         setGroupAnchor(def);
     }
 
-    private VersionDiffVO.NodeDiff toNodeDiff(WfProcessNode s, WfProcessNode t) {
+    private VersionDiffVO.NodeDiff toNodeDiff(WfProcessNode s, WfProcessNode t, String sOpSummary, String tOpSummary) {
         VersionDiffVO.NodeDiff d = new VersionDiffVO.NodeDiff();
         d.setNodeKey((s != null ? s : t).getNodeKey());
         if (s != null) {
             d.setSourceName(s.getNodeName());
             d.setSourceType(s.getNodeType());
             d.setSourceSignOrder(s.getSignOrder());
+            d.setSourceOperators(sOpSummary == null ? "" : sOpSummary);
         }
         if (t != null) {
             d.setTargetName(t.getNodeName());
             d.setTargetType(t.getNodeType());
             d.setTargetSignOrder(t.getSignOrder());
+            d.setTargetOperators(tOpSummary == null ? "" : tOpSummary);
         }
         return d;
     }
 
-    private boolean nodeChanged(WfProcessNode s, WfProcessNode t) {
+    /** F-T8：节点变更判定扩展到 BPMN 扩展承载的全部设计语义（基础属性 + extJson + 操作者构成） */
+    private boolean nodeChanged(WfProcessNode s, WfProcessNode t,
+                                String sOpSummary, String tOpSummary) {
         return !Objects.equals(s.getNodeName(), t.getNodeName())
             || !Objects.equals(s.getNodeType(), t.getNodeType())
-            || !Objects.equals(s.getSignOrder(), t.getSignOrder());
+            || !Objects.equals(s.getSignOrder(), t.getSignOrder())
+            || !Objects.equals(s.getMergeType(), t.getMergeType())
+            || !Objects.equals(s.getPassNum(), t.getPassNum())
+            || !Objects.equals(s.getAllowReject(), t.getAllowReject())
+            || !Objects.equals(s.getAllowForward(), t.getAllowForward())
+            || !Objects.equals(s.getAutoApprove(), t.getAutoApprove())
+            || !Objects.equals(normalizeJson(s.getExtJson()), normalizeJson(t.getExtJson()))
+            || !Objects.equals(sOpSummary, tOpSummary);
+    }
+
+    /** extJson 比较：忽略键序与空白抖动（解析后重序列化；解析失败退化为原文比较） */
+    private String normalizeJson(String json) {
+        if (json == null || json.isBlank()) {
+            return "";
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            mapper.configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+            Object obj = mapper.readValue(json, Object.class);
+            return mapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            return json.trim();
+        }
+    }
+
+    /** 操作者摘要：opType#objId@groupNo 升序逗号拼接（仅比较「构成」，忽略 id/时间等无意义列） */
+    private String operatorSummary(List<WfNodeOperator> ops) {
+        if (ops == null || ops.isEmpty()) {
+            return "";
+        }
+        return ops.stream()
+            .map(o -> String.valueOf(o.getOpType()) + "#" + String.valueOf(o.getObjId())
+                + "@" + String.valueOf(o.getGroupNo()))
+            .sorted()
+            .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    /** 批量取节点操作者摘要（nodeKey → summary）；单节点失败按空摘要处理，不阻断对比 */
+    private Map<String, String> operatorSummaries(Long defId, java.util.Collection<String> nodeKeys) {
+        Map<String, String> m = new LinkedHashMap<>();
+        for (String k : nodeKeys) {
+            try {
+                m.put(k, operatorSummary(nodeOperators(defId, k)));
+            } catch (Exception e) {
+                m.put(k, "");
+            }
+        }
+        return m;
     }
 
     private VersionDiffVO.LinkDiff toLinkDiff(WfNodeLink s, WfNodeLink t) {
@@ -1495,10 +1574,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (s != null) {
             d.setSourceConditionCn(s.getConditionCn());
             d.setSourceIsReject(s.getIsReject());
+            d.setSourceIsMustPass(s.getIsMustPass());
+            d.setSourceViaGatewayKey(s.getViaGatewayKey());
         }
         if (t != null) {
             d.setTargetConditionCn(t.getConditionCn());
             d.setTargetIsReject(t.getIsReject());
+            d.setTargetIsMustPass(t.getIsMustPass());
+            d.setTargetViaGatewayKey(t.getViaGatewayKey());
         }
         return d;
     }
@@ -1507,7 +1590,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return !Objects.equals(s.getConditionCn(), t.getConditionCn())
             || !Objects.equals(s.getConditionExpr(), t.getConditionExpr())
             || !Objects.equals(s.getIsReject(), t.getIsReject())
-            || !Objects.equals(s.getIsMustPass(), t.getIsMustPass());
+            || !Objects.equals(s.getIsMustPass(), t.getIsMustPass())
+            || !Objects.equals(s.getViaGatewayKey(), t.getViaGatewayKey())
+            || !Objects.equals(s.getExtraOperations(), t.getExtraOperations());
     }
 
     @Override

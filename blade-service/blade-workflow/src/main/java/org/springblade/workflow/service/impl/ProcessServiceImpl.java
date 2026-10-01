@@ -14,7 +14,9 @@ import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springblade.workflow.service.IProcessService;
+import org.springblade.workflow.service.helper.WfCommentTenantWriter;
 import org.springblade.workflow.vo.TaskVO;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -39,6 +41,12 @@ public class ProcessServiceImpl implements IProcessService {
     private final RepositoryService repositoryService;
     private final HistoryService historyService;
     private final ManagementService managementService;
+    /**
+     * D8 审批意见租户回填器（可选依赖）：生产上下文由 @Component 提供；
+     * 精简测试上下文（FlowableTestConfig 仅 @Import 本类）无该 bean，经
+     * {@link ObjectProvider#getIfAvailable()} 安全跳过，不阻断测试装配。
+     */
+    private final ObjectProvider<WfCommentTenantWriter> commentTenantWriter;
 
     @Override
     public String startInstance(String procKey, String bizKey, Map<String, Object> variables) {
@@ -295,7 +303,12 @@ public class ProcessServiceImpl implements IProcessService {
         }
         try {
             // 引擎原生审批/流转意见：落 ACT_HI_COMMENT（history ≥ audit，见 FlowableConfig）
-            taskService.addComment(taskId, procInstId, type, message);
+            org.flowable.engine.task.Comment comment = taskService.addComment(taskId, procInstId, type, message);
+            // D8：写侧落租户列（自 ACT_HI_PROCINST 反查，幂等尽力而为，失败不阻断主链路）
+            WfCommentTenantWriter tenantWriter = commentTenantWriter.getIfAvailable();
+            if (comment != null && tenantWriter != null) {
+                tenantWriter.apply(comment.getId(), procInstId);
+            }
         } catch (Exception e) {
             // 实例/任务已结束时写意见无意义，忽略（不影响业务主链路）
             log.debug("[blade-workflow] 写入审批意见失败（实例可能已结束）: {}", e.getMessage());

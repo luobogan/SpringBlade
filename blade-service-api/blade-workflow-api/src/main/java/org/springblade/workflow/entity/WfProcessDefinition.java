@@ -38,6 +38,16 @@ public class WfProcessDefinition extends TenantEntity {
     private Integer version;
 
     /**
+     * 草稿修订号（D15/R11 草稿并发编辑防护）。
+     *
+     * <p>每次 {@code saveBpmn} 成功后原子 +1；客户端保存时携带读到的修订号（baseRevision），
+     * 服务端以条件 UPDATE（{@code WHERE draft_revision = baseRevision}）做乐观并发校验，
+     * 不命中即冲突、整体回滚。与 {@link #version}（版本组语义）无关。</p>
+     */
+    @Schema(description = "草稿修订号：saveBpmn 原子递增，客户端保存携带做乐观并发校验")
+    private Long draftRevision;
+
+    /**
      * 版本组锚点（对齐 ecology workflow_base.activeVersionID）。
      *
      * <p>同一流程的多个版本（同 procKey，version 递增）各自一行记录，

@@ -74,6 +74,12 @@ public class VersionDiffVO {
 
         @Schema(description = "目标版本会签关系")
         private Integer targetSignOrder;
+
+        @Schema(description = "源版本操作者摘要（opType#objId@groupNo 升序逗号拼接；空串=无操作者）")
+        private String sourceOperators;
+
+        @Schema(description = "目标版本操作者摘要")
+        private String targetOperators;
     }
 
     /**
@@ -100,5 +106,17 @@ public class VersionDiffVO {
 
         @Schema(description = "目标版本是否退回线")
         private Integer targetIsReject;
+
+        @Schema(description = "源版本是否必须经过（isMustPass）")
+        private Integer sourceIsMustPass;
+
+        @Schema(description = "目标版本是否必须经过")
+        private Integer targetIsMustPass;
+
+        @Schema(description = "源版本折叠连线经过的网关 key（viaGatewayKey）")
+        private String sourceViaGatewayKey;
+
+        @Schema(description = "目标版本折叠连线经过的网关 key")
+        private String targetViaGatewayKey;
     }
 }
