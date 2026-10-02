@@ -2,6 +2,7 @@ package org.springblade.workflow.service;
 
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.repository.ProcessDefinition;
 import org.springblade.workflow.vo.TaskVO;
 
 import java.util.List;
@@ -106,13 +107,26 @@ public interface IProcessService {
     void addUserIdentityLink(String taskId, String userId, String identityLinkType);
 
     /**
-     * 部署 BPMN 2.0 定义到引擎
+     * 部署 BPMN 2.0 定义到引擎（默认租户；供测试 / 兼容路径使用）。
      *
      * @param procKey  流程定义Key（BPMN process id，作为部署资源名前缀）
      * @param bpmnXml  BPMN 2.0 XML 文本（bpmn-js 画布产出）
      * @return 引擎部署ID
      */
     String deployProcess(String procKey, String bpmnXml);
+
+    /**
+     * 部署 BPMN 2.0 定义到引擎，并写入租户（ACT_RE_PROCDEF / ACT_RE_DEPLOYMENT 的 TENANT_ID_）。
+     *
+     * <p>「以 Flowable 为唯一事实源」改造（P0 前置）：部署必须带租户，否则多租户同 procKey
+     * 会在引擎侧串版本。租户取自 {@code wf_process_definition.tenant_id}（定义实体继承 TenantEntity）。</p>
+     *
+     * @param procKey   流程定义Key（BPMN process id）
+     * @param tenantId  租户ID（对应 wf_process_definition.tenant_id；为 null/空时退化为默认租户）
+     * @param bpmnXml   BPMN 2.0 XML 文本
+     * @return 引擎部署ID
+     */
+    String deployProcess(String procKey, String tenantId, String bpmnXml);
 
     /**
      * 部署 BPMN 2.0 定义到引擎（测试专用：关闭 BPMN 语义校验）。
@@ -127,6 +141,19 @@ public interface IProcessService {
      * @return 引擎部署ID
      */
     String deployProcessForTest(String procKey, String bpmnXml);
+
+    /**
+     * 部署 BPMN 2.0 定义到引擎（测试专用 + 带租户，写入 ACT_RE_PROCDEF / ACT_RE_DEPLOYMENT 的 TENANT_ID_）。
+     *
+     * <p>见 {@link #deployProcess(String, String, String)} 的租户说明：测试部署走
+     * {@code procKey + "__test"} 独立 key，同样必须带租户，避免与正式部署在默认租户下混排。</p>
+     *
+     * @param procKey   流程定义Key（BPMN process id）
+     * @param tenantId  租户ID（对应 wf_process_definition.tenant_id）
+     * @param bpmnXml   BPMN 2.0 XML 文本
+     * @return 引擎部署ID
+     */
+    String deployProcessForTest(String procKey, String tenantId, String bpmnXml);
 
     /**
      * 将引擎实例的当前活动节点跳转到指定节点（「节点信息 → 指定流转」的运行期消费）。
@@ -198,6 +225,30 @@ public interface IProcessService {
      * @return latest 版本的 processDefinitionId；无部署返回 null
      */
     String latestProcDefId(String procKey);
+
+    /**
+     * 查询引擎中该 (procKey, tenantId) 的<b>最新版本</b>对应的流程定义ID（ACT_RE_PROCDEF.ID_）。
+     *
+     * <p>租户感知版：按 KEY_ + TENANT_ID_ 唯一定位「该租户最新版本」，彻底避免多租户同 procKey
+     * 跨租户串版本（无租户版的 {@link #latestProcDefId(String)} 仅用于测试 / 兼容）。</p>
+     *
+     * @param procKey   流程定义Key（BPMN process id）
+     * @param tenantId  租户ID；为空时退化为无租户过滤（与 {@link #latestProcDefId(String)} 同义）
+     * @return 最新版本的 processDefinitionId；无部署返回 null
+     */
+    String latestProcDefId(String procKey, String tenantId);
+
+    /**
+     * 租户感知：取该 (procKey, tenantId) 的最新版本流程定义元信息（含挂起态 / 版本）。
+     *
+     * <p>权威源为 ACT_RE_PROCDEF；不存在返回 null（调用方据此抛「引擎中不存在该流程定义」）。
+     * 用于「以 Flowable 为唯一事实源」改造：版本与「可否发起」均由引擎裁定，而非 wf_process_definition 快照。</p>
+     *
+     * @param procKey   流程定义Key（BPMN process id）
+     * @param tenantId  租户ID；为空时退化为无租户过滤
+     * @return Flowable ProcessDefinition（含 getId / getVersion / isSuspended）；无则返回 null
+     */
+    ProcessDefinition latestProcessDefinition(String procKey, String tenantId);
 
     /**
      * 删除引擎部署（级联清理流程定义与历史数据）。

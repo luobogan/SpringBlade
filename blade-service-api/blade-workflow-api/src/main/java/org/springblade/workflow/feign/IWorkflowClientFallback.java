@@ -3,6 +3,7 @@ package org.springblade.workflow.feign;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.dto.StartProcessDTO;
+import org.springblade.workflow.vo.DefinitionKeyTenantVO;
 import org.springblade.workflow.vo.FormBindingVO;
 import org.springframework.stereotype.Component;
 
@@ -30,6 +31,12 @@ public class IWorkflowClientFallback implements IWorkflowClient {
         vo.setFailReason("审批流程服务不可用，无法校验表单绑定关系");
         vo.setBound(Boolean.TRUE);
         return R.data(vo);
+    }
+
+    @Override
+    public R<DefinitionKeyTenantVO> getDefinitionKeyAndTenant(Long defId) {
+        log.error("[blade-workflow] 查询流程定义 procKey/tenant 失败，服务不可用. defId={}", defId);
+        return R.fail("审批流程服务不可用，无法查询流程定义身份");
     }
 
 }

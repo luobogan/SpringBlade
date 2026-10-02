@@ -9,6 +9,7 @@ import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
@@ -60,8 +61,11 @@ public interface IWfInstanceService {
      * @param current  当前页（从 1 开始，空则 1）
      * @param pageSize 每页条数（空则 20，上限 200，防大页拖库）
      * @param title    流程标题（模糊匹配，可空）
+     * @param status   实例状态（0运行中/1通过/2不通过/3撤销/4暂停/5草稿，可空）
+     * @param beginTime 发起时间范围起点（可空）
+     * @param endTime   发起时间范围终点（可空）
      */
-    IPage<InstanceVO> mine(Long current, Long pageSize, String title);
+    IPage<InstanceVO> mine(Long current, Long pageSize, String title, Integer status, Date beginTime, Date endTime);
 
     /**
      * 按业务数据反查实例

@@ -1,6 +1,7 @@
 package org.springblade.workflow.service.helper;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.vo.WfTaskVO;
@@ -94,8 +95,9 @@ public class WfTaskActReader {
      * 待办：读 {@code ACT_RU_TASK}（引擎中仍在运行的任务即待办）。
      *
      * @param assignee 办理人（引擎 {@code ASSIGNEE_} 以字符串存用户ID）
+     * @param f        列表筛选条件（title/defId/formId/时间范围，可 null）
      */
-    public List<WfTaskVO> todoFromAct(Long assignee) {
+    public List<WfTaskVO> todoFromAct(Long assignee, WfTaskListFilter f) {
         StringBuilder sql = new StringBuilder(
             "SELECT r.BIZ_TASK_ID_ AS bizTaskId, r.TASK_DEF_KEY_ AS nodeKey, "
                 + "COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) AS assignee, "
@@ -109,6 +111,8 @@ public class WfTaskActReader {
         List<Object> args = new ArrayList<>();
         args.add(String.valueOf(assignee));
         appendActTenant(sql, args, "r");
+        appendInstanceFilter(sql, args, "p", f);
+        appendTimeRange(sql, args, "r", "CREATE_TIME_", f);
         sql.append(" ORDER BY r.CREATE_TIME_ DESC");
         return jdbcTemplate.query(sql.toString(), (rs, i) -> {
             WfTaskVO vo = new WfTaskVO();
@@ -124,8 +128,11 @@ public class WfTaskActReader {
      * 已办：读 {@code ACT_HI_TASKINST}（{@code END_TIME_} 非空即已办结）。
      *
      * <p>状态取 {@code BUSINESS_STATUS_} 反解；为空（双写前的存量）按 {@code DONE} 处理。</p>
+     *
+     * @param assignee 办理人
+     * @param f        列表筛选条件（title/defId/formId/时间范围，可 null）
      */
-    public List<WfTaskVO> doneFromAct(Long assignee) {
+    public List<WfTaskVO> doneFromAct(Long assignee, WfTaskListFilter f) {
         StringBuilder sql = new StringBuilder(
             "SELECT h.BIZ_TASK_ID_ AS bizTaskId, h.TASK_DEF_KEY_ AS nodeKey, "
                 + "COALESCE(h.BIZ_ASSIGNEE_, h.ASSIGNEE_) AS assignee, "
@@ -140,6 +147,8 @@ public class WfTaskActReader {
         List<Object> args = new ArrayList<>();
         args.add(String.valueOf(assignee));
         appendActTenant(sql, args, "h");
+        appendInstanceFilter(sql, args, "p", f);
+        appendTimeRange(sql, args, "h", "END_TIME_", f);
         sql.append(" ORDER BY h.END_TIME_ DESC");
         return jdbcTemplate.query(sql.toString(), (rs, i) -> {
             WfTaskVO vo = new WfTaskVO();
@@ -150,6 +159,45 @@ public class WfTaskActReader {
             vo.setOperateTime(rs.getTimestamp("operateTime"));
             return vo;
         }, args.toArray());
+    }
+
+    /** 追加实例维度筛选（标题模糊 / 流程定义 / 表单），作用于 JOIN 的 {@code ACT_HI_PROCINST} 别名。 */
+    private static void appendInstanceFilter(StringBuilder sql, List<Object> args, String pAlias, WfTaskListFilter f) {
+        if (f == null) {
+            return;
+        }
+        if (f.getTitle() != null && !f.getTitle().isBlank()) {
+            sql.append(" AND ").append(pAlias).append(".TITLE_ LIKE ? ESCAPE '\\\\'");
+            args.add("%" + escapeLike(f.getTitle()) + "%");
+        }
+        if (f.getDefId() != null) {
+            sql.append(" AND ").append(pAlias).append(".DEF_ID_ = ?");
+            args.add(f.getDefId());
+        }
+        if (f.getFormId() != null) {
+            sql.append(" AND ").append(pAlias).append(".FORM_ID_ = ?");
+            args.add(f.getFormId());
+        }
+    }
+
+    /** 追加时间范围筛选（待办=接收时间列；已办=处理时间列）。 */
+    private static void appendTimeRange(StringBuilder sql, List<Object> args, String alias, String col, WfTaskListFilter f) {
+        if (f == null) {
+            return;
+        }
+        if (f.getBeginTime() != null) {
+            sql.append(" AND ").append(alias).append(".").append(col).append(" >= ?");
+            args.add(f.getBeginTime());
+        }
+        if (f.getEndTime() != null) {
+            sql.append(" AND ").append(alias).append(".").append(col).append(" <= ?");
+            args.add(f.getEndTime());
+        }
+    }
+
+    /** 转义 LIKE 通配符（% _ \），配合 {@code ESCAPE '\\'} 实现精确子串匹配。 */
+    private static String escapeLike(String raw) {
+        return raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     /**

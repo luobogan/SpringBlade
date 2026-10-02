@@ -70,6 +70,13 @@ public class StartProcessDTO implements Serializable {
     private String title;
 
     /**
+     * 租户ID（「以 Flowable 为唯一事实源」改造：与 {@link #procKey} 一起定位引擎定义）。
+     *
+     * <p>为空时由服务端取当前登录租户（{@code WfAuthUtil.tenantId()}），通常无需调用方传入。</p>
+     */
+    private String tenantId;
+
+    /**
      * 发起人
      */
     private Long starter;

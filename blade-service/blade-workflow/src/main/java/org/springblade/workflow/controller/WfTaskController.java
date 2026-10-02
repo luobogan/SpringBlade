@@ -9,6 +9,7 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.AddSignDTO;
+import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.dto.ApproveDTO;
 import org.springblade.workflow.dto.CirculateDTO;
 import org.springblade.workflow.dto.ForwardDTO;
@@ -25,6 +26,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import org.springframework.format.annotation.DateTimeFormat;
+
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -51,17 +55,43 @@ public class WfTaskController {
     private final IWfTaskService taskService;
 
     @GetMapping("/todo")
-    @Operation(summary = "我的待办")
+    @Operation(summary = "我的待办", description = "支持按标题/流程定义/表单/时间范围筛选（去 wf_ 表 T-10）")
     public R<List<WfTaskVO>> todo(
-        @Parameter(description = "办理人，默认当前登录人") @RequestParam(value = "assignee", required = false) Long assignee) {
-        return R.data(taskService.todo(resolveAssignee(assignee)));
+        @Parameter(description = "办理人，默认当前登录人") @RequestParam(value = "assignee", required = false) Long assignee,
+        @Parameter(description = "流程标题模糊") @RequestParam(value = "title", required = false) String title,
+        @Parameter(description = "流程定义ID") @RequestParam(value = "defId", required = false) Long defId,
+        @Parameter(description = "表单ID") @RequestParam(value = "formId", required = false) Long formId,
+        @Parameter(description = "接收时间范围起点 ISO8601") @RequestParam(value = "beginTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date beginTime,
+        @Parameter(description = "接收时间范围终点 ISO8601") @RequestParam(value = "endTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date endTime) {
+        WfTaskListFilter filter = new WfTaskListFilter();
+        filter.setTitle(title);
+        filter.setDefId(defId);
+        filter.setFormId(formId);
+        filter.setBeginTime(beginTime);
+        filter.setEndTime(endTime);
+        return R.data(taskService.todo(resolveAssignee(assignee), filter));
     }
 
     @GetMapping("/done")
-    @Operation(summary = "我的已办")
+    @Operation(summary = "我的已办", description = "支持按标题/流程定义/表单/时间范围筛选（去 wf_ 表 T-10）")
     public R<List<WfTaskVO>> done(
-        @Parameter(description = "办理人，默认当前登录人") @RequestParam(value = "assignee", required = false) Long assignee) {
-        return R.data(taskService.done(resolveAssignee(assignee)));
+        @Parameter(description = "办理人，默认当前登录人") @RequestParam(value = "assignee", required = false) Long assignee,
+        @Parameter(description = "流程标题模糊") @RequestParam(value = "title", required = false) String title,
+        @Parameter(description = "流程定义ID") @RequestParam(value = "defId", required = false) Long defId,
+        @Parameter(description = "表单ID") @RequestParam(value = "formId", required = false) Long formId,
+        @Parameter(description = "处理时间范围起点 ISO8601") @RequestParam(value = "beginTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date beginTime,
+        @Parameter(description = "处理时间范围终点 ISO8601") @RequestParam(value = "endTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date endTime) {
+        WfTaskListFilter filter = new WfTaskListFilter();
+        filter.setTitle(title);
+        filter.setDefId(defId);
+        filter.setFormId(formId);
+        filter.setBeginTime(beginTime);
+        filter.setEndTime(endTime);
+        return R.data(taskService.done(resolveAssignee(assignee), filter));
     }
 
     @PostMapping("/{id}/approve")

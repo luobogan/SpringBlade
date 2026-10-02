@@ -416,7 +416,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             if (flowKey == null || flowKey.isBlank()) {
                 flowKey = def.getProcKey();
             }
-            def.setDeploymentId(processService.deployProcess(flowKey, deployXml));
+            def.setDeploymentId(processService.deployProcess(flowKey, def.getTenantId(), deployXml));
             // 回写「激活版本的流程定义ID」（方案 §3 / 迁移 _015）：
             // 发起时据此走 startProcessInstanceById，精确绑定这一版，与「哪个部署最新」解耦。
             def.setProcDefId(processService.latestProcDefId(flowKey));
@@ -456,7 +456,7 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)), testKey);
         // 会签/或签/依次下沉多实例（开关默认关闭，与正式部署同口径）
         deployXml = applyMultiInstanceIfEnabled(deployXml, defId);
-        String deploymentId = processService.deployProcessForTest(testKey, deployXml);
+        String deploymentId = processService.deployProcessForTest(testKey, def.getTenantId(), deployXml);
         log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态，独立 key 不顶正式版本）. "
             + "defId={}, testKey={}, deploymentId={}", defId, testKey, deploymentId);
         return deploymentId;

@@ -1852,3 +1852,74 @@ Flowable 8 的 `flowable-job-service/.../asyncexecutor/multitenant/` 已原生�
 5. **`ACT_*` 为 workflow 专用**，其它行业经 API 接入。
 6. **四个必须先修/先定的硬问题**：R4（超时误标记缺陷）、R3（多副本重复触发）、R1（定义 1:N 缺桥接）、R8（moddle 未交付）。
 7. **实际版本是 `8.1.0-SNAPSHOT`（本地源码构建）**，且 pom 已标注 `schema.version` 与 `CURRENT_VERSION` 不一致风险 ⇒ 建议加列前先确认。
+
+---
+
+## 十八、补充记录：formmode 触发链路「以 Flowable 引擎为唯一事实源」（2026-10-02）
+
+> 本章为后续追加记录，用于沉淀 F-T7 / formmode 外键议题的决策演进、现状缺陷复核结论与改造方案，避免结论只散落在对话与决策文档中。
+
+### 18.1 决策演进
+
+| 阶段 | 结论 |
+|---|---|
+| 首轮（I1） | **保持** `mode_triggerworkflowset.workflowid` = `wf_process_definition.id`，改键暂缓。理由：D2 已决定 `wf_process_definition` 主记录保留，`proc_def_id` 每次部署回写、发起按 `startInstanceById` 钉版本，已足够健壮（已登记于 `去wf_表-D系列决策结论.md` 第四节） |
+| 复核 | 对"现状是否真健壮"逐条复核后，发现 **R-A~R-E 五个缺陷**（见 18.3），其中撤回后静默失效、测试残留硬阻断已影响业务 |
+| **最终（本次）** | 不再围绕 `wf_process_definition` 快照打补丁，改为**以 Flowable 引擎为唯一权威源**——触发绑定与发起版本/状态解析统一问引擎 |
+
+### 18.2 目标方案（与 §1.2 第 4 条「引擎成为唯一事实源」一致）
+
+| 维度 | 现状 | 目标 |
+|---|---|---|
+| 触发绑定键 | `workflowid` = `wf_process_definition.id`（BIGINT） | 新增 `workflow_key`（procKey）+ `tenant_id`，绑定 **Flowable 原生身份** |
+| 版本来源 | `wf_process_definition.proc_def_id`（部署时快照，可陈旧） | 引擎 `ACT_RE_PROCDEF` 按 (procKey, tenant) 取 `latestVersion`，得 pdId + `VERSION_` 后**钉版本**启动 |
+| 可否发起的判据 | `wf_process_definition.status`（且 defId 分支**根本未校验**，见 R-A） | 引擎存在性 + 引擎挂起态（`isSuspended`） |
+| `wf_process_definition` 角色 | 权威源 | 退化为「设计期草稿载体 + 兼容输入」 |
+
+**为什么是 procKey + TENANT_ID_，而不是裸 `processDefinitionId`**：procKey 跨部署不变、按 key 解析天然取最新版本、**不需要**"每次部署回写触发行"的同步钩子；裸 pdId 每次部署即失效，会引入「静默走旧版本 / 撤回后挂起拒绝 / 部署被删除」三类故障，属**净负收益**。
+
+### 18.3 现状缺陷 R-A~R-E（本次要消解的目标）
+
+| # | 缺陷 | 证据 | 影响 |
+|---|---|---|---|
+| **R-A** 🔴 | `resolveDefinition` 的 **defId 分支无 status 过滤** | `WfInstanceServiceImpl:2043-2049` 直接 `selectById` 返回；仅 procKey 回退分支 `:2055` 才 `.eq(getStatus,1)` | 撤回后（引擎挂起 procDefId）表单保存仍尝试发起 → 引擎拒绝 → 被 formmode 吞异常（`ApprovalTriggerServiceImpl:98-102`）⇒ **用户看到"保存成功"但流程没起来** |
+| **R-B** 🔴 | `assertNoPendingTestData` 硬阻断 | `WfInstanceServiceImpl:281-300`，同 procKey 版本组有 `is_test=1` 未清理即 throw | 某流程跑过测试未清理 ⇒ 其绑定的**所有单据触发全部失败**，且同样被静默吞掉 |
+| **R-C** 🟠 | 灰度静默劫持单据触发 | 灰度条件 `:419-420` = `!test && dto.procDefId 为空 && procDefId 非空`，formmode 恰好全满足 | 单据自动发起被**静默切到灰度版本**，formmode 侧无感知 |
+| **R-D** 🟠 | 不可观测 | formmode 只记 `instanceId`（`:97`）；`engineMatched=0` 只 `log.warn`（`:403-407`） | 出事时无法回答"这条单据跑的哪一版" |
+| **R-E** 🟡 | 悬空引用 | `mode_triggerworkflowset.workflowid` 跨模块**无 FK**；defId 查不到时抛误导性"procKey与defId不能同时为空"（`:2050-2052`） | 定义删除/迁移未完成 ⇒ 静默失败 |
+
+### 18.4 P0 前置：部署必须落 `TENANT_ID_`（否则方案不成立）
+
+- `ProcessServiceImpl.deployProcess:145-157` 与 `deployProcessForTest:240-248` 的 `createDeployment()` **均未 `.tenantId(...)`** ⇒ 全部部署落在**默认租户**。
+- `startInstance:52-58` 用 `startProcessInstanceByKey` **无租户参数**；`latestProcDefId:61-70` **无租户过滤**且用 `singleResult()`。
+- ⇒ 多租户在**引擎侧实际未隔离**，仅靠应用层 `TENANT_ID_` 列回填（如 `WfInstanceActWriter`）。
+- **推论**：若先按 procKey 绑定而不落租户，多租户同 key 会**跨租户串版本**，甚至 `singleResult()` 非唯一异常 ⇒ 租户地基必须先于换绑。
+
+### 18.5 实施任务（依赖顺序）
+
+1. **P0 租户地基**：`deployProcess`/`deployProcessForTest` 加 `.tenantId()`；`latestProcDefId`/`startInstance` 改租户感知；存量 `ACT_RE_PROCDEF` 幂等回填。
+2. **换绑**：`mode_triggerworkflowset` 幂等加 `workflow_key`/`tenant_id` 并回填；扩展实体与 `StartProcessDTO`；`ApprovalTriggerServiceImpl` 双读回退。
+3. **收权**：`WfInstanceServiceImpl` 改按 (procKey, tenant) 从引擎解析版本与挂起态，明确报错 ⇒ 消解 R-A / R-E。
+4. **守卫与可观测**：`assertNoPendingTestData` 收窄至 key 兜底路径（R-B）；灰度加 `applyToBillInitiated` 开关默认关（R-C）；统一结构化启动日志（R-D）。
+5. **测试与 dev 回归**：租户隔离、挂起拒绝、悬空 key、灰度豁免、日志字段。
+6. **文档对齐**：决策文档 I1 改名消歧、登记本次决策、两份清单加失效声明。
+
+### 18.6 剩余风险点（**非"零风险"**，务必按项管控）
+
+| # | 风险 | 管控 |
+|---|---|---|
+| 1 | **租户回填属结构性/破坏性变更**：存量全在默认租户，加 `TENANT_ID_` 后按 key 解析必须带 tenant，否则存量查不到 | 脚本先落盘、幂等；执行前后各一次 COUNT 对账；线上执行**单独审批** |
+| 2 | **新旧部署并存窗口**：带租户新部署与默认租户旧部署共存期最易串版本 | 解析需"先按 tenant 查、查不到回退默认租户"临时兼容，稳定后移除 |
+| 3 | **跨库未确认**：`mode_triggerworkflowset` 与 `wf_process_definition` 是否同库 | 同库才可用 JOIN 回填；跨库必须改应用侧批处理，**不可**直接写跨库 UPDATE |
+| 4 | **过渡期双读**：旧 `workflowid` 回退路径保留一个版本周期 | 开关 `blade.workflow.trigger-from-flowable.enabled` 默认关；验证通过后开启 |
+| 5 | **`singleResult()` 非唯一**：租户化前若已存在同 key 多定义会抛异常 | 租户化改造时一并改为按 (key, tenant) 唯一定位 |
+
+### 18.7 与既有决策 / 文档的消歧关系
+
+- **D2 仍成立**：`wf_process_definition` 主记录**保留不退役**；本章只是让它不再充当"触发与版本解析的权威源"。
+- **两个「I1」同名冲突**（此前阅读混乱的根因）：
+  - 本文档 §15.5 的 **I1 = "查询契约不变"**（接口契约议题）；
+  - `去wf_表-D系列决策结论.md` 第四节的 **I1 = formmode 触发关联键**。
+  - ⇒ 后者需改名消歧（拟 **D16**）。
+- **"必须改键"断言已失效**：`wf_退役影响清单.md:143 §e.1` 与 `wf_依赖扫描影响清单.md:88`（P0）的"退役后需同步改键"，其"退役"前提**已被 D2 推翻** ⇒ 需加失效声明，并指向本章结论（改绑 procKey + TENANT_ID_，而非裸 pdId）。
+- **本文档 F-T7 ≠ formmode 外键**：§17.4 的 F-T7 是"列表/办理页契约核对"，依赖的是**本文档 I1（查询契约不变）**，与 formmode 外键改造不是同一件事，勿再混用标签。

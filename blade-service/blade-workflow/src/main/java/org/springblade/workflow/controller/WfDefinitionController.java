@@ -18,9 +18,11 @@ import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
+import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfDefinitionRedeployService;
 import org.springblade.workflow.vo.BrowserOptionVO;
+import org.springblade.workflow.vo.DefinitionKeyTenantVO;
 import org.springblade.workflow.vo.RedeployReportVO;
 import org.springblade.workflow.vo.FormBindingVO;
 import org.springblade.workflow.vo.FormConditionVO;
@@ -70,6 +72,21 @@ public class WfDefinitionController {
     private final IWfDefinitionService definitionService;
     /** 批量重部署（会签/或签下沉多实例用：MI 仅在部署期注入，需重新部署才生效） */
     private final IWfDefinitionRedeployService redeployService;
+    /** 「以 Flowable 为唯一事实源」改造：defId → (procKey,tenantId) 回填查询 */
+    private final WfProcessDefinitionMapper defMapper;
+
+    @GetMapping("/key-tenant/{defId}")
+    @Operation(summary = "查询定义引擎身份", description = "给定 wf_process_definition.id，返回其 procKey + tenantId（formmode 跨库回填 workflow_key 用）")
+    public R<DefinitionKeyTenantVO> getDefinitionKeyAndTenant(@PathVariable("defId") Long defId) {
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null) {
+            return R.data(null);
+        }
+        DefinitionKeyTenantVO vo = new DefinitionKeyTenantVO();
+        vo.setProcKey(def.getProcKey());
+        vo.setTenantId(def.getTenantId());
+        return R.data(vo);
+    }
 
     @PostMapping
     @Operation(summary = "创建流程定义", description = "含节点、出口、操作者")
@@ -241,8 +258,9 @@ public class WfDefinitionController {
         return R.data(definitionService.simulate(id, formData), "模拟完成");
     }
 
+    @Deprecated
     @PostMapping("/{id}/node/{nodeKey}/test-status")
-    @Operation(summary = "保存节点测试状态", description = "0未测试 1通过 2未通过（模拟运行结果，或手动标记）")
+    @Operation(summary = "保存节点测试状态（已废弃）", description = "0未测试 1通过 2未通过。已废弃：节点测试状态随画布整体保存写入 BPMN wf:node@testStatus，改用 PUT /definition/{id}/bpmn（saveBpmn）。")
     public R<Boolean> saveNodeTestStatus(@PathVariable("id") Long id,
                                         @PathVariable("nodeKey") String nodeKey,
                                         @RequestParam("status") int status) {
@@ -250,8 +268,9 @@ public class WfDefinitionController {
         return R.data(true, "已保存");
     }
 
+    @Deprecated
     @PutMapping("/{id}/node/{nodeKey}")
-    @Operation(summary = "更新节点基础属性", description = "按 nodeKey 更新，保留操作者与字段权限")
+    @Operation(summary = "更新节点基础属性（已废弃）", description = "已废弃：节点属性已下沉 BPMN wf:node 扩展，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<WfProcessNode> updateNode(@PathVariable("id") Long id,
                                        @PathVariable("nodeKey") String nodeKey,
                                        @RequestBody WfProcessNode node) {
@@ -265,15 +284,17 @@ public class WfDefinitionController {
         return R.data(definitionService.nodeOperators(id, nodeKey));
     }
 
+    @Deprecated
     @PostMapping("/{id}/link")
-    @Operation(summary = "新增出口（连线）")
+    @Operation(summary = "新增出口（已废弃）", description = "已废弃：出口已下沉 BPMN wf:link，新增出口改画布连线后用 PUT /definition/{id}/bpmn（saveBpmn）整体保存。")
     public R<WfNodeLink> createLink(@PathVariable("id") Long id, @RequestBody WfNodeLink link) {
         link.setId(null);
         return R.data(definitionService.saveLink(id, link), "保存成功");
     }
 
+    @Deprecated
     @PutMapping("/{id}/link/{linkId}")
-    @Operation(summary = "更新出口（连线）")
+    @Operation(summary = "更新出口（已废弃）", description = "已废弃：出口属性已下沉 BPMN wf:link，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<WfNodeLink> updateLink(@PathVariable("id") Long id,
                                     @PathVariable("linkId") Long linkId,
                                     @RequestBody WfNodeLink link) {
@@ -281,29 +302,33 @@ public class WfDefinitionController {
         return R.data(definitionService.saveLink(id, link), "保存成功");
     }
 
+    @Deprecated
     @DeleteMapping("/{id}/link/{linkId}")
-    @Operation(summary = "删除出口（连线）")
+    @Operation(summary = "删除出口（已废弃）", description = "已废弃：删除出口改删画布连线后用 PUT /definition/{id}/bpmn（saveBpmn）整体保存。")
     public R<Boolean> deleteLink(@PathVariable("id") Long id, @PathVariable("linkId") Long linkId) {
         return R.data(definitionService.deleteLink(id, linkId), "删除成功");
     }
 
+    @Deprecated
     @DeleteMapping("/{id}/node/{nodeKey}")
-    @Operation(summary = "移除节点", description = "级联清理该节点的操作者/字段权限/明细权限/出口连线/布局，避免残留孤立数据")
+    @Operation(summary = "移除节点（已废弃）", description = "级联清理该节点的操作者/字段权限/明细权限/出口连线/布局。已废弃：删除节点改删画布形状后用 PUT /definition/{id}/bpmn（saveBpmn）整体保存。")
     public R<Boolean> deleteNode(@PathVariable("id") Long id,
                                  @PathVariable("nodeKey") String nodeKey) {
         return R.data(definitionService.deleteNode(id, nodeKey), "移除成功");
     }
 
+    @Deprecated
     @PutMapping("/{id}/node/{nodeKey}/operator")
-    @Operation(summary = "配置节点操作者", description = "整体覆盖保存；请求体为 { operators: [...] }")
+    @Operation(summary = "配置节点操作者（已废弃）", description = "整体覆盖保存；请求体为 { operators: [...] }。已废弃：操作者已下沉 BPMN wf:operator，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> configOperator(@PathVariable("id") Long id,
                                      @PathVariable("nodeKey") String nodeKey,
                                      @RequestBody NodeOperatorSaveDTO body) {
         return R.data(definitionService.configOperator(id, nodeKey, body.getOperators()), "保存成功");
     }
 
+    @Deprecated
     @PostMapping("/{id}/node/{nodeKey}/operator/sync")
-    @Operation(summary = "同步操作者到其它节点", description = "把本节点操作者整体覆盖写入目标节点集合")
+    @Operation(summary = "同步操作者到其它节点（已废弃）", description = "把本节点操作者整体覆盖写入目标节点集合。已废弃：操作者已下沉 BPMN wf:operator，同步改在画布上多节点配置后用 PUT /definition/{id}/bpmn（saveBpmn）整体保存。")
     public R<Boolean> syncOperator(@PathVariable("id") Long id,
                                    @PathVariable("nodeKey") String nodeKey,
                                    @RequestBody List<String> targetNodeKeys) {

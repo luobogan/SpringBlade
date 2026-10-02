@@ -46,8 +46,9 @@ public class WfPermController {
         return R.data(permService.getFieldPerm(id, nodeKey));
     }
 
+    @Deprecated
     @PutMapping("/{id}/node/{nodeKey}/field-perm")
-    @Operation(summary = "保存节点字段权限矩阵", description = "整体覆盖")
+    @Operation(summary = "保存节点字段权限矩阵（已废弃）", description = "整体覆盖。已废弃：字段权限已下沉 BPMN wf:fieldPerm（含三维度），改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> saveFieldPerm(@PathVariable("id") Long id,
                                     @PathVariable("nodeKey") String nodeKey,
                                     @RequestBody FieldPermSaveDTO dto) {
@@ -62,8 +63,9 @@ public class WfPermController {
         return R.data(permService.getDetailPerm(id, nodeKey));
     }
 
+    @Deprecated
     @PutMapping("/{id}/node/{nodeKey}/detail-perm")
-    @Operation(summary = "保存节点明细表权限", description = "整体覆盖")
+    @Operation(summary = "保存节点明细表权限（已废弃）", description = "整体覆盖。已废弃：明细整表权限已下沉 BPMN wf:detailTablePerm，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> saveDetailPerm(@PathVariable("id") Long id,
                                      @PathVariable("nodeKey") String nodeKey,
                                      @RequestBody DetailPermSaveDTO dto) {
@@ -79,8 +81,9 @@ public class WfPermController {
         return R.data(permService.getDetailFilter(id, nodeKey, modeType));
     }
 
+    @Deprecated
     @PutMapping("/{id}/node/{nodeKey}/detail-filter")
-    @Operation(summary = "保存节点明细表字段筛选规则", description = "整体覆盖某一口径（modeType 在 body 中）")
+    @Operation(summary = "保存节点明细表字段筛选规则（已废弃）", description = "整体覆盖某一口径（modeType 在 body 中）。已废弃：明细筛选已下沉 BPMN wf:detailFilter，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> saveDetailFilter(@PathVariable("id") Long id,
                                        @PathVariable("nodeKey") String nodeKey,
                                        @RequestBody DetailFilterSaveDTO dto) {

@@ -6,6 +6,7 @@ import org.springblade.workflow.dto.CirculateDTO;
 import org.springblade.workflow.dto.ForwardDTO;
 import org.springblade.workflow.dto.RejectDTO;
 import org.springblade.workflow.dto.UrgeDTO;
+import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.WfTaskVO;
 
@@ -23,13 +24,19 @@ public interface IWfTaskService {
 
     /**
      * 我的待办
+     *
+     * @param assignee 办理人（非管理员一律收敛为当前登录人）
+     * @param filter   列表筛选条件（标题 / 流程定义 / 表单 / 时间范围，可 null）
      */
-    List<WfTaskVO> todo(Long assignee);
+    List<WfTaskVO> todo(Long assignee, WfTaskListFilter filter);
 
     /**
      * 我的已办
+     *
+     * @param assignee 办理人（非管理员一律收敛为当前登录人）
+     * @param filter   列表筛选条件（标题 / 流程定义 / 表单 / 时间范围，可 null）
      */
-    List<WfTaskVO> done(Long assignee);
+    List<WfTaskVO> done(Long assignee, WfTaskListFilter filter);
 
     /**
      * 同意：按节点 sign_order 判定是否真正推进引擎

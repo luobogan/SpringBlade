@@ -11,6 +11,7 @@ import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
+import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springblade.workflow.service.IProcessService;
@@ -59,14 +60,27 @@ public class ProcessServiceImpl implements IProcessService {
 
     @Override
     public String latestProcDefId(String procKey) {
+        return latestProcDefId(procKey, null);
+    }
+
+    @Override
+    public String latestProcDefId(String procKey, String tenantId) {
+        ProcessDefinition pd = latestProcessDefinition(procKey, tenantId);
+        return pd == null ? null : pd.getId();
+    }
+
+    @Override
+    public ProcessDefinition latestProcessDefinition(String procKey, String tenantId) {
         if (procKey == null || procKey.isBlank()) {
             return null;
         }
-        ProcessDefinition pd = repositoryService.createProcessDefinitionQuery()
+        ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery()
             .processDefinitionKey(procKey)
-            .latestVersion()
-            .singleResult();
-        return pd == null ? null : pd.getId();
+            .latestVersion();
+        if (tenantId != null && !tenantId.isBlank()) {
+            query.processDefinitionTenantId(tenantId);
+        }
+        return query.singleResult();
     }
 
     @Override
@@ -143,6 +157,11 @@ public class ProcessServiceImpl implements IProcessService {
 
     @Override
     public String deployProcess(String procKey, String bpmnXml) {
+        return deployProcess(procKey, null, bpmnXml);
+    }
+
+    @Override
+    public String deployProcess(String procKey, String tenantId, String bpmnXml) {
         if (procKey == null || procKey.isBlank() || bpmnXml == null || bpmnXml.isBlank()) {
             throw new IllegalArgumentException("部署 BPMN 失败：procKey 与 bpmnXml 均不能为空");
         }
@@ -150,9 +169,11 @@ public class ProcessServiceImpl implements IProcessService {
         Deployment deployment = repositoryService.createDeployment()
             .name(procKey)
             .key(procKey)
+            .tenantId(tenantId)
             .addString(procKey + ".bpmn20.xml", safeXml)
             .deploy();
-        log.info("[blade-workflow] BPMN 已部署到引擎. procKey={}, deploymentId={}", procKey, deployment.getId());
+        log.info("[blade-workflow] BPMN 已部署到引擎. procKey={}, tenantId={}, deploymentId={}",
+            procKey, tenantId, deployment.getId());
         return deployment.getId();
     }
 
@@ -238,18 +259,24 @@ public class ProcessServiceImpl implements IProcessService {
 
     @Override
     public String deployProcessForTest(String procKey, String bpmnXml) {
+        return deployProcessForTest(procKey, null, bpmnXml);
+    }
+
+    @Override
+    public String deployProcessForTest(String procKey, String tenantId, String bpmnXml) {
         if (procKey == null || procKey.isBlank() || bpmnXml == null || bpmnXml.isBlank()) {
             throw new IllegalArgumentException("测试部署 BPMN 失败：procKey 与 bpmnXml 均不能为空");
         }
         Deployment deployment = repositoryService.createDeployment()
             .name(procKey)
             .key(procKey)
+            .tenantId(tenantId)
             .addString(procKey + ".bpmn20.xml", bpmnXml)
             .disableSchemaValidation()
             .disableBpmnValidation()
             .deploy();
-        log.info("[blade-workflow] BPMN 已测试部署到引擎（已关闭语义校验，未改发布状态）. procKey={}, deploymentId={}",
-            procKey, deployment.getId());
+        log.info("[blade-workflow] BPMN 已测试部署到引擎（已关闭语义校验，未改发布状态）. procKey={}, tenantId={}, deploymentId={}",
+            procKey, tenantId, deployment.getId());
         return deployment.getId();
     }
 

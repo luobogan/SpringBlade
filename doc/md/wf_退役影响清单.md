@@ -141,6 +141,7 @@
 ## (e) 高风险 / 易遗漏点
 
 1. **💥 formmode `mode_triggerworkflowset.workflowid` 硬绑 `wf_process_definition.id`**（`ApprovalTriggerServiceImpl.java:83-86`）：退役后外键含义变为 Flowable `processDefinitionId`/部署ID，存量 ecology 映射（`wf_migration_map`）与 formmode 触发表需同步改键，否则"保存表单自动发起流程"失效。
+   > ⚠️ **已失效（2026-10-02，D16）**：D2 已保留 `wf_process_definition` 主记录不退役，其 `id` 长期合法，无需按原断言改键。新决议为"以 Flowable 为唯一事实源"：触发绑定改 `procKey + TENANT_ID_`（见 `Flowable8承接台账模块-去wf_表改造分析.md` §十八 / 决策文档 **D16**），而非裸 `processDefinitionId`。此处"必须改键"的前提已被推翻。
 2. **💥 定时任务 `WfTimeoutJob`**：直接读 `wf_task.due_time/timeout_handled/is_test` 并消费 `wf_node_timeout`。退役后超时必须由 Flowable 定时器边界事件承载，`is_test` 过滤与 `timeout_handled` 幂等需重设计。
 3. **⚠️ `WfInstanceServiceImpl` 反向读定义期表**（def/node/gray/link/operator Mapper）用于渲染/校验；`WfDefinitionServiceImpl` 注入 `WfInstanceMapper`（146）做表单绑定校验。退役时两处跨定义期↔运行期引用需清理。
 4. **⚠️ `wf_approval_log` 读侧 28+ 处**：`getLogs` 前端接口依赖它，切 `ACT_HI_COMMENT` 前须全量回归读路径。

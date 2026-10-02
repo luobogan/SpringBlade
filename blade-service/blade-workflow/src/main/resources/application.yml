@@ -150,7 +150,7 @@ blade:
     # 前置（翻转 true 时）：草稿/未部署定义必须先部署再发起（前端保证）。
     # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（届时需同步）。
     wf-table-retirement:
-      enabled: false
+      enabled: true
     # T-11（P3-5）：定义期读源从 wf_* 表切到 BPMN wf: 扩展。
     # 前置：① BPMN 已回填/前端已保存对应扩展；② 回归测试通过（WfBpmn*SwitchTest / RoundTripTest）。
     # 回退：改回 false 并重启即回到 wf_* 读源（扩展只增不删，回退不影响数据）。

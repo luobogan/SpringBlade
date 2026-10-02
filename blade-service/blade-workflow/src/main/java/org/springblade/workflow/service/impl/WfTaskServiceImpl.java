@@ -7,6 +7,7 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.workflow.action.NodeActionExecutor;
 import org.springblade.workflow.dto.AddSignDTO;
+import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.dto.ApproveDTO;
 import org.springblade.workflow.dto.CirculateDTO;
 import org.springblade.workflow.dto.ForwardDTO;
@@ -164,15 +165,23 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private boolean multiInstanceEnabled;
 
     @Override
-    public List<WfTaskVO> todo(Long assignee) {
-        return list(assignee, List.of(WfTask.STATUS_TODO));
+    public List<WfTaskVO> todo(Long assignee, WfTaskListFilter filter) {
+        WfTaskListFilter f = filter == null ? new WfTaskListFilter() : filter;
+        if (f.getStatuses() == null || f.getStatuses().isEmpty()) {
+            f.setStatuses(List.of(WfTask.STATUS_TODO));
+        }
+        return list(assignee, f);
     }
 
     @Override
-    public List<WfTaskVO> done(Long assignee) {
-        return list(assignee, List.of(WfTask.STATUS_DONE, WfTask.STATUS_FINISHED,
-            WfTask.STATUS_AUTO_SUBMIT, WfTask.STATUS_COADJUTANT,
-            WfTask.STATUS_CIRCULATE, WfTask.STATUS_READ));
+    public List<WfTaskVO> done(Long assignee, WfTaskListFilter filter) {
+        WfTaskListFilter f = filter == null ? new WfTaskListFilter() : filter;
+        if (f.getStatuses() == null || f.getStatuses().isEmpty()) {
+            f.setStatuses(List.of(WfTask.STATUS_DONE, WfTask.STATUS_FINISHED,
+                WfTask.STATUS_AUTO_SUBMIT, WfTask.STATUS_COADJUTANT,
+                WfTask.STATUS_CIRCULATE, WfTask.STATUS_READ));
+        }
+        return list(assignee, f);
     }
 
     @Override
@@ -762,9 +771,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
     // ------------------------------------------------------------------ 私有方法
 
-    private List<WfTaskVO> list(Long assignee, List<Integer> statuses) {
+    private List<WfTaskVO> list(Long assignee, WfTaskListFilter filter) {
         // 记录级鉴权：非流程管理员一律只能查自己的待办/已办，忽略传入的 assignee
         Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
+        List<Integer> statuses = filter.getStatuses();
         // 读源=act：待办读 ACT_RU_TASK、已办读 ACT_HI_TASKINST，不再回读 wf_task。
         // 失败自动降级走 wf_task —— 灰度期「列表可用」优先于「读源正确」。
         if (taskActReader.actRead() && statuses != null && !statuses.isEmpty()) {
@@ -772,19 +782,15 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 boolean onlyTodo = statuses.size() == 1 && statuses.get(0) != null
                     && statuses.get(0) == WfTask.STATUS_TODO;
                 List<WfTaskVO> merged = new ArrayList<>(
-                    onlyTodo ? taskActReader.todoFromAct(target) : taskActReader.doneFromAct(target));
+                    onlyTodo ? taskActReader.todoFromAct(target, filter) : taskActReader.doneFromAct(target, filter));
                 // 兜底合并：ACT 单行表达不了的场景仍从 wf_task 取，保证翻源【零丢单】：
                 //   ① 存量 N:1 会签（同一引擎任务多人，ACT 只有一行）—— 主要来源；
                 //   ② 孤儿（引擎侧已无对应任务）；③ 无 engineTaskId 的合成待办（退回发起人重提交）。
                 // 随存量 N:1 自然办结、新会签已是 1:1，兜底贡献逐步趋零，wf_task 才真正退役。
+                // 兜底查询须与原 ACT 路径【同口径】施加筛选（实例维度 + 时间范围），否则会混入未命中筛选的残留行。
                 java.util.Set<Long> seen = merged.stream().map(WfTaskVO::getId)
                     .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
-                List<WfTask> residue = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-                    .eq(WfTask::getAssignee, target)
-                    .in(WfTask::getStatus, statuses)
-                    .eq(WfTask::getIsTest, 0)
-                    .notIn(!seen.isEmpty(), WfTask::getId, seen)
-                    .orderByDesc(WfTask::getCreateTime));
+                List<WfTask> residue = taskMapper.selectList(wfTaskQuery(target, statuses, filter, seen));
                 if (!residue.isEmpty()) {
                     for (WfTask t : residue) {
                         merged.add(toVO(t));
@@ -802,20 +808,82 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     target, e.getMessage());
             }
         }
+        // 回退 wf_* 路径：与 ACT 路径同口径施加全部筛选，保证翻源 / 降级行为一致。
         // 测试态任务不进生产「待办 / 已办」列表（方案 §6.4 C1 / V1、V3、C14）：
         // 含已办(2)/办结(3)/自动提交(4)/协办(7)/传阅(8)/已读(9) —— 整组排除，
         // 其中「已办」最易漏：代跑会在真人名下留一条已办，平时无人细看，漏了就长期存在。
         // 注：wf_task.is_test 为 tinyint NOT NULL DEFAULT 0，不存在 NULL 漏网。
-        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getAssignee, target)
-            .in(WfTask::getStatus, statuses)
-            .eq(WfTask::getIsTest, 0)
-            .orderByDesc(WfTask::getCreateTime));
+        List<WfTask> tasks = taskMapper.selectList(wfTaskQuery(target, statuses, filter, null));
         List<WfTaskVO> result = new ArrayList<>(tasks.size());
         for (WfTask t : tasks) {
             result.add(toVO(t));
         }
         return result;
+    }
+
+    /**
+     * 构造 wf_task 列表查询（回退路径 + ACT 路径的兜底残留合并共用）。
+     * 统一施加：办理人、状态集、测试态排除，以及筛选条件中的<b>实例维度</b>（标题/流程定义/表单）
+     * 与<b>时间范围</b>（待办=接收时间、已办=处理时间）。
+     *
+     * @param excludeIds 需排除的 ACT 已覆盖业务任务ID（兜底合并时传入，避免重复；null 不排）
+     */
+    private com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> wfTaskQuery(
+        Long target, List<Integer> statuses, WfTaskListFilter filter, java.util.Set<Long> excludeIds) {
+        boolean onlyTodo = statuses != null && statuses.size() == 1
+            && statuses.get(0) != null && statuses.get(0) == WfTask.STATUS_TODO;
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> qw =
+            Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getAssignee, target)
+                .in(WfTask::getStatus, statuses)
+                .eq(WfTask::getIsTest, 0);
+        // 实例维度筛选：先取命中实例ID，再约束 wf_task.inst_id IN (...)。无命中则整体为空。
+        if (filter != null && filter.hasInstanceFilter()) {
+            com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfInstance> iq =
+                Wrappers.<WfInstance>lambdaQuery();
+            if (filter.getTitle() != null && !filter.getTitle().isBlank()) {
+                iq.like(WfInstance::getTitle, filter.getTitle());
+            }
+            if (filter.getDefId() != null) {
+                iq.eq(WfInstance::getDefId, filter.getDefId());
+            }
+            if (filter.getFormId() != null) {
+                iq.eq(WfInstance::getFormId, filter.getFormId());
+            }
+            List<Object> ids = instanceMapper.selectObjs(iq);
+            List<Long> instIds = ids.stream()
+                .map(o -> o instanceof Number ? ((Number) o).longValue() : null)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toList());
+            if (instIds.isEmpty()) {
+                // 没有任何实例命中筛选 → 直接返回「恒不成立」条件，避免全表扫描出无关任务
+                qw.eq(WfTask::getId, -1L);
+                return qw;
+            }
+            qw.in(WfTask::getInstId, instIds);
+        }
+        // 时间范围：待办按接收时间、已办按处理时间
+        if (filter != null) {
+            if (filter.getBeginTime() != null) {
+                if (onlyTodo) {
+                    qw.ge(WfTask::getReceiveTime, filter.getBeginTime());
+                } else {
+                    qw.ge(WfTask::getOperateTime, filter.getBeginTime());
+                }
+            }
+            if (filter.getEndTime() != null) {
+                if (onlyTodo) {
+                    qw.le(WfTask::getReceiveTime, filter.getEndTime());
+                } else {
+                    qw.le(WfTask::getOperateTime, filter.getEndTime());
+                }
+            }
+        }
+        if (excludeIds != null && !excludeIds.isEmpty()) {
+            qw.notIn(WfTask::getId, excludeIds);
+        }
+        qw.orderByDesc(WfTask::getCreateTime);
+        return qw;
     }
 
     private WfTaskVO toVO(WfTask t) {

@@ -3,6 +3,7 @@ package org.springblade.workflow.feign;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.dto.StartProcessDTO;
+import org.springblade.workflow.vo.DefinitionKeyTenantVO;
 import org.springblade.workflow.vo.FormBindingVO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -52,5 +53,17 @@ public interface IWorkflowClient {
      */
     @GetMapping("/definition/form-binding/{formId}")
     R<FormBindingVO> getFormBinding(@PathVariable("formId") Long formId);
+
+    /**
+     * 由流程定义ID（wf_process_definition.id）查询其 Flowable 引擎身份（procKey + tenantId）。
+     *
+     * <p>「以 Flowable 为唯一事实源」改造：用于把 mode_triggerworkflowset.workflowid（旧 defId）
+     * 回填为 workflow_key（procKey）。仅需已登录（HAS_AUTH），由调用方所在租户上下文透传。</p>
+     *
+     * @param defId 流程定义ID（wf_process_definition.id）
+     * @return procKey + tenantId；defId 不存在返回 null
+     */
+    @GetMapping("/definition/key-tenant/{defId}")
+    R<DefinitionKeyTenantVO> getDefinitionKeyAndTenant(@PathVariable("defId") Long defId);
 
 }

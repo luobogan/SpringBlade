@@ -15,6 +15,7 @@ import org.springblade.formmode.entity.WorkflowBillField;
 import org.springblade.formmode.mapper.ModeInfoMapper;
 import org.springblade.formmode.mapper.WorkflowBillMapper;
 import org.springblade.formmode.mapper.WorkflowBillFieldMapper;
+import org.springblade.formmode.service.IApprovalTriggerService;
 import org.springblade.formmode.service.IFormDataService;
 import org.springblade.formmode.service.IFormModeService;
 import org.springblade.formmode.utils.TableNameContextHolder;
@@ -47,6 +48,7 @@ public class FormDataServiceImpl implements IFormDataService {
     private final WorkflowBillMapper workflowBillMapper;
     private final WorkflowBillFieldMapper workflowBillFieldMapper;
     private final IFormModeService formModeService;
+    private final IApprovalTriggerService approvalTriggerService;
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -75,11 +77,13 @@ public class FormDataServiceImpl implements IFormDataService {
 
         // 删除操作
         if ("del".equals(src) && formDataDTO.getDataid() != null) {
-            return TableNameContextHolder.executeWithTableName(mainTableName, () -> {
+            Long deletedId = TableNameContextHolder.executeWithTableName(mainTableName, () -> {
                 String deleteSql = "DELETE FROM `" + mainTableName + "` WHERE id = ?";
                 jdbcTemplate.update(deleteSql, formDataDTO.getDataid());
                 return formDataDTO.getDataid();
             });
+            fireApprovalTrigger(formDataDTO.getModeid(), deletedId, "del", Collections.emptyMap());
+            return deletedId;
         }
 
         // 解析字段值
@@ -107,28 +111,46 @@ public class FormDataServiceImpl implements IFormDataService {
             userId = SecureUtil.getUserId().intValue();
         } catch (Exception ignored) {}
 
+        // 目标表真实列（小写集合）：审计列/业务列只写表中存在的，
+        // 兼容 modedatacreator(ecology 迁移) / modedatacreater / lastMod* 等命名差异
+        Set<String> tableCols = new HashSet<>();
+        for (Map<String, Object> col : jdbcTemplate.queryForList(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+            mainTableName)) {
+            Object name = col.get("COLUMN_NAME");
+            if (name != null) {
+                tableCols.add(String.valueOf(name).toLowerCase());
+            }
+        }
+
         if (isCreate) {
-            columns.append(",modedatacreater,modedatacreatedate,modedatacreatetime,lastModDate,lastModTime");
-            placeholders.append(",?,?,?,?,?");
-            values.add(userId);
-            values.add(currentDate);
-            values.add(currentTime);
-            values.add(currentDate);
-            values.add(currentTime);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"modedatacreator", "modedatacreater"}, userId);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"modedatacreatedate"}, currentDate);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"modedatacreatetime"}, currentTime);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"lastModDate"}, currentDate);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"lastModTime"}, currentTime);
         } else {
-            columns.append(",modedatamodifier,modedatamodifydate,modedatamodifytime,lastModDate,lastModTime");
-            placeholders.append(",?,?,?,?,?");
-            values.add(userId);
-            values.add(currentDate);
-            values.add(currentTime);
-            values.add(currentDate);
-            values.add(currentTime);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"modedatamodifier"}, userId);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"modedatamodifydate"}, currentDate);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"modedatamodifytime"}, currentTime);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"lastModDate"}, currentDate);
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"lastModTime"}, currentTime);
         }
 
         // 用户自定义字段值
         for (WorkflowBillField field : fields) {
             String dbName = field.getFielddbname();
-            if (dbName == null) continue;
+            if (dbName == null || !tableCols.contains(dbName.toLowerCase())) continue;
 
             columns.append(",").append(dbName);
             placeholders.append(",?");
@@ -146,31 +168,35 @@ public class FormDataServiceImpl implements IFormDataService {
         final Long finalDataId = dataId;
         final Map<String, Object> finalFieldValues = fieldValues;
 
-        return TableNameContextHolder.executeWithTableName(mainTableName, () -> {
+        Long savedId = TableNameContextHolder.executeWithTableName(mainTableName, () -> {
             if (isCreate) {
                 String insertSql = "INSERT INTO `" + mainTableName + "` (" + columns + ") VALUES (" + placeholders + ")";
                 jdbcTemplate.update(insertSql, values.toArray());
             } else {
-                // 构建UPDATE语句
+                // 构建UPDATE语句（审计列只写目标表存在的，命名兼容同上）
                 StringBuilder updateSql = new StringBuilder("UPDATE `" + mainTableName + "` SET ");
+                List<String> setParts = new ArrayList<>();
                 List<Object> updateValues = new ArrayList<>();
 
-                updateSql.append("modedatamodifier=?,modedatamodifydate=?,modedatamodifytime=?,lastModDate=?,lastModTime=?");
-                updateValues.add(finalUserId);
-                updateValues.add(finalCurrentDate);
-                updateValues.add(finalCurrentTime);
-                updateValues.add(finalCurrentDate);
-                updateValues.add(finalCurrentTime);
+                appendAuditSet(setParts, updateValues, tableCols, new String[]{"modedatamodifier"}, finalUserId);
+                appendAuditSet(setParts, updateValues, tableCols, new String[]{"modedatamodifydate"}, finalCurrentDate);
+                appendAuditSet(setParts, updateValues, tableCols, new String[]{"modedatamodifytime"}, finalCurrentTime);
+                appendAuditSet(setParts, updateValues, tableCols, new String[]{"lastModDate"}, finalCurrentDate);
+                appendAuditSet(setParts, updateValues, tableCols, new String[]{"lastModTime"}, finalCurrentTime);
 
                 for (WorkflowBillField field : fields) {
                     String dbName = field.getFielddbname();
-                    if (dbName == null) continue;
-                    updateSql.append(",").append(dbName).append("=?");
+                    if (dbName == null || !tableCols.contains(dbName.toLowerCase())) continue;
+                    setParts.add("`" + dbName + "`=?");
                     Object value = finalFieldValues.get(dbName);
                     if (value == null) value = finalFieldValues.get(field.getFieldname());
                     updateValues.add(value != null ? value.toString() : null);
                 }
+                if (setParts.isEmpty()) {
+                    setParts.add("`id`=`id`");
+                }
 
+                updateSql.append(String.join(",", setParts));
                 updateSql.append(" WHERE id=?");
                 updateValues.add(finalDataId);
 
@@ -178,6 +204,57 @@ public class FormDataServiceImpl implements IFormDataService {
             }
             return finalDataId;
         });
+        fireApprovalTrigger(formDataDTO.getModeid(), savedId, isCreate ? "save" : "update", finalFieldValues);
+        return savedId;
+    }
+
+    /**
+     * 表单保存/删除成功后触发审批流程（接线 ApprovalTriggerServiceImpl）。
+     *
+     * <p>触发配置存于 mode_triggerworkflowset（modeid + status=1 命中）；
+     * 流程发起失败不阻断表单保存主流程——ApprovalTriggerServiceImpl 内部已兜底，
+     * 此处再兜一层，保证保存事务不被触发链路异常回滚。</p>
+     */
+    private void fireApprovalTrigger(Long modeId, Long dataId, String action, Map<String, Object> fieldValues) {
+        if (modeId == null || dataId == null) {
+            return;
+        }
+        try {
+            approvalTriggerService.triggerApproval(modeId, dataId, action, fieldValues);
+        } catch (Exception e) {
+            log.error("[formmode] 审批触发异常（不阻断保存主流程）: modeId={}, dataId={}, action={}",
+                modeId, dataId, action, e);
+        }
+    }
+
+    /**
+     * 审计列（INSERT 分支）：目标表存在该列（候选名任一命中，大小写不敏感）才追加。
+     * 兼容 modedatacreator(ecology 迁移命名) / modedatacreater / lastMod* 等历史差异。
+     */
+    private void appendAuditColumn(StringBuilder columns, StringBuilder placeholders, List<Object> values,
+                                   Set<String> tableCols, String[] candidates, Object value) {
+        for (String name : candidates) {
+            if (tableCols.contains(name.toLowerCase())) {
+                columns.append(",").append(name);
+                placeholders.append(",?");
+                values.add(value);
+                return;
+            }
+        }
+    }
+
+    /**
+     * 审计列（UPDATE 分支）：目标表存在该列才加入 SET 子句。
+     */
+    private void appendAuditSet(List<String> setParts, List<Object> updateValues,
+                                Set<String> tableCols, String[] candidates, Object value) {
+        for (String name : candidates) {
+            if (tableCols.contains(name.toLowerCase())) {
+                setParts.add("`" + name + "`=?");
+                updateValues.add(value);
+                return;
+            }
+        }
     }
 
     @Override
@@ -207,7 +284,8 @@ public class FormDataServiceImpl implements IFormDataService {
             }
             vo.setFieldValues(fieldValues);
 
-            vo.setCreater((Integer) row.get("modedatacreater"));
+            Object createrVal = row.containsKey("modedatacreator") ? row.get("modedatacreator") : row.get("modedatacreater");
+            vo.setCreater(createrVal == null ? null : ((Number) createrVal).intValue());
             vo.setCreatedate((String) row.get("modedatacreatedate"));
             vo.setCreatetime((String) row.get("modedatacreatetime"));
 

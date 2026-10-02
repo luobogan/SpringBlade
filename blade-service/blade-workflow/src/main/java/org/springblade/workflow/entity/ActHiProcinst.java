@@ -146,4 +146,16 @@ public class ActHiProcinst implements Serializable {
             default -> STATUS_RUNNING;
         };
     }
+
+    /** 状态码 → 业务终态字符串（供「按实例状态筛选」在 ACT 读源路径构造 WHERE） */
+    public static String statusCodeName(int status) {
+        return switch (status) {
+            case STATUS_APPROVED -> "APPROVED";
+            case STATUS_REJECTED -> "REJECTED";
+            case STATUS_CANCELED -> "CANCELED";
+            case STATUS_SUSPENDED -> "SUSPENDED";
+            case STATUS_DRAFT -> "DRAFT";
+            default -> "RUNNING";
+        };
+    }
 }

@@ -39,8 +39,9 @@ public class WfTimeoutController {
         return R.data(timeoutService.listEnabled(defId, nodeKey));
     }
 
+    @Deprecated
     @PostMapping("/save")
-    @Operation(summary = "保存节点超时规则", description = "覆盖保存该节点的全部规则（空数组即清空）")
+    @Operation(summary = "保存节点超时规则（已废弃）", description = "覆盖保存该节点的全部规则（空数组即清空）。已废弃：超时规则已下沉 BPMN wf:timeout，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> save(@RequestParam("defId") Long defId,
                            @RequestParam("nodeKey") String nodeKey,
                            @RequestBody List<WfNodeTimeout> rules) {

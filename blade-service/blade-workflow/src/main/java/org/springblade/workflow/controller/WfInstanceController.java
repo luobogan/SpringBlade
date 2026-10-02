@@ -23,7 +23,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.format.annotation.DateTimeFormat;
 
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -83,12 +85,17 @@ public class WfInstanceController {
 
     @GetMapping("/mine")
     @Operation(summary = "我的请求",
-        description = "我发起的流程实例分页（发起人=当前登录人，可按标题模糊）；「我的请求」页签数据源")
+        description = "我发起的流程实例分页（发起人=当前登录人，可按标题/状态/发起时间范围筛选）；「我的请求」页签数据源")
     public R<IPage<InstanceVO>> mine(
         @Parameter(description = "当前页，从 1 开始") @RequestParam(value = "current", required = false) Long current,
         @Parameter(description = "每页条数，默认 20") @RequestParam(value = "pageSize", required = false) Long pageSize,
-        @Parameter(description = "流程标题，模糊匹配") @RequestParam(value = "title", required = false) String title) {
-        return R.data(instanceService.mine(current, pageSize, title));
+        @Parameter(description = "流程标题，模糊匹配") @RequestParam(value = "title", required = false) String title,
+        @Parameter(description = "实例状态 0运行中/1通过/2不通过/3撤销/4暂停/5草稿") @RequestParam(value = "status", required = false) Integer status,
+        @Parameter(description = "发起时间范围起点 ISO8601") @RequestParam(value = "beginTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date beginTime,
+        @Parameter(description = "发起时间范围终点 ISO8601") @RequestParam(value = "endTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date endTime) {
+        return R.data(instanceService.mine(current, pageSize, title, status, beginTime, endTime));
     }
 
     @GetMapping("/by-biz")

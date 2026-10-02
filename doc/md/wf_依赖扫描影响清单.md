@@ -85,7 +85,7 @@
 | 模块 | 引用点(底稿) | 目标源 | 改造动作 | 归属任务 | 风险 |
 |---|---|---|---|---|---|
 | blade-formmode (pom) | (b) `pom.xml:46-49` | Maven 依赖 `blade-workflow-api` | 维持（API 包不退役，仅语义表停写） | T-10 | P1 |
-| blade-formmode `ApprovalTriggerServiceImpl` | (b)/(e) `:13-14,36,83-91` | Feign `IWorkflowClient` | **`mode_triggerworkflowset.workflowid` 硬绑 `wf_process_definition.id`** → 含义改为 Flowable `processDefinitionId`/部署ID；存量 ecology 映射(`wf_migration_map`)+触发表需同步改键 | T-10 + formmode 单独改造 | **P0** |
+| blade-formmode `ApprovalTriggerServiceImpl` | (b)/(e) `:13-14,36,83-91` | Feign `IWorkflowClient` | **已失效（2026-10-02 D16）**：D2 保留 `wf_process_definition` 主记录不退役，无需改键；新决议以 Flowable 为事实源，绑定改 `procKey + TENANT_ID_`（见改造分析 §十八 / 决策文档 D16），原"必须改键→P0"假设推翻 | T-10 + formmode 单独改造 | 已由 D16 接管 |
 | blade-formmode `WorkflowBillServiceImpl` | (b) `:22-23,39-41,61` | Feign `IWorkflowClient.getFormBinding` | `FormBindingVO` 读 `wf_process_definition.form_id` 与 `wf_instance.form_id`；删表单占用校验依赖它——formmode 侧同步改读源 | T-10 | P1 |
 
 > 其余 7 模块（desk/mall/order/pay/demo/system/log）对 `org.springblade.workflow` 引用数 = 0（已逐模块确认）。

@@ -3,6 +3,7 @@ package org.springblade.workflow.service.helper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.utils.WfAuthUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -51,6 +52,24 @@ public class WfTaskActWriter {
 
     @Value("${blade.workflow.task-act-write.enabled:false}")
     private boolean enabled;
+
+    /**
+     * 解析任务租户（T-13）。
+     *
+     * <p>引擎创建任务时不带租户，ACT_RU_TASK/ACT_HI_TASKINST 的 TENANT_ID_ 会为空；
+     * 而待办/已办读源=act 的查询（{@code WfTaskActReader}）已按租户过滤，
+     * 空租户会导致新任务<b>查不到</b>。故写回时必须补上租户。</p>
+     */
+    private static String resolveTenant(String tenantId) {
+        if (tenantId != null && !tenantId.isBlank()) {
+            return tenantId;
+        }
+        String current = WfAuthUtil.tenantId();
+        if (current != null && !current.isBlank()) {
+            return current;
+        }
+        return "000000";
+    }
 
     /** 业务子状态码 → 原生 BUSINESS_STATUS_ 字符串（与 wf_task.status 一一对应） */
     private static String statusStr(Integer status) {
@@ -108,6 +127,7 @@ public class WfTaskActWriter {
             task.getId(),
             // blade 办理人：未开多实例时引擎 ASSIGNEE_ 常为 NULL（办理人只在 wf_task），读源须以此为准
             task.getAssignee(),
+            resolveTenant(task.getTenantId()),
             task.getEngineTaskId()
         };
         // 已办：HI 行承载最终业务维度（RU 行完成即删除，故必须写 HI）
@@ -115,7 +135,7 @@ public class WfTaskActWriter {
             jdbcTemplate.update(
                 "UPDATE ACT_HI_TASKINST SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
                     + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=?, "
-                    + "BIZ_ASSIGNEE_=? WHERE ID_=?",
+                    + "BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?",
                 args);
         } catch (Exception e) {
             log.warn("[WfTaskActWriter] 写回 ACT_HI_TASKINST 失败（双写预热，不影响台账）. engineTaskId={}",
@@ -126,7 +146,7 @@ public class WfTaskActWriter {
             jdbcTemplate.update(
                 "UPDATE ACT_RU_TASK SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
                     + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=?, "
-                    + "BIZ_ASSIGNEE_=? WHERE ID_=?",
+                    + "BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?",
                 args);
         } catch (Exception e) {
             log.warn("[WfTaskActWriter] 写回 ACT_RU_TASK 失败（双写预热，不影响台账）. engineTaskId={}",

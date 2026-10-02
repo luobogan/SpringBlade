@@ -48,8 +48,9 @@ public class WfCustomOperationController {
         return R.data(customOperationService.listFull(defId, nodeKey));
     }
 
+    @Deprecated
     @PostMapping("/save")
-    @Operation(summary = "保存节点自定义操作（覆盖式）")
+    @Operation(summary = "保存节点自定义操作（已废弃）", description = "覆盖式。已废弃：自定义操作已下沉 BPMN wf:operation，改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> save(@RequestParam("defId") Long defId,
                            @RequestParam("nodeKey") String nodeKey,
                            @RequestBody List<WfCustomOperationFull> payload) {
@@ -74,8 +75,9 @@ public class WfCustomOperationController {
         return R.data(customOperationService.defaultSign(defId, nodeKey, menuType));
     }
 
+    @Deprecated
     @PostMapping("/default-sign/save")
-    @Operation(summary = "保存节点默认签字意见（覆盖式）")
+    @Operation(summary = "保存节点默认签字意见（已废弃）", description = "覆盖式。已废弃：默认签署已下沉 BPMN wf:node（extJson.settings），改用 PUT /definition/{id}/bpmn（saveBpmn）画布整体保存。")
     public R<Boolean> saveDefaultSigns(@RequestParam("defId") Long defId,
                                        @RequestParam("nodeKey") String nodeKey,
                                        @RequestBody List<WfNodeDefaultSign> signs) {

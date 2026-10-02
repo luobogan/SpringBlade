@@ -29,6 +29,8 @@ import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
+import org.flowable.engine.repository.ProcessDefinition;
+import org.springframework.beans.factory.annotation.Value;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.ActHiProcinst;
 import org.springblade.workflow.entity.WfTask;
@@ -105,6 +107,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
     private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
+    /** 灰度是否对「单据自动触发」生效（默认 false：单据触发不走灰度，避免生产单据被静默切到灰度版） */
+    @Value("${blade.workflow.gray.apply-to-bill-initiated:false}")
+    private boolean grayApplyToBillInitiated;
     /**
      * 双写收口器：生命周期类操作（终结 / 暂停 / 恢复）的「台账 + 引擎」同写入口。
      *
@@ -316,6 +321,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 「提交草稿」= 把草稿实例原地提升：复用 wf_instance 行与业务数据行（避免 uk_biz_key 唯一键冲突）
         boolean promote = dto.getDraftInstId() != null;
         WfProcessDefinition def = resolveDefinition(dto);
+        // 「以 Flowable 为唯一事实源」早失败守卫：定义不存在（defId 悬空 / 已被删除）必须立即抛清晰错误，
+        // 避免后续 def.getProcKey() 等 NPE 与 formmode 静默吞掉（R-E）。测试态跳过（草稿态也可发起）。
+        if (!Boolean.TRUE.equals(dto.getTestFlag()) && def == null) {
+            throw new ServiceException("流程定义不存在或已被删除，无法发起流程");
+        }
         Long formId = resolveFormId(def, dto);
         Long dataId;
         Long starter;
@@ -388,11 +398,26 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         String engineKey = (dto.getEngineKey() != null && !dto.getEngineKey().isBlank())
             ? dto.getEngineKey() : realFlowKey(def);
         boolean test = Boolean.TRUE.equals(dto.getTestFlag());
-        // 正式发起守卫：存在未清理的测试数据时拒绝，避免带着测试残留（历史测试部署仍可能占用
-        // 正式 procKey 的「最新部署」位置）发起正式流程
-        if (!test) {
-            assertNoPendingTestData(def);
+        // 「以 Flowable 为唯一事实源」权威校验（R-A / R-E）：能否发起由引擎裁定，而非
+        // wf_process_definition.status（defId 分支本就不校验 status，是 R-A 根因）。仅正式发起校验。
+        // 用 engineKey（= BPMN process id / 测试态 __test key）查引擎，与发起时一致；
+        // 过渡兼容：租户回填前引擎行 TENANT_ID_ 为空，按租户查不到时回退「无租户过滤」，避免误杀存量发起。
+        if (!test && def != null && engineKey != null && !engineKey.isBlank()) {
+            String tenant = (dto.getTenantId() != null && !dto.getTenantId().isBlank())
+                ? dto.getTenantId() : def.getTenantId();
+            ProcessDefinition pd = processService.latestProcessDefinition(engineKey, tenant);
+            if (pd == null) {
+                pd = processService.latestProcessDefinition(engineKey, null);
+            }
+            if (pd == null) {
+                throw new ServiceException("引擎中不存在该流程定义(procKey/tenant)，请确认流程已发布");
+            }
+            if (pd.isSuspended()) {
+                throw new ServiceException("流程已撤回/停用，无法发起");
+            }
         }
+        // 测试残留守卫（R-B）下移至 procDefId 解析之后：仅「按 key 兜底启动」路径需要，
+        // 按 pdId 钉版本启动（含单据自动触发）不受测试残留影响，故在此不调用。
         // L3 运行时自检①：引擎 latest 部署 == 本定义记录的 deployment_id。
         // 只有「正式发起 + 定义已落 deployment_id」才判定；测试态走独立 key（procKey__test），
         // latest 天然不是正式部署，故置 NULL（未知）避免误报。
@@ -412,21 +437,37 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         //   优先级：dto.procDefId > 灰度命中（§4.3）> def.procDefId > engineKey
         String procDefId = (dto.getProcDefId() != null && !dto.getProcDefId().isBlank())
             ? dto.getProcDefId() : def.getProcDefId();
+        // R-B 收窄：测试残留守卫仅对「按 key 兜底启动」路径生效（procDefId 为空才会回退按 key 启动）。
+        // 按 pdId 钉版本启动与单据自动触发走钉版本，测试部署独立 key 不影响，予以豁免。
+        if (!test && (procDefId == null || procDefId.isBlank())) {
+            assertNoPendingTestData(def);
+        }
         // 灰度路由（方案 §4.3）：仅「正式发起（非测试态）+ 调用方未显式指定版本 + 命中启用中的规则」
         // 才切到灰度版本。命中后实例打 is_gray=1 —— 供 §5.4 巡检⑨ 观察灰度健康度，
         // 出问题时也能按 proc_def_id 精确定位是哪一版在跑、并回溯影响面。
         boolean gray = false;
+        // R-C：灰度路由对「单据自动触发」默认豁免（开关 grayApplyToBillInitiated 可开启）。
+        // 灰度仍是应用层策略、落点为 Flowable pdId，但单据触发不应被静默切到灰度版本。
         if (!test && (dto.getProcDefId() == null || dto.getProcDefId().isBlank())
             && procDefId != null && !procDefId.isBlank()) {
-            String grayProcDefId = resolveGrayProcDefId(def.getId(), starter);
-            if (grayProcDefId != null && !grayProcDefId.equals(procDefId)) {
-                procDefId = grayProcDefId;
-                gray = true;
+            boolean billSkipGray = Boolean.TRUE.equals(dto.getBillInitiated()) && !grayApplyToBillInitiated;
+            if (!billSkipGray) {
+                String grayProcDefId = resolveGrayProcDefId(def.getId(), starter);
+                if (grayProcDefId != null && !grayProcDefId.equals(procDefId)) {
+                    procDefId = grayProcDefId;
+                    gray = true;
+                }
             }
         }
         String engineInstId = (procDefId != null && !procDefId.isBlank())
             ? processService.startInstanceById(procDefId, bizKey, vars)
             : processService.startInstance(engineKey, bizKey, vars);
+
+        // R-D：结构化启动日志——记录「哪一版在跑」，便于出事后回溯（procDefId 即 Flowable 版本身份）。
+        log.info("[blade-workflow][start] 发起流程: instanceId={}, defId={}, procKey={}, tenant={}, procDefId={}, gray={}, engineMatched={}, billInitiated={}, bizKey={}",
+            engineInstId, def != null ? def.getId() : null, engineKey,
+            (dto.getTenantId() != null ? dto.getTenantId() : (def != null ? def.getTenantId() : null)),
+            procDefId, gray, engineMatched, Boolean.TRUE.equals(dto.getBillInitiated()), bizKey);
 
         // 首节点先算出来：实例标题模板取自首节点的「标题显示设置」
         String firstNodeKey = resolveFirstNodeKey(def.getId());
@@ -684,17 +725,25 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     }
 
     @Override
-    public IPage<InstanceVO> mine(Long current, Long pageSize, String title) {
+    public IPage<InstanceVO> mine(Long current, Long pageSize, String title, Integer status,
+                                 Date beginTime, Date endTime) {
         if (actRead()) {
             // 读源=act：直接扫原生 ACT_HI_PROCINST（STARTER_/IS_TEST_/TITLE_/START_TIME_ 已加列+索引）
+            // 状态筛选经 statusCodeName 反向映射为业务终态字符串（BUSINESS_STATUS_）。
             Page<ActHiProcinst> page = new Page<>(
                 (current == null || current < 1) ? 1 : current,
                 (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200));
+            // 注意：MyBatis-Plus 的 .eq(condition, col, val) 会先求值 val 再判断 condition，
+            // 故 statusCodeName(status) 必须在此前用 status!=null 守卫求值，否则对 null 自动拆箱 NPE。
+            String businessStatusFilter = status != null ? ActHiProcinst.statusCodeName(status) : null;
             IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, Wrappers.<ActHiProcinst>lambdaQuery()
                 .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
                 .eq(ActHiProcinst::getStarter, WfAuthUtil.userId())
                 .eq(ActHiProcinst::getIsTest, 0)
                 .like(title != null && !title.isBlank(), ActHiProcinst::getTitle, title)
+                .eq(status != null, ActHiProcinst::getBusinessStatus, businessStatusFilter)
+                .ge(beginTime != null, ActHiProcinst::getStartTime, beginTime)
+                .le(endTime != null, ActHiProcinst::getStartTime, endTime)
                 .orderByDesc(ActHiProcinst::getStartTime));
             return result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
         }
@@ -708,6 +757,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             // 列表会被测试单污染；需查看走 /test/**（测试历史）
             .eq(WfInstance::getIsTest, 0)
             .like(title != null && !title.isBlank(), WfInstance::getTitle, title)
+            .eq(status != null, WfInstance::getStatus, status)
+            .ge(beginTime != null, WfInstance::getStartTime, beginTime)
+            .le(endTime != null, WfInstance::getStartTime, endTime)
             .orderByDesc(WfInstance::getStartTime));
         return result.convert(this::toInstanceVO);
     }
