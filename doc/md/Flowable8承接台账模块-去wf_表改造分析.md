@@ -29,6 +29,8 @@
 | 高并发与检索性能 | **§十四** |
 | 遗漏排查（九维度交叉验证） | **§十五** |
 | 前端改造 | **§十六** |
+| T-1 依赖扫描 / 22 表改造矩阵 / 跨模块 / 前端引用面 | **§十九** |
+| BPMN 扩展 schema（canonical 契约） | **§二十** |
 | 待确认 / 验证点 / 风险 登记表 | **§十七**（§17.1 / §17.2 / §17.3） |
 
 > 📌 **评审最短路径**：先看 **§17.5 一页纸速查** → 再按 **§17.1（D 系列）** 拍板 → 按 **§17.4（任务总表）** 派活 → 按 **§17.2（V 系列）** 排验证。
@@ -595,6 +597,15 @@ P5 加签换为 addMultiInstanceExecution
 | **V6** | 验证 | 加签后驳回回多实例节点，集合变量如何重建 |
 | **V7** | 验证 | BPMN 扩展元素的**往返保真**（解析 → 写回 → 断言无损），防 Flowable 升级后行为变化 |
 
+### 10.1 任务读源（待办/已办）翻源上线检查（精华回填）
+
+> 精华回填自《去 wf_表-任务读源翻源上线检查》。核心结论：**代码就绪 ≠ 可以翻源**——把 `task-read-source` 由 `wf` 翻到 `act`（待办读 `ACT_RU_TASK`、已办读 `ACT_HI_TASKINST`）取决于**数据对齐度**，存量会签 N:1 与孤儿任务在 ACT 侧无法表达，翻了会丢单。
+> - **前置依赖（缺一不可）**：①任务业务列已加 ACT（每表 8 列：`BUSINESS_STATUS_`/`IS_TEST_`/`ORIGINAL_USER_`/`SIGN_ORDER_`/`VIEW_TIME_`/`TIMEOUT_HANDLED_`/`BIZ_TASK_ID_`/`BIZ_ASSIGNEE_`）；②双写已开；③会签已下沉多实例(1:1) + **重新部署全部定义**；④存量业务列已回填；⑤业务 ID/办理人已回填。
+> - **达标阈值**：N:1 残留 = 0；双写未覆盖(1:1) = 0；双写漂移 = 0；孤儿 = 0 或全 `is_test=1`；MI 注入 > 0；**ACT 可读行 ≥ wf_task 列表行 99%**（dev 当前仅 ~30%，不可翻）。
+> - **关键前提**：引擎任务生命周期必须 == blade 任务状态（会签/或签/依次 100% 由引擎多实例驱动 + 存量 N:1 清零），否则读源=act 会「多算」（实测曾多算 7 条）。
+> - **灰度/回退**：单用户 → 只读操作 → 小流量 → 全量；所有开关 `@Value` 改完**必须重启**，回退秒级（含双写、MI 开关）。
+> - **已知限制**：合成待办永远走 `wf_task`；`wf_task` 暂不退役；会签必须保持引擎多实例开启。
+
 ---
 
 ## 十一、为 `ACT_*` 表新增列与调整结构的具体方案
@@ -866,6 +877,20 @@ UPDATE ACT_HI_PROCINST h
 - DDL 须在 Flowable 建表**之后**执行；禁止 `create-drop`。
 - 新列一律"可空 + DEFAULT"，不可 `NOT NULL` 无默认（否则引擎 `INSERT` 失败）。
 - 回填前先 `SELECT COUNT(*)` 验证匹配数。
+
+### 11.7 读源切换开关（P3-5，精华回填）
+
+> 精华回填自《去 wf_表-读源切换开关说明》。目标：把定义期语义列表/筛选接口从 `wf_*` 表逐步切到读 BPMN `extensionElements`（`wf:` 命名空间），让引擎成为定义语义唯一事实源。原则：**默认关、逐个开**（零行为变化）、**同源可回退**、**单一事实源**、**回归先行**（纯函数单测）。
+> **已落地 6 个开关**（默认关，回归测试齐备）：
+> | 开关 | 作用接口 |
+> |---|---|
+> | `perm-from-bpmn` | `/definition/.../field-perm`（三维度 schema 已补全） |
+> | `operator-from-bpmn` | `/definition/.../operator` + 流转操作者 |
+> | `timeout-from-bpmn` | `/node-timeout/list`，**同时影响运行期** `resolveDueTime`/`firstOverdue` 超时计算 |
+> | `detail-perm-from-bpmn` | `/definition/.../detail-perm`（整表权限 `wf:detailTablePerm`） |
+> | `detail-filter-from-bpmn` | `/definition/.../detail-filter`（逐字段规则 `wf:detailFilter`） |
+> | `definition-from-bpmn` | `/nodes` `/links`、退回可达性、运行期 `loadNode`（一个开关管定义期+运行期；草稿/未部署自动回退 `wf_*` 表；内部写路径固定仍读 `wf_*`） |
+> 回归测试（均无 Spring 依赖的纯函数）：`WfBpmnExtensionRoundTripTest` / `WfBpmnTimeoutSwitchTest` / `WfBpmnDetailPermSwitchTest` / `WfBpmnDefNodesTest`。
 
 ---
 
@@ -1767,6 +1792,8 @@ Flowable 8 的 `flowable-job-service/.../asyncexecutor/multitenant/` 已原生�
 
 **优先级建议**：**D6 / D12 / D14** 为开工前必须拍板（分别卡住数据模型、前端开工、前端工作量）；**D3 / D10** 决定接口改造范围；其余可并行推进。
 
+> 📌 **决策状态更新（2026-10-01 起，精华回填自《去 wf_表-D系列决策结论》）**：D1–D15 已**全部拍板/落地**，本表保留为「待确认事项原始登记」，最终结论以决策文档为准。速查：D1 原生 `BUSINESS_STATUS_`（落地）· D2 合成待办复用 `wf_task` 业务占位（拍板）· D3 不保留投影表（落地）· D4 复用 SpringBlade 租户 ID（落地）· D5 各租户/行业独立定义、`KEY_`=`tenantId:bizKey`（拍板）· D6 新增 `ACT_HI_PROCINST.DEF_KEY_` 桥接（落地）· D7 会签明细只迁实例级+只读归档（拍板）· D8 `ACT_HI_COMMENT` 加 `TENANT_ID_`（已实施 2026-10-01，存量 234 条回填）· D9 `WfTimeoutJob` GET_LOCK 选主（落地）· D10 接口逐接口盘点（落地）· D11 暂不启用 `act_evt_log`（拍板）· D12 后端出 schema/前端注册（F-T1 已交付）· D13 节点测试态维持存 `wf_*`（拍板）· D14 直接路线 B（拍板）· D15 草稿累积+显式部署+乐观锁（拍板）。**D16**（2026-10-02）formmode 触发以 Flowable 为唯一事实源（见 §十八）。
+
 ### 17.2 验证点登记表（V1–V27）
 
 | 编号 | 类型 | 内容 |
@@ -1801,47 +1828,63 @@ Flowable 8 的 `flowable-job-service/.../asyncexecutor/multitenant/` 已原生�
 
 ### 17.3 风险登记表（R1–R10，已去重）
 
-| 编号 | 风险 | 等级 | 缓解 |
-|---|---|---|---|
-| **R1** | 业务定义 ↔ 引擎定义 1:N 缺桥接，反查 / 版本统计无解 | 🔴 高 | D6：新增 `DEF_KEY_` 或维护映射 |
-| **R2** | 存量会签任务明细无法 1:1 迁移 | 🔴 高 | D7：仅迁实例级 + 明细归档 |
-| **R3** | `WfTimeoutJob` 多副本重复触发超时 | 🔴 高 | D9：分布式锁 / 单实例调度 |
-| **R4** | 超时动作失败被误标记"已处理"（**现存缺陷**） | 🔴 高 | 改为仅成功才置位 + 重试/死信 |
-| **R5** | 去投影表后接口筛选能力下降，部分接口需降级 | 🟠 中 | D10：逐个盘点，必要时只读物化 |
-| **R6** | 定义删除导致历史实例节点语义丢失 | 🟠 中 | 立运维禁令：禁止删除仍被引用的旧版本 |
-| **R7** | 审批日志（`ACT_HI_COMMENT`）无租户列，隔离须 JOIN | 🟠 中 | D8：评估是否新增租户列 |
-| **R8** | 🔴 前端 `wf:` moddle 扩展未交付 ⇒ 设计器无法编辑扩展，**前端改造阻塞**（**原 R8 与 R9 合并**） | 🔴 高 | D12：明确交付方与时间 |
-| **R9** | ~~（作废，已并入 R8）~~ | — | — |
-| **R10** | 路线 B 下前端改动面很大（近十个面板重写） | 🔴 高 | D14：评估工期与回归，可先走路线 A |
-| **R11** | 多人并发编辑同一流程定义的不同节点 | 🟠 中 | D15：版本 / 乐观锁策略 |
+| 编号 | 风险 | 等级 | 缓解 | 状态（2026-10-04） |
+|---|---|---|---|---|
+| **R1** | 业务定义 ↔ 引擎定义 1:N 缺桥接，反查 / 版本统计无解 | 🔴 高 | D6：新增 `DEF_KEY_` 或维护映射 | ✅ 已闭环（D6 `DEF_KEY_` 落地 `ACT_HI_PROCINST`，§17.6） |
+| **R2** | 存量会签任务明细无法 1:1 迁移 | 🔴 高 | D7：仅迁实例级 + 明细归档 | ✅ 已缓解（D7 设计决策：实例级迁移 + 明细归档） |
+| **R3** | `WfTimeoutJob` 多副本重复触发超时 | 🔴 高 | D9：分布式锁 / 单实例调度 | ✅ 已闭环（D9 选主锁，集群单副本调度） |
+| **R4** | 超时动作失败被误标记"已处理"（**现存缺陷**） | 🔴 高 | 改为仅成功才置位 + 重试/死信 | ✅ 已闭环（代码：`WfTimeoutServiceImpl.fire:238` 仅成功置位；`WfTimeoutJob:36` 注释确认） |
+| **R5** | 去投影表后接口筛选能力下降，部分接口需降级 | 🟠 中 | D10：逐个盘点，必要时只读物化 | ✅ 已缓解（D10/B4 接口盘点，读源切 ACT_*/BPMN） |
+| **R6** | 定义删除导致历史实例节点语义丢失 | 🟠 中 | 立运维禁令：禁止删除仍被引用的旧版本 | ✅ 已闭环（代码：`removeDefinition:1813`/`physicalRemoveDefinition:1871` 删除前置校验，存在在用实例即抛「无法删除」） |
+| **R7** | 审批日志（`ACT_HI_COMMENT`）无租户列，隔离须 JOIN | 🟠 中 | D8：评估是否新增租户列 | ✅ 已缓解（D8 JOIN 兜底，V22） |
+| **R8** | 🔴 前端 `wf:` moddle 扩展未交付 ⇒ 设计器无法编辑扩展，**前端改造阻塞**（**原 R8 与 R9 合并**） | 🔴 高 | D12：明确交付方与时间 | ✅ 已闭环（F-T1 `wfModdle.json` + F-T2~F-T5 面板重写） |
+| **R9** | ~~（作废，已并入 R8）~~ | — | — | — 作废 |
+| **R10** | 路线 B 下前端改动面很大（近十个面板重写） | 🔴 高 | D14：评估工期与回归，可先走路线 A | ✅ 已闭环（F-T2~F-T5 已完成，code-explorer 确认） |
+| **R11** | 多人并发编辑同一流程定义的不同节点 | 🟠 中 | D15：版本 / 乐观锁策略 | ✅ 已闭环（代码：`WfDefinitionServiceImpl:473/550` D15/R11 乐观锁前置快速失败 + 原子 gate） |
 
 ### 17.4 任务总表（后端 T-1–T-14 + 前端 F-T1–F-T7）
 
-| # | 任务 | 依赖 | 产出 |
-|---|---|---|---|
-| **T-1** | 依赖扫描：`wf_*` 实体在前后端/上下游的引用面 | — | 影响清单 |
-| **T-2** | 数据模型定稿（含 D6、D8） | T-1 | DDL 终稿 |
-| **T-3** | BPMN 扩展 schema 定稿 + 往返保真测试（V7/V13） | — | schema + 测试 |
-| **T-4** | 前端 `wf:` moddle 扩展定义（D12） | T-3 | moddle + 注册 |
-| **T-5** | 定义期语义回填 + 双轨对账 | T-3 | 迁移脚本 + 对账 |
-| **T-6** | `ACT_*` 加列 + 租户复合索引 | T-2 | DDL 脚本 |
-| **T-7** | 实例级回填（含 `TENANT_ID_`）+ 校验（V27） | T-6 | 回填脚本 |
-| **T-8** | 超时链路改造：扫 `DUE_DATE_` + 修 R4 + 多副本治理（D9） | T-6 | 代码 + 调度方案 |
-| **T-9** | 审批日志迁移到 `ACT_HI_COMMENT`（含 D8） | T-7 | 迁移脚本 |
-| **T-10** | 接口改造：逐个盘点筛选能力（D10） | T-6 / T-7 | 接口实现 |
-| **T-11** | 权限/操作者改读 BPMN 扩展（A4） | T-5 | 代码 |
-| **T-12** | 并发与性能压测（V23–V26） | T-8 / T-10 | 压测报告 |
-| **T-13** | 多租户隔离验证（V19–V22） | T-7 / T-10 | 验证报告 |
-| **T-14** | 存量 `wf_*` 退役（保留归档与 `wf_migration_map`） | 全部 | 退役清单 |
-| **F-T1** | `wf:` moddle 扩展定义 | T-3 | moddle JSON + 注册 |
-| **F-T2** | 设计器画布支持扩展读写 | F-T1 | `BpmnDesigner` 改造 |
-| **F-T3** | 节点 / 出口面板改造（F2/F3/F4） | F-T1 | 面板代码 |
-| **F-T4** | 操作者/超时/菜单/附加操作面板改造（F5） | F-T1 | 面板代码 |
-| **F-T5** | 保存链路收敛 + 废弃细粒度写接口（F6） | F-T3 / F-T4 | API 层改造 |
-| **F-T6** | 字典 / 版本对比 / 测试态对齐（F7/F8/D13） | F-T1 | 配置与组件 |
-| **F-T7** | 列表 / 办理页契约核对（F9/F10/F11） | I1 决策 | 页面核对报告 |
+| # | 任务 | 依赖 | 产出 | 状态（2026-10-04） |
+|---|---|---|---|---|
+| **T-1** | 依赖扫描：`wf_*` 实体在前后端/上下游的引用面 | — | 影响清单 | ✅ 已完成（§19 矩阵） |
+| **T-2** | 数据模型定稿（含 D6、D8） | T-1 | DDL 终稿 | ✅ 已完成 |
+| **T-3** | BPMN 扩展 schema 定稿 + 往返保真测试（V7/V13） | — | schema + 测试 | ✅ 已完成 |
+| **T-4** | 前端 `wf:` moddle 扩展定义（D12） | T-3 | moddle + 注册 | ✅ 已完成（F-T1） |
+| **T-5** | 定义期语义回填 + 双轨对账 | T-3 | 迁移脚本 + 对账 | ✅ 已完成 |
+| **T-6** | `ACT_*` 加列 + 租户复合索引 | T-2 | DDL 脚本 | ✅ 已完成 |
+| **T-7** | 实例级回填（含 `TENANT_ID_`）+ 校验（V27） | T-6 | 回填脚本 | ✅ 已完成 |
+| **T-8** | 超时链路改造：扫 `DUE_DATE_` + 修 R4 + 多副本治理（D9） | T-6 | 代码 + 调度方案 | ✅ 已完成 |
+| **T-9** | 审批日志迁移到 `ACT_HI_COMMENT`（含 D8） | T-7 | 迁移脚本 | ✅ 已完成 |
+| **T-10** | 接口改造：逐个盘点筛选能力（D10） | T-6 / T-7 | 接口实现 | ✅ 已完成（B4 9/9 + #10 豁免，H2 21/21） |
+| **T-11** | 权限/操作者改读 BPMN 扩展（A4） | T-5 | 代码 | ✅ 已完成 |
+| **T-12** | 并发与性能压测（V23–V26） | T-8 / T-10 | 压测报告 | 🔲 未做（需 dev 压测，可选后续） |
+| **T-13** | 多租户隔离验证（V19–V22） | T-7 / T-10 | 验证报告 | ✅ 已完成（V20 按设计 N/A） |
+| **T-14** | 存量 `wf_*` 退役（保留归档与 `wf_migration_map`） | 全部 | 退役清单 | ⏸ 决策 B 收口（不 DROP、可选停写） |
+| **F-T1** | `wf:` moddle 扩展定义 | T-3 | moddle JSON + 注册 | ✅ 已完成 |
+| **F-T2** | 设计器画布支持扩展读写 | F-T1 | `BpmnDesigner` 改造 | ✅ 已完成 |
+| **F-T3** | 节点 / 出口面板改造（F2/F3/F4） | F-T1 | 面板代码 | ✅ 已完成 |
+| **F-T4** | 操作者/超时/菜单/附加操作面板改造（F5） | F-T1 | 面板代码 | ✅ 已完成 |
+| **F-T5** | 保存链路收敛 + 废弃细粒度写接口（F6） | F-T3 / F-T4 | API 层改造 | ✅ 已完成（saveBpmn 收敛） |
+| **F-T6** | 字典 / 版本对比 / 测试态对齐（F7/F8/D13） | F-T1 | 配置与组件 | ✅ 已完成 |
+| **F-T7** | 列表 / 办理页契约核对（F9/F10/F11） | I1 决策 | 页面核对报告 | ✅ 已完成 |
 
 **关键路径**：`T-3 → T-4/F-T1 → F-T2~F-T5`（前端） 与 `T-2 → T-6 → T-7 → T-10`（后端主链）并行；`T-12/T-13` 收口验证；`T-14` 最后退役。
+
+> 📌 T-1 / T-3 交付物（22 表扫描矩阵 / BPMN 扩展 schema）已并入本文 §十九 / §二十，原独立文档（`wf_退役影响清单.md` / `wf_依赖扫描影响清单.md` / `wf_BPMN扩展schema定稿.md`）已删除，以本文为唯一权威。
+> 📌 另有 4 份 `去wf_表-*` 衍生文档已精华回填至本文：D 系列决策 → **§17.1**（含 2026-10-01 全拍板速查 + D16）、任务读源翻源上线检查 → **§10.1**、读源切换开关 → **§11.7**、定义主记录翻源设计 → **§17.6**；原文件保留为权威底稿、本文为结论索引（主文档为唯一权威）。
+
+#### 17.4.1 实施状态跟踪（2026-10-04 更新）
+
+| 任务 | 状态 | 证据 / 说明 |
+|---|---|---|
+| **T-10** 运行期读源改造（B4） | ✅ 已完成 | 9 处硬读全迁 BPMN/ACT_* + `#10` 豁免；含 `#3/#4` 签序静默丢失 bug 修复（`resolveSignOrder` 改按 `nodeKey` 走 `bpmnReader.operators`）、`#8 resolveDueTime` 改读 `bpmnReader.node().getExtJson()`、`#9 applyMultiInstanceIfEnabled` 部署期 MI 注入改读「手里这份 bpmnXml」的 `BpmnExtensionUtil.readNode(userTask)`（去 wf_ 表 + 避免回读已部署旧工件导致陈旧签序）。`mvn -pl blade-service/blade-workflow -am test -Dtest=WfMultiInstanceGateTest,WfBpmnExtensionRoundTripTest,WfEngineAdvancedSemanticsTest` → **BUILD SUCCESS，21/21 H2 单测全过**（MI 注入 / 扩展往返 / 引擎语义无回归）。 |
+| **F-T2~F-T5** 设计器面板 | ✅ 已完成 | code-explorer 核实：NodeInfoPanel / LinkInfoPanel / NodeOperatorModal / NodeTimeoutModal / NodeOperateMenuModal / CustomOperationModal + 画布均统一经 `setWfNodeExt`/`setWfLinkExt` 写 BPMN `wf:` 扩展，由 `commandStack.changed`→`saveBpmn` 落库；面板内零细粒度写接口调用（旧接口仅 `@deprecated` 死代码）。前端「去 wf_ 表」写路径闭环。 |
+| **D16** formmode 触发改绑 | ✅ 已完成（dev） | 记忆核实 2026-10-02：`trigger-from-flowable.enabled` 已在 Nacos 开启、两份幂等回填 SQL 已执行、`TriggerBackfillController`/双读/R-A~R-E 守卫/灰度豁免开关落地、R-A/R-B/R-C/多租户回归已通过。 |
+| **T-14** 存量 `wf_*` 退役 | ⏸ 决策 B 收口（可选加固） | 源码核实：`saveBpmn`(568–749) 双写镜像 + `WfTestServiceImpl` + `WfDefinitionBackfillJob` 仍直写 7 张语义表。`project_wf_table_retire_blocker.md`（决策 B）：不 DROP、表作遗留镜像/测试存储长期保留；运行期读源已不再静默回退（B4 完成），「停写」为可选加固，需先迁 `/definition/{id}/nodes`、`validateForDeploy③`、`WfTestServiceImpl`、`WfDefinitionBackfillJob` 直读路径到 BPMN 才能安全停写，本期不强制。 |
+| **T-13** 多租户隔离（V19–V22） | ✅ 已验证（dev + 代码） | **V20 按设计 N/A**：`FlowableConfig:115 setAsyncExecutorActivate(false)` ⇒ 无 Flowable 异步执行器/按租户作业获取，"B 租户执行器消费 A 租户作业"前提不成立（对应 §17.5③/D9/R3：超时改全局单例 `WfTimeoutJob` 扫 `DUE_DATE_`，逐任务处理、无跨租户串）。**V19 跨租户越权查询**：dev 实测 `GET blade-workflow/instance/mine` → 200、106 条均租户 000000；代码 `WfInstanceServiceImpl.mine` 三处 `.eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())`（741/773/817）强制隔离。**V21/V22**：统一由 `WfAuthUtil.tenantId()` + 显式 `eq(TENANT_ID_)` 强制；无租户列表（ACT_HI_COMMENT/ACT_RU_VARIABLE）须 JOIN（D8/R7 已评估）。完整跨租户泄漏需双租户 fixture 数据，当前 dev 仅 000000 数据，由强制租户过滤兜底。 |
+| **T-12** 并发压测（V23–V26） | 🔲 未做 | 需 dev 运行环境压测，待阶段四。 |
+
+> 📌 阶段三核心目标（**运行期读源不再以 wf_* 为准**）已由 B4 完成并 H2 验证；前端写路径、D16 均已闭环；T-14 依决策 B 收口为可选加固。阶段四聚焦 dev 侧验证（V20 等关键缺口）。
 
 ### 17.5 一页纸速查（核心结论）
 
@@ -1852,6 +1895,14 @@ Flowable 8 的 `flowable-job-service/.../asyncexecutor/multitenant/` 已原生�
 5. **`ACT_*` 为 workflow 专用**，其它行业经 API 接入。
 6. **四个必须先修/先定的硬问题**：R4（超时误标记缺陷）、R3（多副本重复触发）、R1（定义 1:N 缺桥接）、R8（moddle 未交付）。
 7. **实际版本是 `8.1.0-SNAPSHOT`（本地源码构建）**，且 pom 已标注 `schema.version` 与 `CURRENT_VERSION` 不一致风险 ⇒ 建议加列前先确认。
+
+### 17.6 定义主记录（wf_process_definition）翻源设计（精华回填）
+
+> 精华回填自《去 wf_表-定义主记录翻源设计》。回答「主记录本身能不能翻、怎么翻」：
+> - **结论**：主记录**不可完全退役**，走「职责切分」——引擎侧承载定义语义（节点/出口/操作者/权限/超时/折叠连线，已落地）；主记录降级为**草稿暂存 + 业务元数据**（状态、版本组、表单绑定、灰度、路径类型）长期保留；退役对象收窄为 **7 张语义表**（wf_process_node/link/operator/field_perm/detail_perm/detail_filter/timeout），随各开关全量开启后停写（P6）。
+> - **根因**：草稿定义在引擎侧无存放处（无 deployment → 无 BPMN 持久化）；「激活哪个版本/是否灰度/显示排序」是写态业务数据，硬塞 BPMN 会破坏 Flowable 部署不可变原则。`bpmn_xml` 仍是草稿载体（`proc_def_id`/`deployment_id`/`proc_key` 保留为桥列）。
+> - **落地清单（D2 职责切分）**：①语义读取切 BPMN（已完成 + dev 实测）；②P6 停写 7 张语义表；③主记录瘦身；④`wf_workflow_type` 迁字典或保留；⑤`wf_definition_gray` 业务态长期保留。
+> - **附带修正（2026-09-30 dev）**：`wf_process_node/link` 存在画布历史残留（非现行代码缺陷，`saveBpmn` 已有 diff 删除逻辑）；并修复读源返回「骨架节点」静默降级——`WfBpmnExtensionReader` 增加 `nodeExtsComplete` 完整性守卫（任一 UserTask 缺 `wf:node` → 整体回退 `wf_*` 表）。
 
 ---
 
@@ -1921,5 +1972,306 @@ Flowable 8 的 `flowable-job-service/.../asyncexecutor/multitenant/` 已原生�
   - 本文档 §15.5 的 **I1 = "查询契约不变"**（接口契约议题）；
   - `去wf_表-D系列决策结论.md` 第四节的 **I1 = formmode 触发关联键**。
   - ⇒ 后者需改名消歧（拟 **D16**）。
-- **"必须改键"断言已失效**：`wf_退役影响清单.md:143 §e.1` 与 `wf_依赖扫描影响清单.md:88`（P0）的"退役后需同步改键"，其"退役"前提**已被 D2 推翻** ⇒ 需加失效声明，并指向本章结论（改绑 procKey + TENANT_ID_，而非裸 pdId）。
+- **"必须改键"断言已失效**：原 `wf_退役影响清单.md §e.1` 与 `wf_依赖扫描影响清单.md §2.4`（P0）的"退役后需同步改键"前提**已被 D2 推翻**（两文档已并入本文 §十九）⇒ 指向本章结论（改绑 procKey + TENANT_ID_，而非裸 pdId）。
 - **本文档 F-T7 ≠ formmode 外键**：§17.4 的 F-T7 是"列表/办理页契约核对"，依赖的是**本文档 I1（查询契约不变）**，与 formmode 外键改造不是同一件事，勿再混用标签。
+
+---
+
+## 十九、T-1 依赖扫描与改造矩阵（精华回填）
+
+> 原 T-1 两份交付物（`wf_退役影响清单.md` 原始扫描底稿、`wf_依赖扫描影响清单.md` 分类矩阵）已并入本章，作为去 `wf_*` 表改造的**唯一权威依赖清单**。结论先行：跨模块 Java 引用仅存在于 `blade-formmode`（其余 7 个模块对 `org.springblade.workflow` 引用数 = 0）；无 Mapper XML 直接写 `wf_*`（MyBatis-Plus 走 `@TableName`，P6 退役对象即实体/Mapper/Service/Controller 类）。
+
+### 19.1 22 表全量清单与改造矩阵
+
+全部实体位于 `blade-service-api/blade-workflow-api/.../org/springblade/workflow/entity/`。下表合并「原始扫描（file:line）+ 分类标尺（目标源/动作/任务/风险）」。
+
+#### 19.1.1 定义期 16 表 → 翻源 BPMN / 保留
+
+| 表 | 实体 | 文件:行 | 目标源 | 改造动作 | 归属任务 | 风险 |
+|---|---|---|---|---|---|---|
+| wf_process_definition | WfProcessDefinition | `WfProcessDefinition.java:18` | **保留**（职责切分） | 主记录瘦身为业务态+草稿载体；保留桥列 `proc_def_id`/`deployment_id`/`proc_key`+`bpmn_xml`；语义读取已切 BPMN | P3-5(已完成)/T-14(收窄,不退役) | P1 |
+| wf_process_node | WfProcessNode | `WfProcessNode.java:22` | **BPMN `wf:node`** | 回填 BPMN；`definition-from-bpmn` 开关已落地(默认关)；全开稳定后停写删表 | T-5/T-14 | **P0** |
+| wf_node_link | WfNodeLink | `WfNodeLink.java:17` | **BPMN `wf:link`+`wf:foldedLink`** | 同 node；折叠连线合并 | T-5/T-14 | **P0** |
+| wf_node_operator | WfNodeOperator | `WfNodeOperator.java:20` | **BPMN `wf:operator`** | `operator-from-bpmn` 已落地；回填操作者扩展 | T-5/T-11/T-14 | **P0** |
+| wf_node_field_perm | WfNodeFieldPerm | `WfNodeFieldPerm.java:25` | **BPMN `wf:fieldPerm`** | `perm-from-bpmn` 已落地(三维度 schema 已补全) | T-5/T-11/T-14 | **P0** |
+| wf_node_detail_perm | WfNodeDetailPerm | `WfNodeDetailPerm.java:18` | **BPMN `wf:detailTablePerm`** | `detail-perm-from-bpmn` 已落地 | T-5/T-11/T-14 | P1 |
+| wf_node_detail_filter | WfNodeDetailFilter | `WfNodeDetailFilter.java:18` | **BPMN `wf:detailFilter`** | `detail-filter-from-bpmn` 已落地(逐字段规则) | T-5/T-11/T-14 | P1 |
+| wf_node_timeout | WfNodeTimeout | `WfNodeTimeout.java:25` | **BPMN `wf:timeout`** | `timeout-from-bpmn` 已落地，**同时影响运行期**超时计算 | T-5/T-8/T-14 | **P0** |
+| wf_node_default_sign | WfNodeDefaultSign | `WfNodeDefaultSign.java:19` | **BPMN 扩展** | 翻 BPMN（默认签署，归 node 扩展或独立元素）；当前无专属开关，需补 | T-5 | P1 |
+| wf_custom_action | WfCustomAction | `WfCustomAction.java:21` | **BPMN `wf:customAction`** | 翻 BPMN 扩展；`importDefinition` 自动建逻辑改读 BPMN | T-5 | P1 |
+| wf_custom_operation | WfCustomOperation | `WfCustomOperation.java:19` | **BPMN `wf:customOperation`** | 翻 BPMN 扩展 | T-5 | P1 |
+| wf_custom_operation_action | WfCustomOperationAction | `WfCustomOperationAction.java:16` | **BPMN（customOperation 子元素）** | 随 customOperation 翻 BPMN | T-5 | P1 |
+| wf_custom_operation_right | WfCustomOperationRight | `WfCustomOperationRight.java:16` | **BPMN（customOperation 子元素）** | 随 customOperation 翻 BPMN | T-5 | P1 |
+| wf_definition_gray | WfDefinitionGray | `WfDefinitionGray.java:24` | **保留**（业务态） | 灰度孪生，长期保留（processMeta 仅部署期快照） | T-14(收窄) | P2 |
+| wf_subflow_request | WfSubflowRequest | `WfSubflowRequest.java:20` | **待决策** | 子流程请求：可能迁引擎子流程或保留独立表 | 待决策(单独任务) | P2 |
+| wf_workflow_type | WfWorkflowType | `WfWorkflowType.java:17` | **字典**（迁 `blade_dict_biz` 或保留） | 纯字典无引擎对等物，独立小任务 | T-14 | P2 |
+
+> 定义期主写者：`WfDefinitionServiceImpl.java:126-132`（注入 7 个定义期 Mapper）；`WfPermServiceImpl`、`WfTimeoutServiceImpl`、`WfCustomActionServiceImpl`、`WfCustomOperationServiceImpl`、`WfSubflowServiceImpl` 分管其余。
+
+#### 19.1.2 运行期 3 表 → ACT_* 原生表（P0 主干）
+
+| 表 | 实体 | 文件:行 | 目标源 | 改造动作 | 归属任务 | 风险 |
+|---|---|---|---|---|---|---|
+| wf_instance | WfInstance | `WfInstance.java:31` | **`ACT_HI_PROCINST` + 运行期 `ACT_RU_EXECUTION` + 原生 `BUSINESS_STATUS_`** | 迁 ACT_*；写侧 `WfWriteHelper`/`WfStateProjector` 改造；`WfInstanceServiceImpl` 反向读定义期表需清理 | T-6/T-7/T-10 | **P0** |
+| wf_task | WfTask | `WfTask.java:24` | **`ACT_RU_TASK`/`ACT_HI_TASKINST` + `DUE_DATE_`(已加索引) + `is_test` 过滤** | 迁 ACT_*；合成待办(rejectToStarter)维持 `wf_task` 占位(D2)或改引擎；`WfTimeoutJob` 改 Flowable 定时器(D9) | T-6/T-7/T-8/T-10 | **P0** |
+| wf_approval_log | WfApprovalLog | `WfApprovalLog.java:24` | **`ACT_HI_COMMENT`(已加 `TENANT_ID_`, D8)** | 读切 `ACT_HI_COMMENT`（28+ 读路径全量回归）；写侧 `WfWriteHelper.appendLog` 改引擎评论 | T-9/T-10 | **P0** |
+
+> 运行期主写者：`WfInstanceServiceImpl.java`、`WfTaskServiceImpl`、`WfWriteHelper`+`WfStateProjector`。
+
+#### 19.1.3 边界 3 表 → 保留/单独决策（P2）
+
+| 表 | 实体 | 文件:行 | 目标源 | 改造动作 | 归属任务 | 风险 |
+|---|---|---|---|---|---|---|
+| wf_form_snapshot | WfFormSnapshot | `WfFormSnapshot.java:20` | **保留独立快照表 或 迁引擎历史变量** | 历史打印/回溯（含 `layout_id` 布局重现）依赖；删除会丢 | 待决策(单独任务) | P2 |
+| wf_migration_map | WfMigrationMap | `WfMigrationMap.java:22` | **迁移验收后退役** | ecology 存量在途实例接管唯一凭据；保留作对账凭据(H4) | T-14(迁移后) | P2 |
+| wf_test_log | WfTestLog | `WfTestLog.java:33` | **保留**（D13 节点测试态维持存 `wf_*`） | `WfTestServiceImpl` 独占；随测试体系保留/退役 | 单独决策 | P2 |
+
+#### 19.1.4 跨模块引用（唯一跨模块风险在 blade-formmode）
+
+| 模块 | 文件:行 | 引用对象 | 目标源 | 改造动作 | 归属任务 | 风险 |
+|---|---|---|---|---|---|---|
+| blade-formmode (pom) | `pom.xml:46-49` | Maven 依赖 `blade-workflow-api` | API 包不退役 | 维持（仅语义表停写） | T-10 | P1 |
+| blade-formmode `ApprovalTriggerServiceImpl` | `:13-14,36,83-91` | Feign `IWorkflowClient` | **已由 D16 接管** | D2 保留 `wf_process_definition` 主记录不退役，无需改键；新决议以 Flowable 为事实源，绑定改 `procKey + TENANT_ID_`（见 §十八 / 决策文档 D16），原"必须改键→P0"假设推翻 | T-10 + formmode 单独改造 | 已由 D16 接管 |
+| blade-formmode `WorkflowBillServiceImpl` | `:22-23,39-41,61` | Feign `IWorkflowClient.getFormBinding` | `FormBindingVO` 读 `wf_process_definition.form_id` 与 `wf_instance.form_id` | 删表单占用校验依赖它——formmode 侧同步改读源 | T-10 | P1 |
+
+> 其余 7 模块（desk/mall/order/pay/demo/system/log）对 `org.springblade.workflow` 引用数 = 0（已逐模块确认）。
+
+### 19.2 后端模块内引用面（P6 退役主体：blade-workflow 自身）
+
+| 文件 | 关键引用 |
+|---|---|
+| `WfDefinitionServiceImpl.java:126-146` | 写 7 个定义期 Mapper；注入 `WfInstanceMapper`（146）读 wf_instance 做绑定校验 |
+| `WfInstanceServiceImpl.java:87-94,338,441,556,1448,1573` | 写 wf_instance/wf_task/wf_approval_log/wf_form_snapshot |
+| `WfTaskServiceImpl.java` | wf_task 读写 |
+| `WfPermServiceImpl.java` | wf_node_field_perm / detail_perm / detail_filter |
+| `WfTimeoutServiceImpl.java` | wf_node_timeout |
+| `WfCustomActionServiceImpl.java` / `WfCustomOperationServiceImpl.java` | wf_custom_action / wf_custom_operation(_action/_right) |
+| `WfFormRenderServiceImpl.java` | wf_form_snapshot + 字段权限 |
+| `WfSubflowServiceImpl.java` | wf_subflow_request |
+| `WfTestServiceImpl.java` | wf_test_log + 节点测试态 |
+| `WfWriteHelper.java` / `WfStateProjector.java` | wf_instance/wf_task/wf_approval_log（方案C 投影） |
+| `job/WfTimeoutJob.java` | 直接读 wf_task（due_time/timeout_handled/is_test），消费 wf_node_timeout |
+| `controller/*` | 各表 HTTP 入口 |
+
+### 19.3 前端引用面（ant-design-pro）
+
+服务入口：`src/services/workflow/index.ts`（87+ 接口，前缀 `/api/blade-workflow`）。
+
+**定义期写接口（失去承载对象 → 改存 BPMN 扩展）**
+
+| 端点 | 承载表 | 改造性质 |
+|---|---|---|
+| `/definition/{id}/bpmn`（`saveBpmn`/`getBpmn`） | BPMN | 画布保存 |
+| `/definition/import`（`importDefinition`） | 解析 `wf:` 扩展自动建节点/操作者/权限 | **重点**：导入后自动建 wf_* 的逻辑需改 |
+| `/definition/{id}/node…`（`listNodes`/`updateNode`/`deleteNode`） | wf_process_node | 改存 BPMN 节点扩展 |
+| `/definition/{id}/link…`（`listLinks`/`createLink`/`updateLink`/`deleteLink`） | wf_node_link | 改存 BPMN 连线 |
+| `…/node/{nodeKey}/operator`（`configOperator`/`getNodeOperators`/`syncOperatorToNodes`） | wf_node_operator | 改存 BPMN 操作者扩展 |
+| `…/field-perm` / `…/detail-perm` / `…/detail-filter` | wf_node_field_perm / detail_perm / detail_filter | 改存 BPMN |
+| 节点超时 `NodeTimeoutModal.tsx` | wf_node_timeout | 改存 BPMN 定时器边界事件 |
+| `/custom-action…`（`listCustomActions`/`saveCustomAction`/`deleteCustomAction`） | wf_custom_action | 改存 BPMN 扩展 |
+| `CustomOperationModal.tsx` 系列 | wf_custom_operation(_action/_right) | 改存 BPMN 扩展 |
+| `/definition/…`（`deployDefinition`/`saveAsNewVersion`/`activateVersion`/`listVersions`/`diffVersion`/`testDefinition`/`withdrawDefinition`/`removeDefinition`） | wf_process_definition 生命周期 | 改走 Flowable 部署/版本 |
+| `/definition/browser/wftype`（`createWorkflowType`） | wf_workflow_type | 分类字典 |
+| `saveNodeTestStatus`/`simulateDefinition` | 节点测试标记 | 测试态 |
+
+**运行期写接口（承载对象迁 `ACT_*`）**
+
+| 端点 | 承载表 | 改造性质 |
+|---|---|---|
+| `/instance/start`（`startInstance`） | 建 wf_instance+wf_task | 改由 Flowable 发起 |
+| `/instance/save-draft` `/instance/{id}/draft`（`saveDraft`/`deleteDraft`） | wf_instance 草稿态 | 草稿语义重新设计 |
+| `/form/save`（`saveFormData`） | wf_form_snapshot | 快照边界表 |
+| `/task/{id}/…`（`approveTask`/`rejectTask`/`forwardTask`/`addSignTask`/`circulateTask`/`urgeTask`/`markTaskViewed`） | wf_task 状态 | 改走 Flowable TaskService |
+| `/instance/{id}/…`（`withdrawInstance`/`stopInstance`/`resumeInstance`/`cancelInstance`） | wf_instance 生命周期 | 改走引擎 |
+| `/instance/{id}/logs`（`getLogs`） | 读 wf_approval_log | **改读 `ACT_HI_COMMENT`** |
+| `/instance/{id}/snapshot/{nodeKey}`（`getSnapshot`） | 读 wf_form_snapshot | 读边界快照表 |
+| `/instance/{id}/node-operators`（`getInstanceNodeOperators`） | 运行期操作者 | 改读引擎指派 |
+| 实例/任务查询（`getInstance`/`freshInstance`/`getInstanceByBiz`/`listTodo`/`listDone`/`listMyRequests`） | 读 wf_instance/wf_task | 改读 Flowable 历史/运行 |
+
+**前端页面引用**：`src/pages/FormMode/WorkflowDesign/`（26 文件：BpmnDesigner / NodeDetail / NodeInfoPanel / NodeOperatorModal / NodeTimeoutModal / LinkInfoPanel / CustomActionRegisterModal / CustomOperationModal / FormContentDesignModal / NodeExtraOperateModal / NodeOperateMenuModal / SimulateModal / VersionDiffModal / WorkflowTestModal 等）；`src/pages/Workflow/`（运行期消费：Todo / Done / Request / Create/Start / Create/Create / Create/InstanceFlow）。
+
+### 19.4 方案C 投影设施（去 `wf_*` 后退役）
+
+| 设施 | 路径 | 职责 | 退役触发 |
+|---|---|---|---|
+| **WfStateProjector** | `blade-workflow/.../service/helper/WfStateProjector.java` | 引擎事件→台账反写（onProcessCompleted/Cancelled/EntitySuspended/Activated/TaskCompleted），按 `engine_inst_id`/`engine_task_id` 关联 wf_* | wf_instance/wf_task 退役即整体删除 |
+| **WfEngineEventListener** | `blade-workflow/.../listener/WfEngineEventListener.java` | Flowable 全局 `FlowableEventListener`，派发事件给 Projector；`@ConditionalOnProperty("blade.workflow.ledger-listener.enabled")` | 监听注册一并移除 |
+| **WfWriteHelper** | `blade-workflow/.../service/helper/WfWriteHelper.java` | 双写收口器 `terminate/suspend/activate` 同时写 wf_* + 引擎；`appendLog` 写 wf_approval_log（231）；含 `intent`(`pending_status`) 与 `approvalCommentEnabled` 双写开关 | 运行期台账退役后生命周期写只留引擎侧；`appendLog` 改走引擎评论 |
+
+> 三者耦合：Listener→Projector，WriteHelper 显式双写兜底（同一开关 `ledger-listener.enabled` 与 Listener 互斥）。`WfMonitorController.java:82` 暴露 `diffSnapshot()`（`GET /monitor/ledger-shadow`）随设施一并退役。
+
+### 19.5 P0 高风险汇总（改造失败即丢数据/停服）
+
+1. **formmode `mode_triggerworkflowset.workflowid` 外键**：**已由 D16 接管**——D2 保留 `wf_process_definition` 主记录不退役，无需按原断言改键；新决议以 Flowable 为事实源、绑定 `procKey + TENANT_ID_`（见 §十八 / 决策文档 D16），原"必须改键→P0"前提推翻。
+2. **`WfTimeoutJob` 直接读 `wf_task.due_time/timeout_handled/is_test`**：退役后超时必须由 Flowable 定时器边界事件承载，`is_test` 过滤与 `timeout_handled` 幂等重设计 → T-8。
+3. **`WfInstanceServiceImpl` 反向读定义期表**（def/node/gray/link/operator）渲染/校验；`WfDefinitionServiceImpl` 注入 `WfInstanceMapper` 做表单绑定校验 → T-5/T-10 清理跨期引用。
+4. **`wf_approval_log` 读侧 28+ 处**：切 `ACT_HI_COMMENT` 前须全量回归读路径 → T-9/T-10。
+5. **`wf_form_snapshot` 边界表**：历史打印/回溯（含 `layout_id`）依赖，随 wf_instance 删除会丢 → 单独决策。
+6. **`wf_migration_map` 迁移桥接表**：ecology 存量在途实例接管唯一凭据，迁移验收后退役 → T-14。
+7. **序列化/雪花 ID 契约**：`IWorkflowClient.startProcess` 与前端 `startInstance` 强制返回**字符串**实例ID；迁 Flowable 后透传复核 → T-10。
+8. **`WfDefinition` 命名陷阱**：实体实为 `WfProcessDefinition`（`WfDefinitionController`/`WfDefinitionServiceImpl` 无对应实体）；别漏 `WfDefinitionGray`（灰度孪生） → T-5/T-14。
+9. **测试体系强耦合**：`WfTestServiceImpl`(126KB) 独占 `wf_test_log`；`WorkflowTestModal`+`WfMultiInstanceGateTest` 断言 `wf_task` 行为 → 连带评估 → D13 维持。
+10. **Feign 契约**：`IWorkflowClient` 仅 2 方法（`startProcess`/`getFormBinding`）；`getFormBinding` 查 `wf_process_definition.form_id`/`wf_instance.form_id` → formmode 占用校验依赖 → T-10。
+
+### 19.6 既有 migration SQL 冲突核对结论
+
+| 已落地 DDL（doc/sql/migration） | 列/索引 | 影响 |
+|---|---|---|
+| `V2026.09.30_001__act_ru_task_due_index.sql` | `ACT_RU_TASK.IDX_RU_TASK_DUE (DUE_DATE_)` | T-8 超时改造依赖此索引，新脚本**不得重复建** |
+| `act_add_def_key_bridge.sql` | `ACT_HI_PROCINST.DEF_KEY_ VARCHAR(255) NULL` | T-2/T-6 模型终稿若再 ADD 须幂等避让 |
+| `act_add_comment_tenant.sql` | `ACT_HI_COMMENT.TENANT_ID_ VARCHAR(64) DEFAULT ''` | D8 已完成（存量 234 条回填）；T-9 读侧直接复用，勿重复加列 |
+
+**结论**：无不可逆冲突；但 **T-2（§11.6 模型终稿）/ T-6（ACT_* 加列）新 DDL 脚本必须以幂等方式编写**（`IF NOT EXISTS` / 存在性判断），且新建 `V*` 脚本时间戳须避让既有文件，避免 Flyway/Liquibase 版本号碰撞。已加列（`DEF_KEY_`/`TENANT_ID_`/`DUE_DATE_` 索引）在 T-2 终稿中引用即可、不再 ADD。新加列严格遵循硬约束：新列必须 `NULL-able + DEFAULT`；DDL 首行 `USE blade`。
+
+### 19.7 一句话退役边界
+
+- **定义期 16 表**：`WfDefinitionServiceImpl` + Controller 主写者 → 改由 BPMN 扩展承载（前端 WorkflowDesign 全部面板联动）。
+- **运行期 3 表**：`WfInstanceServiceImpl`/`WfTaskServiceImpl`/`WfWriteHelper`/`WfStateProjector`/`WfEngineEventListener` 主写者 → 迁 Flowable `ACT_*`。
+- **3 边界表**：`wf_form_snapshot`（保留/历史变量）、`wf_migration_map`（迁移后退役）、`wf_test_log`（测试体系）单独决策。
+- **唯一跨模块风险在 blade-formmode**：Feign + `mode_triggerworkflowset.workflowid` 外键 + Maven 依赖，是最易被遗漏的数据耦合点。
+
+---
+
+## 二十、BPMN 扩展 Schema 定稿（T-3 canonical，精华回填）
+
+> 原 `wf_BPMN扩展schema定稿.md` 已并入本章。本文件是 **canonical 契约**：后端 `BpmnExtensionUtil`、前端 `wf:` moddle（F-T1）、BPMN 生成模板、往返测试（V7/V13）**共用同一套语义**，禁止另起一套。后续元素名/属性名/命名空间任一变更须同步三处（模板、util、moddle）并跑通往返测试。
+
+### 20.1 命名空间（统一）
+
+```xml
+xmlns:wf="http://www.springblade.org/workflow"
+```
+
+> ⚠️ 历史测试曾用 `http://www.springblade.io/wf`，**已作废**，统一改用上面的官方命名空间（与技能模板、springblade-mapping 一致）。
+
+### 20.2 放置规则
+
+- **节点语义** → 挂在 `<userTask>` 的 `<extensionElements>` 下，元素名 `<wf:node>`，**key = userTask 的 `id`**（即 nodeKey）。
+- **出口语义** → 挂在 `<sequenceFlow>` 的 `<extensionElements>` 下，元素名 `<wf:link>`，**key = sequenceFlow 的 `id`**。
+- **流程级语义**（表单/类型/灰度/DEF_KEY_ 桥接）→ 挂在 `<process>` 的 `<extensionElements>` 下，元素名 `<wf:processMeta>`。
+- 每个元素可含多个同名子元素（如多条操作者、多条超时规则、多条字段权限）。
+
+### 20.3 保留名防护（不得用作自定义元素 localName）
+
+Flowable 按 `localName` 分发子元素解析（`BpmnXMLUtil#genericChildParserMap`），自定义名冲突会被当原生解析而**语义被吞**。禁用：`condition`、`conditionExpression`、`documentation`、`executionListener`、`taskListener`、`formProperty`、`field`、`timerEventDefinition`、`timeDate`、`timeCycle`、`timeDuration`、`multiInstanceLoopCharacteristics`、`script`、`eventListener`。
+
+**本项目自定义元素名**（均不与保留名冲突）：`node`、`link`、`processMeta`、`operator`、`fieldPerm`、`detailPerm`、`detailFilter`、`timeout`、`customAction`、`operation`、`right`、`extJson`、`extraOperations`。
+
+### 20.4 元素 / 属性参考
+
+#### 20.4.1 `wf:node`（userTask 扩展，替代 wf_process_node / wf_node_*）
+
+> ⚠️ 本节取值以**实现为准**：`nodeType` 见 `WfDefinitionServiceImpl#nodeTypeOf`（0创建 1审批 3归档，6自动处理），`opType`/`signOrder`/`mergeType` 见前端 `wfDict.ts` 与 `wf_node_operator` 存量数据。后续变更仍须同步三处（后端 util、前端 moddle/字典、本文档）并跑通往返测试。
+
+| 属性 | 含义 | 对应原表 |
+|---|---|---|
+| `nodeType` | 0创建 1审批 2提交 3归档 5等待 6自动处理 7网关 | wf_process_node.node_type |
+| `signOrder` | 审批方式：0或签 1会签 2依次 3抄送不需提交 4抄送需提交 | wf_process_node.sign_order |
+| `mergeType` | 分叉/合并：0普通 1分叉起点 2分叉中间 3按分支数合并 4指定分支合并 5比例合并 | wf_process_node.merge_type |
+| `passNum` | 通过数 / 比例 | wf_process_node |
+| `allowReject` | 0/1 允许驳回 | wf_process_node |
+| `allowForward` | 0/1 允许转办 | wf_process_node |
+| `autoApprove` | 0/1 自动通过 | wf_process_node |
+| `sortOrder` | 节点排序 | wf_process_node |
+| `testStatus` | 0/1 节点测试态（D13：存扩展，不落表） | wf_process_node.test_status |
+| `multiInstance` | 0/1 是否多实例会签（P2/P3 关联） | 新语义 |
+| `formKey` | 节点表单 key（可选） | wf_process_node |
+
+**子元素**
+
+- `<wf:operator groupNo opType objId bhxj levelMin levelMax/>`（0..n）→ `wf_node_operator`：`opType` 3人员 1部门 2角色 58岗位 4所有人 17创建人本人 18创建人上级 19本部门；`objId` 逗号分隔 ID。
+- `<wf:fieldPerm field perm/>`（0..n）→ `wf_node_field_perm`：`perm` 取值 `hidden`/`readonly`/`edit`/`required`（兼容 0/1/2/3）。
+- `<wf:detailPerm dtKey field perm/>`（0..n）→ `wf_node_detail_perm`：`dtKey` 明细表标识。
+- `<wf:detailFilter dtKey rowFilter/>`（0..n）→ `wf_node_detail_filter`：`rowFilter` 行过滤表达式。
+- `<wf:timeout seq enabled startType startField endType endFixedTime endField durationMin actionWay opinion operatorIds remindBeforeOperator remindTypes remindPersons/>`（0..n）→ `wf_node_timeout`：`actionWay` ∈ `autoApprove`/`forward`/`assign`/`remind`；`startType` 1相对 2字段；`endType` 1时长 2固定时刻 3字段。
+- `<wf:customAction actionKey name type url expression/>`（0..n）→ `wf_custom_action`：`type` 1URL 2流程操作 3接口。
+- `<wf:operation btnName btnOrder actionType enabled url httpMethod paramExpr flowOperation interfaceName opinion/>` + 子 `<wf:right rightType rightValue/>`（0..n）→ `wf_custom_operation`(+`wf_custom_operation_right`)：`actionType` 1URL 2流程操作 3接口；动作明细按 `actionType` 使用——1 取 `url`/`httpMethod`/`paramExpr`，2 取 `flowOperation`/`opinion`，3 取 `interfaceName`/`paramExpr`。
+- `<wf:extJson><![CDATA[...]]></wf:extJson>`（0..1）→ 未结构化字段的自由 JSON（如 remind 配置）。
+
+#### 20.4.2 `wf:link`（sequenceFlow 扩展，替代 wf_node_link）
+
+| 属性 | 含义 |
+|---|---|
+| `isReject` | 0/1 是否驳回线 |
+| `isMustPass` | 0/1 必经 |
+| `conditionCn` | 条件中文描述 |
+| `sortOrder` | 排序 |
+| `viaGateway` | 0/1 经网关 |
+
+**子元素**：`<wf:extraOperations><![CDATA[...]]></wf:extraOperations>`（0..1，出口附加操作脚本）。
+
+> 条件表达式**仍写原生** `<conditionExpression>`（不进 `wf:link`），与扩展互不干扰。
+
+#### 20.4.3 `wf:processMeta`（process 扩展，替代 wf_process_definition / wf_workflow_type / wf_definition_gray 部分字段）
+
+| 属性 | 含义 | 对应 |
+|---|---|---|
+| `defKey` | 业务定义 key（**D6 桥接**：业务 defId ↔ 引擎 KEY_+版本） | 新增 DEF_KEY_ |
+| `workflowType` | 流程分类 id | wf_workflow_type |
+| `formId` | 主表单 id（替代 wf_process_definition.form_id） | wf_process_definition.form_id |
+| `layoutId` | 布局 id | wf_process_definition |
+| `grayEnabled` | 0/1 灰度 | wf_definition_gray |
+| `grayRule` | 灰度规则 | wf_definition_gray |
+
+### 20.5 设计约束（评审确认）
+
+- 定义期语义**唯一载体**是 BPMN `extensionElements`，随 `ACT_GE_BYTEARRAY` 持久化/版本化；不再写 `wf_process_node`/`wf_node_*` 等 16 张定义期表。
+- 导入器（`WfDefinitionServiceImpl`）必须**解析 `wf:` 扩展**并据此构建运行期所需语义，**不再**自动建 `wf_*` 行（修复技能文档所述"仅文档性"现状）。
+- 前端 moddle（F-T1）与后端 `BpmnExtensionUtil` **共用本契约**；元素名/属性名/命名空间任一变更须同步三处（模板、util、moddle）并跑通往返测试。
+
+### 20.6 与原技能模板的差异（迁移须知）
+
+技能 `assets/template.bpmn20.xml` 与 `springblade-mapping.md` 当前用 `wf:operators`/`wf:customOperations`/`wf:fieldPerms` 分容器写法，且 `wf:` 仅文档性。本定稿改为 `wf:node` 包装 + 全量语义 + 强制解析。后续更新技能模板与映射文档以对齐本契约。
+
+## 二十一、剩余硬骨头设计方案（阶段2：2026-10-04 复核后）
+
+> 阶段1（§十九 + code-explorer 全量扫描）已证实：定义期 7 语义表「读」全已迁 BPMN（A 类，被 `definition-from-bpmn`+`wf-table-retirement` 双层闸控、当前不命中）；`wf_approval_log` 读写均被 retirement 闸控；`wf_instance/wf_task/wf_form_snapshot/wf_process_definition/wf_workflow_type/wf_definition_gray/flow_def_bridge` 按决策 B 保留（读源已翻 act、写侧双写保留）。**真正翻源后运行期仍必命中 wf_* 的，只剩下面 B4 运行期硬读**，以及前端 2 处只读回退。本章给出逐点迁移设计与其余待办方案。
+
+### 21.1 T-10 B4 运行期硬读迁移设计（后端）
+
+**前提**：`WfBpmnExtensionReader`（`bpmnReader`）已提供 `node(defId,nodeKey)`/`nodes(defId)`/`operators(defId,nodeKey)` 纯函数（含 `toProcessNode`/`toNodes`），`BpmnExtensionUtil.readNode(userTask)` 可 in-memory 读扩展。`WfInstanceServiceImpl` 已有 gated helper `loadNodeReadOnly`/`loadNodes`；`WfTaskServiceImpl` 用 `loadNode`。迁移即把 B4 点从「直读 mapper」改走这些 gated helper，自动继承 `definitionFromBpmn`+`retirement` 双闸与 wf_ 回退，灰度安全。
+
+| # | 点（文件:行） | 当前取字段 | BPMN 替代 | 建议 | 风险 |
+|---|---|---|---|---|---|
+| 1 | `WfTaskServiceImpl.nodeNameOf` :1213 | `wf_process_node.node_name` | `bpmnReader.node().getNodeName()` | (a) 改调 `bpmnReader.node(defId,nodeKey)`；空回退 nodeKey | 低 |
+| 2 | `WfTaskServiceImpl.injectMiCollectionVars` :1263 | `wf_process_node.node_key`（nodeType∈{1,2}） | `bpmnReader.nodes(defId)` | (a) 复用 gated `loadNodes` + filter(nodeType∈{1,2}) | 中 |
+| 3 | `WfTaskServiceImpl.resolveSignOrder`（operator 部分） :1295 | `wf_node_operator.sign_order`（按 nodeId） | `bpmnReader.operators(defId,nodeKey)` | (a) 按 nodeKey 键控；**修复 null-id 静默失效 bug** | 中 |
+| 4 | `WfInstanceServiceImpl.resolveSignOrder`（operator 部分） :1045 | 同上（按 nodeId） | 同上 | (a) 同 #3 | 中 |
+| 5 | `WfInstanceServiceImpl.nodeNameOf` :1226 | `wf_process_node.node_name` | gated `loadNodeReadOnly().getNodeName()` | (a) 改用本类已有 helper | 低 |
+| 6 | `WfInstanceServiceImpl.isEngineMultiInstance` :1582 | `wf_process_node.node_type` | gated `loadNodeReadOnly().getNodeType()` | (a) 改走 helper（保留 `multiInstanceEnabled` 特性闸） | 低‑中 |
+| 7 | `WfInstanceServiceImpl.injectMiCollectionVars` :1598 | `wf_process_node.node_key` | gated `loadNodes` | (a) 复用本类 helper | 中 |
+| 8 | `WfTimeoutServiceImpl.resolveDueTime` 旧回退 :130 | `wf_process_node.ext_json`→timeoutHours | `bpmnReader.node().getExtJson()` | (a) 旧回退改用 BPMN extJson；retirement 时禁 nodeMapper 回退 | 低‑中 |
+| 9 | `WfDefinitionServiceImpl.applyMultiInstanceIfEnabled` :2241/:2248 | `wf_process_node`+`wf_node_operator` | `BpmnExtensionUtil.readNode(userTask)`（部署时 XML 在手） | (a) 读侧纯 BPMN 化；**写侧注入 BPMN 本就非 wf_ 表，天然豁免** | 中 |
+| 10 | `WfActionExecutor.latestFormData`/:224 / `doField`/:296/:322 | `wf_form_snapshot.data_json`（读+写） | ❌ 无（运行期实例数据，BPMN 装不下） | **(c) 决策 B 表保留，不迁** | 低 |
+
+**关键 bug（顺带修复）**：现役 `operatorMapper.selectList(eq nodeId, node.getId())` 用 `node.getId()` 过滤，而 BPMN-sourced `WfProcessNode.id` 恒为 null → `definitionFromBpmn` 开启时该查询实际返回空，**操作组级会签/依次/或签被静默丢失**。迁移到 `bpmnReader.operators(defId,nodeKey)`（按 nodeKey 键控）同时修复，须回归会签/或签/依次三类场景。
+
+**wf_form_snapshot 结论**：决策 B 明确保留独立非 `wf_` 表（`ACT_HI_VARINST` 不适合大表单、BPMN 装不下运行期快照），读写路径不变；仅后续「去 wf_ 前缀重命名为 `flow_form_snapshot`」时改表名。
+
+**验收标准（T-10 闭环）**：在 `wf-table-retirement=true` 下，9 个 B4 点零命中 wf_* 硬读（#10 豁免）；#3/#4 有会签/或签/依次集成测试；全模块单测 0 失败。
+
+### 21.2 F-T5 前端路线 B 收口
+
+- **现状（已实测）**：所有面板写均经 `setWfNodeExt/setWfLinkExt`→`saveBpmn`，无直写 wf_*；F-T2~F-T5 实际已基本完成。仅余 2 处**只读回退**分支：`nodeOperatorIO.ts#readNodeOperators`/`readOperatorsBatch`（BPMN 无数据时回退 REST `getNodeOperators` 并就地迁源）、`NodeDetail.tsx#getFieldPerm`（回退 `wf_node_field_perm`）。
+- **清理方案**：`WfBpmnExtensionReader` 回填作业已把存量迁进 BPMN，故删除这两处 REST 回退、缺数据即返回空（不再读 wf_*）。`getNodeOperators`/`getFieldPerm` REST 端点随后端 P6 停写后可废弃。
+- **`saveCustomAction` 注册库界定**：`CustomActionRegisterModal.saveCustomAction` 写的是「全局自定义动作注册库」（Java 实现类登记，E9 接口动作类），非节点级配置、属独立表；节点级「自定义操作」(`CustomOperationModal`) 已走 BPMN。结论：**该注册库作为独立保留表，不纳入本次去 wf_ 节点面板范围**，主文档 §16 标注其独立保留身份。
+- **验收标准**：前端不再有任何 wf_* 读回退分支；`saveCustomAction` 去留结论已落档。
+
+### 21.3 T-12 并发与性能压测方案（V23–V26）
+
+- 工具：JMeter / Gatling 或 SpringBlade 自带压测脚本；目标环境 dev（数据达标后）。
+- 场景：① `ACT_RU_TASK` 待办列表（按 assignee+status 索引）吞吐/延迟/P99；② 超时扫描 `WfTimeoutJob`（扫 `DUE_DATE_` + GET_LOCK 多副本）；③ `WfDefinitionBackfillJob` 回填吞吐。
+- **前置铁律**：翻源前必跑 `doc/sql/migration/_verify_task_1to1.sql`，要求 ①N:1→0 且 ⑦孤儿→0（或确认全 is_test=1）、⑤(1:1)→0、⑥→0、**ACT 可读行 ≥ wf_task 列表行 99%**，全达标才置 `task-read-source=act`。dev 库数据不对齐属环境问题，不判定代码有误。
+- **验收标准**：产出真实压测报告；V23–V26 覆盖并有基线/峰值对比。
+
+### 21.4 T-13 多租户隔离验证方案（V20 执行器隔离）
+
+- 已覆盖：V19（定义隔离）/V21（实例隔离）/V22（任务隔离）有单测。
+- **V20（异步执行器租户隔离）缺口**：当前 `asyncExecutor` 未启用（超时走 `WfTimeoutJob` 扫 `DUE_DATE_`），故 V20 的「A 租户作业不被 B 租户执行器消费」须验证引擎**部署/查询**层面的租户边界：`ACT_RE_PROCDEF`/`ACT_RU_*` 按 `TENANT_ID_` 隔离，跨租户 `startProcessInstanceByKey` 不串版。构造两租户数据分别部署/发起，断言彼此实例/任务不互见。
+- **验收标准**：V20 补齐实测证据；V19/V21/V22 单测维持通过；D16 租户回填（P0：deploy/latest 加 `.tenantId(...)`）已落地的隔离效果被覆盖。
+
+### 21.5 D16 生产化收尾方案
+
+- 已落地：3 参部署重载 + 租户感知 `latestProcDefId/latestProcessDefinition`；`mode_triggerworkflowset.workflow_key` 加列 + `StartProcessDTO.tenantId`；formmode 双读开关 `trigger-from-flowable`（dev 已开）；R-A/R-E 引擎权威校验、R-B 守卫收窄、R-C 灰度豁免开关、R-D 结构化启动日志；回填 SQL 已执行；R-A/R-B/R-C/多租户数据级回归已通过。
+- **收尾项**：① 确认 formmode 触发真实 UI 入口（已验证走 `POST /form-data/save`，前端 `DataAdd.tsx` 当前未挂路由/无 `/{formId}` 处理器，需与部署前端核对）；② 过渡回退（无租户兜底 `latestProcessDefinition(engineKey,null)`）在「租户回填完成 + 各真实租户均有定义」后收紧为未知租户直接 400；③ 挂起态经探针 start 返回 500 改应用层 400（可选，`latestProcessDefinition` 未拦截挂起态）。
+- **验收标准**：D16 全链路生产态可观测、无脏数据、R-A~R-E 闭环有回归证据。

@@ -97,6 +97,7 @@ import org.springblade.core.tool.api.R;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
+import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -2238,16 +2239,22 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                     continue;
                 }
                 String nodeKey = userTask.getId();
-                WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                    .eq(WfProcessNode::getDefId, defId).eq(WfProcessNode::getNodeKey, nodeKey));
-                if (node == null || !(Integer.valueOf(1).equals(node.getNodeType())
-                    || Integer.valueOf(2).equals(node.getNodeType()))) {
+                // T-10 B4 #9：部署期 MI 注入读源改走「手里这份 BPMN」的 wf:node 扩展（BpmnExtensionUtil.readNode），
+                // 既去 wf_ 表依赖，又避免回读已部署旧工件导致的陈旧签序。
+                BpmnExtensionUtil.WfNodeExt nodeExt = BpmnExtensionUtil.readNode(userTask);
+                if (nodeExt == null) {
                     continue;
                 }
-                int nodeSign = node.getSignOrder() == null ? 0 : node.getSignOrder();
-                List<WfNodeOperator> ops = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
-                    .eq(WfNodeOperator::getNodeId, node.getId()));
-                List<Integer> opSigns = ops.stream().map(WfNodeOperator::getSignOrder).toList();
+                Integer nt = parseSignOrder(nodeExt.nodeType);
+                if (!(Integer.valueOf(1).equals(nt) || Integer.valueOf(2).equals(nt))) {
+                    continue;
+                }
+                Integer parsedNodeSign = parseSignOrder(nodeExt.signOrder);
+                int nodeSign = parsedNodeSign == null ? 0 : parsedNodeSign;
+                List<Integer> opSigns = nodeExt.operators.stream()
+                    .map(o -> parseSignOrder(o.signOrder))
+                    .filter(Objects::nonNull)
+                    .toList();
                 int signOrder = WfNodeSettingsUtil.combineSignOrder(nodeSign, opSigns);
                 WfNodeSettingsUtil.SignMiConfig mi = WfNodeSettingsUtil.signToMultiInstance(signOrder);
                 if (mi == null) {
@@ -2274,6 +2281,17 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         } catch (Exception e) {
             log.warn("[blade-workflow] 多实例注入失败，使用原 BPMN 部署: {}", e.getMessage());
             return bpmnXml;
+        }
+    }
+
+    private static Integer parseSignOrder(String s) {
+        if (s == null) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

@@ -126,11 +126,20 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
     public Date resolveDueTime(Long defId, String nodeKey, WfTask task, WfInstance inst) {
         List<WfNodeTimeout> rules = listEnabled(defId, nodeKey);
         if (rules.isEmpty()) {
-            // 兼容旧单条配置
-            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, defId)
-                .eq(WfProcessNode::getNodeKey, nodeKey)
-                .last("LIMIT 1"));
+            // 兼容旧单条配置：BPMN 源优先读 wf:node.extJson（T-10 B4 #8），wf_ 源回退 nodeMapper
+            WfProcessNode node = null;
+            if (timeoutFromBpmn) {
+                try {
+                    node = bpmnReader.node(defId, nodeKey);
+                } catch (Exception e) {
+                    log.warn("[WfTimeoutServiceImpl] 解析旧单条超时(BPMN)失败，忽略. defId={}, nodeKey={}", defId, nodeKey, e);
+                }
+            } else {
+                node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                    .eq(WfProcessNode::getDefId, defId)
+                    .eq(WfProcessNode::getNodeKey, nodeKey)
+                    .last("LIMIT 1"));
+            }
             int hours = WfNodeSettingsUtil.timeoutHours(node);
             if (hours <= 0) {
                 return null;

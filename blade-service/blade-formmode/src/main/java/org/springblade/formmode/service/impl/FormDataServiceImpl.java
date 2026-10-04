@@ -258,21 +258,38 @@ public class FormDataServiceImpl implements IFormDataService {
     }
 
     @Override
-    public FormDataVO getFormDataById(Long modeId, Long dataId) {
-        ModeInfo modeInfo = modeInfoMapper.selectById(modeId);
-        if (modeInfo == null || modeInfo.getBillid() == null) return null;
+    public FormDataVO getFormDataById(Long formId, Long dataId) {
+        // 优先按「表单ID(workflow_bill.id)」解析真实业务表：
+        // 迁移表单的表名与表单ID并不相同（如 表单 2064530495200337922 → formtable_main_5），
+        // 且这些表单 module_id 为空（旧 modeinfo 链路第一步即"模块不存在"）。
+        // 故直接以 workflow_bill 定位表名，失败再回退 modeinfo 旧链路。
+        String tableName = null;
+        WorkflowBill bill = workflowBillMapper.selectById(formId);
+        if (bill != null) {
+            tableName = StringUtil.isBlank(bill.getTableName())
+                ? TableNameUtil.getMainTableName(formId)
+                : bill.getTableName();
+        }
+        if (tableName == null || !SAFE_IDENT.matcher(tableName).matches()) {
+            ModeInfo modeInfo = modeInfoMapper.selectById(formId);
+            if (modeInfo != null && modeInfo.getBillid() != null) {
+                tableName = TableNameUtil.getMainTableName(modeInfo.getBillid().longValue());
+            }
+        }
+        if (tableName == null) {
+            return null;
+        }
 
-        String mainTableName = TableNameUtil.getMainTableName(modeInfo.getBillid().longValue());
-
-        return TableNameContextHolder.executeWithTableName(mainTableName, () -> {
-            String sql = "SELECT * FROM `" + mainTableName + "` WHERE id = ?";
+        final String finalTable = tableName;
+        return TableNameContextHolder.executeWithTableName(finalTable, () -> {
+            String sql = "SELECT * FROM `" + finalTable + "` WHERE id = ?";
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, dataId);
             if (rows.isEmpty()) return null;
 
             Map<String, Object> row = rows.get(0);
             FormDataVO vo = new FormDataVO();
             vo.setId(dataId);
-            vo.setModeid(modeId);
+            vo.setModeid(formId);
 
             // 过滤系统字段，只保留自定义字段值
             Map<String, Object> fieldValues = new HashMap<>();

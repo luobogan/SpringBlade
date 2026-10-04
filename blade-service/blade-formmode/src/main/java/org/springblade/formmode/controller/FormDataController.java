@@ -70,6 +70,64 @@ public class FormDataController extends BladeController {
     }
 
     /**
+     * 按「表单ID」新增业务数据行（前端契约：POST /form-data/{formId}）。
+     *
+     * <p>对齐前端 {@code dataApi.create(formId, fieldMap)}：路径携带 formId，请求体为
+     * 字段名→值的 Map。内部复用 {@link #saveByForm} 同口径的 {@code saveBusinessData}，
+     * 按 {@code workflow_bill.table_name} 定位真实业务表，仅写入存在的列。</p>
+     *
+     * <p>前端独立「新增数据」页面（/formmode/formview/aae?mode=add）即命中本接口。</p>
+     */
+    @PostMapping("/{formId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> createByForm(@PathVariable Long formId,
+                                @RequestBody Map<String, Object> fieldValues) {
+        FormDataSaveDTO dto = new FormDataSaveDTO();
+        dto.setFormId(formId);
+        dto.setFieldValues(fieldValues);
+        Long dataId = formDataService.saveBusinessData(dto);
+        return R.data(dataId, "业务数据新增成功");
+    }
+
+    /**
+     * 按「表单ID」更新业务数据行（前端契约：PUT /form-data/{formId}/{dataId}）。
+     *
+     * <p>对齐前端 {@code dataApi.update(formId, dataId, fieldMap)}。dataId 非空即走
+     * {@code saveBusinessData} 的更新分支（按 id 更新该行存在的列）。</p>
+     */
+    @PutMapping("/{formId}/{dataId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> updateByForm(@PathVariable Long formId,
+                                @PathVariable Long dataId,
+                                @RequestBody Map<String, Object> fieldValues) {
+        FormDataSaveDTO dto = new FormDataSaveDTO();
+        dto.setFormId(formId);
+        dto.setDataId(dataId);
+        dto.setFieldValues(fieldValues);
+        Long id = formDataService.saveBusinessData(dto);
+        return R.data(id, "业务数据更新成功");
+    }
+
+    /**
+     * 按「表单ID」批量删除业务数据行（前端契约：POST /form-data/{formId}/batch-delete）。
+     *
+     * <p>对齐前端 {@code dataApi.batchDelete(formId, ids)}（body=ids 数组）。
+     * 复用 {@code deleteBusinessData}（按 {@code workflow_bill.table_name} 定位真实表）。</p>
+     */
+    @PostMapping("/{formId}/batch-delete")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> batchDeleteByForm(@PathVariable Long formId,
+                                        @RequestBody List<Long> dataIds) {
+        if (dataIds == null || dataIds.isEmpty()) {
+            return R.success("批量删除成功");
+        }
+        for (Long dataId : dataIds) {
+            formDataService.deleteBusinessData(formId, dataId);
+        }
+        return R.success("批量删除成功");
+    }
+
+    /**
      * 获取数据详情
      */
     @GetMapping("/{modeId}/{dataId}")

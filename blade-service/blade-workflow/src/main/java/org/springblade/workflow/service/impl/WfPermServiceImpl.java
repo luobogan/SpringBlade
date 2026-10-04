@@ -114,7 +114,9 @@ public class WfPermServiceImpl implements IWfPermService {
     private List<FieldPermVO> fieldPermFromBpmn(Long defId, String nodeKey) {
         List<FieldPermVO> result = new ArrayList<>();
         for (BpmnExtensionUtil.WfFieldPermExt f : bpmnReader.fieldPerms(defId, nodeKey)) {
-            result.add(toFieldPermVO("main", f.field, f.perm, f.visible, f.editable, f.required));
+            // ⚠️ scope 必须取 BPMN 扩展里写入的值（main / dt{idx}）：硬编码 main 会把明细表字段权限
+            // 误报成主表字段——既让同名字段看起来「重复」，也会让运行期按错误作用域判定权限。
+            result.add(toFieldPermVO(normScope(f.scope), f.field, f.perm, f.visible, f.editable, f.required));
         }
         for (BpmnExtensionUtil.WfDetailPermExt d : bpmnReader.detailPerms(defId, nodeKey)) {
             result.add(toFieldPermVO(d.dtKey, d.field, d.perm, d.visible, d.editable, d.required));
@@ -137,6 +139,11 @@ public class WfPermServiceImpl implements IWfPermService {
             vo.setPerm(vo.derivePerm());
         }
         return vo;
+    }
+
+    /** 作用域归一：BPMN 未写 scope（历史数据/回填）时按主表 main 处理 */
+    private static String normScope(String s) {
+        return (s == null || s.isBlank()) ? "main" : s.trim();
     }
 
     private static Integer toInt(String s) {

@@ -14,7 +14,7 @@ import java.util.List;
 /**
  * BPMN {@code wf:} 扩展读写工具（T-3 定稿 schema 的承载实现）。
  *
- * <p>规范见 {@code doc/md/wf_BPMN扩展schema定稿.md}。定义期语义（节点/出口/操作者/字段权限/
+ * <p>规范见 {@code doc/md/Flowable8承接台账模块-去wf_表改造分析.md} §二十（BPMN 扩展 schema 定稿）。定义期语义（节点/出口/操作者/字段权限/
  * 明细权限/明细过滤/超时/自定义动作/自定义操作/流程级元数据）全部以 {@code wf:} 命名空间写入
  * BPMN {@code extensionElements}，随 {@code ACT_GE_BYTEARRAY} 持久化/版本化，不再落 {@code wf_*} 表。</p>
  *

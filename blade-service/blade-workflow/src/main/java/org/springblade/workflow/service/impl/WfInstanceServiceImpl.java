@@ -46,6 +46,7 @@ import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
+import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfSubflowService;
@@ -1042,6 +1043,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         boolean all = nodeLevel == SIGN_ALL;
         boolean sequence = nodeLevel == SIGN_SEQUENCE;
         if (node != null && node.getId() != null) {
+            // wf_ 源：节点来自 wf_process_node，id 非空，按 nodeId 读操作组签序
             List<WfNodeOperator> ops = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
                 .eq(WfNodeOperator::getNodeId, node.getId()));
             if (ops != null) {
@@ -1057,11 +1059,43 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     }
                 }
             }
+        } else if (definitionFromBpmn) {
+            // T-10 B4 #4：BPMN 源 node.id 恒为 null，旧逻辑 node.getId()!=null 分支永远不进
+            // → 操作组级会签/依次被静默丢失。改为按 nodeKey 从 BPMN 扩展读取操作者签序（修复 bug）
+            try {
+                List<BpmnExtensionUtil.WfOperatorExt> ops = bpmnReader.operators(node.getDefId(), node.getNodeKey());
+                if (ops != null) {
+                    for (BpmnExtensionUtil.WfOperatorExt op : ops) {
+                        Integer so = parseSignOrder(op.signOrder);
+                        if (so == null) {
+                            continue;
+                        }
+                        if (so == SIGN_ALL) {
+                            all = true;
+                        } else if (so == SIGN_SEQUENCE) {
+                            sequence = true;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 解析操作组级签序(BPMN)失败，忽略. nodeKey={}", node.getNodeKey(), e);
+            }
         }
         if (all) {
             return SIGN_ALL;
         }
         return sequence ? SIGN_SEQUENCE : SIGN_ANY;
+    }
+
+    private static Integer parseSignOrder(String s) {
+        if (s == null) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** 解析节点配置的办理人（部门/角色/人员/创建人等展开为用户ID）；异常返回空，不影响流转记录展示 */
@@ -1228,10 +1262,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             return nodeKey;
         }
         try {
-            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, defId)
-                .eq(WfProcessNode::getNodeKey, nodeKey)
-                .last("LIMIT 1"));
+            // T-10 B4：经 gated loadNodeReadOnly（definitionFromBpmn 走 BPMN、retirement 关时回退 wf_process_node）
+            WfProcessNode node = loadNodeReadOnly(defId, nodeKey);
             return (node != null && node.getNodeName() != null && !node.getNodeName().isEmpty())
                 ? node.getNodeName() : nodeKey;
         } catch (Exception e) {
@@ -1583,8 +1615,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (!multiInstanceEnabled || inst == null || inst.getDefId() == null || nodeKey == null) {
             return false;
         }
-        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, inst.getDefId()).eq(WfProcessNode::getNodeKey, nodeKey));
+        // T-10 B4：经 gated loadNodeReadOnly（definitionFromBpmn 走 BPMN、retirement 关时回退 wf_process_node）
+        WfProcessNode node = loadNodeReadOnly(inst.getDefId(), nodeKey);
         if (node == null || node.getNodeType() == null) {
             return false;
         }
@@ -1600,9 +1632,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             return;
         }
         try {
-            List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, defId).in(WfProcessNode::getNodeType, 1, 2));
+            // T-10 B4：经 gated loadNodes（definitionFromBpmn 走 BPMN、retirement 关时回退 wf_process_node）
+            List<WfProcessNode> nodes = loadNodes(defId);
             for (WfProcessNode n : nodes) {
+                if (n.getNodeType() == null || (n.getNodeType() != 1 && n.getNodeType() != 2)) {
+                    continue;
+                }
                 String nk = n.getNodeKey();
                 if (nk == null || nk.isBlank()) {
                     continue;

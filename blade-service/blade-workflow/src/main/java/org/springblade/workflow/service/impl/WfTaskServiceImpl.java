@@ -31,6 +31,7 @@ import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
+import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.workflow.service.helper.WfWriteHelper;
@@ -950,6 +951,27 @@ public class WfTaskServiceImpl implements IWfTaskService {
         return null;
     }
 
+    /** 加载定义全部节点（只读收口）：开关开启时读 BPMN wf:node，回退 wf_process_node；退役开启时禁用回退 */
+    private List<WfProcessNode> loadNodes(Long defId) {
+        if (defId == null) {
+            return new ArrayList<>();
+        }
+        if (definitionFromBpmn) {
+            try {
+                List<WfProcessNode> nodes = bpmnReader.nodes(defId);
+                if (nodes != null && !nodes.isEmpty()) {
+                    return nodes;
+                }
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 定义读源=BPMN 取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
+            }
+        }
+        if (!retirement.isEnabled()) {
+            return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
+        }
+        return new ArrayList<>();
+    }
+
     /**
      * 校验该节点的「操作菜单」是否允许某操作。
      * 未配置菜单（null）表示不限制，保持既有行为。
@@ -1215,10 +1237,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
             return nodeKey;
         }
         try {
-            WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, defId)
-                .eq(WfProcessNode::getNodeKey, nodeKey)
-                .last("LIMIT 1"));
+            // T-10 B4：经 gated loadNode（definitionFromBpmn 走 BPMN、retirement 关时回退 wf_process_node）
+            WfProcessNode node = loadNode(defId, nodeKey);
             return (node != null && node.getNodeName() != null && !node.getNodeName().isEmpty())
                 ? node.getNodeName() : nodeKey;
         } catch (Exception e) {
@@ -1265,10 +1285,12 @@ public class WfTaskServiceImpl implements IWfTaskService {
             return;
         }
         try {
-            List<WfProcessNode> nodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
-                .eq(WfProcessNode::getDefId, defId)
-                .in(WfProcessNode::getNodeType, 1, 2));
+            // T-10 B4：经 gated loadNodes（definitionFromBpmn 走 BPMN、retirement 关时回退 wf_process_node）
+            List<WfProcessNode> nodes = loadNodes(defId);
             for (WfProcessNode n : nodes) {
+                if (n.getNodeType() == null || (n.getNodeType() != 1 && n.getNodeType() != 2)) {
+                    continue;
+                }
                 String nk = n.getNodeKey();
                 if (nk == null || nk.isBlank()) {
                     continue;
@@ -1292,6 +1314,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         boolean all = nodeLevel == SIGN_ALL;
         boolean sequence = nodeLevel == SIGN_SEQUENCE;
         if (node != null && node.getId() != null) {
+            // wf_ 源：节点来自 wf_process_node，id 非空，按 nodeId 读操作组签序
             List<WfNodeOperator> ops = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
                 .eq(WfNodeOperator::getNodeId, node.getId()));
             if (ops != null) {
@@ -1307,11 +1330,43 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     }
                 }
             }
+        } else if (definitionFromBpmn) {
+            // T-10 B4 #3：BPMN 源 node.id 恒为 null，旧逻辑 node.getId()!=null 分支永远不进
+            // → 操作组级会签/依次被静默丢失。改为按 nodeKey 从 BPMN 扩展读取操作者签序（修复 bug）
+            try {
+                List<BpmnExtensionUtil.WfOperatorExt> ops = bpmnReader.operators(defId, nodeKey);
+                if (ops != null) {
+                    for (BpmnExtensionUtil.WfOperatorExt op : ops) {
+                        Integer so = parseSignOrder(op.signOrder);
+                        if (so == null) {
+                            continue;
+                        }
+                        if (so == SIGN_ALL) {
+                            all = true;
+                        } else if (so == SIGN_SEQUENCE) {
+                            sequence = true;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[WfTaskServiceImpl] 解析操作组级签序(BPMN)失败，忽略. defId={}, nodeKey={}", defId, nodeKey, e);
+            }
         }
         if (all) {
             return SIGN_ALL;
         }
         return sequence ? SIGN_SEQUENCE : SIGN_ANY;
+    }
+
+    private static Integer parseSignOrder(String s) {
+        if (s == null) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private long countPending(Long instId, String nodeKey) {
