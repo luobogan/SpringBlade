@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.flowable.bpmn.converter.BpmnXMLConverter;
+import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricProcessInstance;
 import org.springblade.core.log.exception.ServiceException;
@@ -44,19 +47,24 @@ import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.mapper.WfTestLogMapper;
+import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
 import org.springblade.workflow.service.IWfTestService;
 import org.springblade.workflow.service.IWfFormRenderService;
+import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.vo.WfTestResultVO;
 import org.springblade.workflow.service.helper.WfApprovalLogActReader;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -112,6 +120,13 @@ public class WfTestServiceImpl implements IWfTestService {
     /** 解析 wf_form_snapshot.data_json 用 */
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    /**
+     * T-14③：测试引擎「定义配置」读源开关（与 WfDefinitionServiceImpl 同 key）。
+     * true=节点/出口/操作者/字段权限优先读 BPMN wf: 扩展；false=仍读 wf_* 镜像表（零行为变化）。
+     */
+    @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
+    private boolean definitionFromBpmn;
+
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
     private final WfTestLogMapper testLogMapper;
@@ -159,17 +174,13 @@ public class WfTestServiceImpl implements IWfTestService {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
         // 节点清单（贯穿预校验/正常/异常路径，保证结果列表一致）
-        List<WfProcessNode> nodeList = nodeMapper.selectList(
-            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
-        List<WfNodeLink> links = linkMapper.selectList(
-            Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
-        List<Long> nodeIds = nodeList.stream().map(WfProcessNode::getId).collect(Collectors.toList());
-        List<WfNodeOperator> operators = nodeIds.isEmpty() ? Collections.emptyList()
-                : operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
-                    .in(WfNodeOperator::getNodeId, nodeIds));
+        // T-14③：定义配置读源（BPMN 优先，逐节点读到空即回退 wf_* 镜像表）
+        List<WfProcessNode> nodeList = loadTestNodes(def);
+        List<WfNodeLink> links = loadTestLinks(def);
+        List<WfNodeOperator> operators = loadTestOperators(def, nodeList);
 
         // 预校验：节点配置是否完整/合法（在部署与真实发起前拦截，避免运行期炸出原始引擎异常）
-        Map<String, String> issues = validateBeforeRun(defId, links, nodeList, operators);
+        Map<String, String> issues = validateBeforeRun(def, links, nodeList, operators);
         WfTestResultVO result;
         if (!issues.isEmpty()) {
             logLines.add(fmt.format(new Date()) + " 预校验发现 " + issues.size()
@@ -280,10 +291,7 @@ public class WfTestServiceImpl implements IWfTestService {
             // 必须在此用场景表单值校验，否则必填未填会被引擎直接放过（假通过）。
             String startErr = startNodeRequiredError(def, sc.formData);
             if (startErr != null) {
-                WfProcessNode sn = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                    .eq(WfProcessNode::getDefId, defId)
-                    .orderByAsc(WfProcessNode::getSortOrder)
-                    .last("LIMIT 1"));
+                WfProcessNode sn = firstNodeOf(defId);
                 String snKey = sn == null ? "start" : sn.getNodeKey();
                 logLines.add(fmt.format(new Date()) + " " + startErr);
                 sr.fatal = new AbstractMap.SimpleEntry<>(snKey, startErr);
@@ -620,7 +628,239 @@ public class WfTestServiceImpl implements IWfTestService {
      * 测试前静态校验：在部署/真实发起前拦截明显非法或未设置的节点，避免运行期炸出原始引擎异常。
      * 返回 nodeKey -> 问题描述（空表示通过）。
      */
-    private Map<String, String> validateBeforeRun(Long defId, List<WfNodeLink> links,
+    // ───────────── T-14③：定义配置 BPMN 读源（逐节点读到空即回退 wf_* 表，同 WfPermServiceImpl 护栏） ─────────────
+
+    private BpmnModel parseBpmnModel(String xml) {
+        BpmnXMLConverter converter = new BpmnXMLConverter();
+        return converter.convertToBpmnModel(
+            () -> new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)), false, false);
+    }
+
+    private boolean bpmnReadable(WfProcessDefinition def) {
+        return definitionFromBpmn && def != null
+            && def.getBpmnXml() != null && !def.getBpmnXml().isBlank();
+    }
+
+    /** 节点列表：BPMN wf:node 优先，空/异常回退 wf_process_node（表路径行为不变） */
+    private List<WfProcessNode> loadTestNodes(WfProcessDefinition def) {
+        if (bpmnReadable(def)) {
+            try {
+                List<WfProcessNode> nodes = WfBpmnExtensionReader.toNodes(def.getId(), parseBpmnModel(def.getBpmnXml()));
+                if (!nodes.isEmpty()) {
+                    return nodes;
+                }
+                log.info("[blade-workflow] 测试引擎读源=BPMN：节点为空（未部署/未回填），回退 wf_process_node. defId={}", def.getId());
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 测试引擎节点 BPMN 读取失败，回退 wf_process_node. defId={}, {}", def.getId(), e.getMessage());
+            }
+        }
+        if (def == null) {
+            return new ArrayList<>();
+        }
+        return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, def.getId())
+            .orderByAsc(WfProcessNode::getSortOrder));
+    }
+
+    private List<WfProcessNode> loadTestNodes(Long defId) {
+        WfProcessDefinition def = (definitionFromBpmn && defId != null) ? defMapper.selectById(defId) : null;
+        if (def == null && !definitionFromBpmn) {
+            // 开关关闭：保持原表读行为（不额外查 def）
+            return nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, defId)
+                .orderByAsc(WfProcessNode::getSortOrder));
+        }
+        return loadTestNodes(def);
+    }
+
+    /** 出口列表：BPMN wf:link + wf:foldedLink 优先，空/异常回退 wf_node_link */
+    private List<WfNodeLink> loadTestLinks(WfProcessDefinition def) {
+        if (bpmnReadable(def)) {
+            try {
+                List<WfNodeLink> links = WfBpmnExtensionReader.toNodeLinks(def.getId(), parseBpmnModel(def.getBpmnXml()));
+                if (!links.isEmpty()) {
+                    return links;
+                }
+                log.info("[blade-workflow] 测试引擎读源=BPMN：出口为空，回退 wf_node_link. defId={}", def.getId());
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 测试引擎出口 BPMN 读取失败，回退 wf_node_link. defId={}, {}", def.getId(), e.getMessage());
+            }
+        }
+        if (def == null) {
+            return new ArrayList<>();
+        }
+        return linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
+            .eq(WfNodeLink::getDefId, def.getId()));
+    }
+
+    private List<WfNodeLink> loadTestLinks(Long defId) {
+        WfProcessDefinition def = (definitionFromBpmn && defId != null) ? defMapper.selectById(defId) : null;
+        if (def == null && !definitionFromBpmn) {
+            return linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
+                .eq(WfNodeLink::getDefId, defId));
+        }
+        return loadTestLinks(def);
+    }
+
+    /**
+     * 操作者列表：BPMN {@code wf:operator} 优先（归属以瞬态 {@code nodeKey} 承载）；
+     * BPMN 无扩展的节点（合成开始/结束等）逐节点回退 {@code wf_node_operator}；
+     * 表路径按 {@code nodeId} 关联并回填瞬态 {@code nodeKey}，统一 nodeKey 匹配口径。
+     */
+    private List<WfNodeOperator> loadTestOperators(WfProcessDefinition def, List<WfProcessNode> nodes) {
+        if (bpmnReadable(def)) {
+            try {
+                BpmnModel model = parseBpmnModel(def.getBpmnXml());
+                List<WfNodeOperator> result = new ArrayList<>();
+                Set<String> bpmnKeys = new LinkedHashSet<>();
+                for (UserTask task : model.getMainProcess().findFlowElementsOfType(UserTask.class, true)) {
+                    BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(task);
+                    if (ext == null || ext.operators.isEmpty()) {
+                        continue;
+                    }
+                    bpmnKeys.add(task.getId());
+                    for (BpmnExtensionUtil.WfOperatorExt o : ext.operators) {
+                        result.add(toOperator(def.getId(), task.getId(), o));
+                    }
+                }
+                for (WfProcessNode n : nodes) {
+                    if (n.getNodeKey() == null || bpmnKeys.contains(n.getNodeKey()) || n.getId() == null) {
+                        continue;
+                    }
+                    List<WfNodeOperator> fallback = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+                        .eq(WfNodeOperator::getNodeId, n.getId()));
+                    fallback.forEach(o -> o.setNodeKey(n.getNodeKey()));
+                    result.addAll(fallback);
+                }
+                return result;
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 测试引擎操作者 BPMN 读取失败，回退 wf_node_operator. defId={}, {}",
+                    def.getId(), e.getMessage());
+            }
+        }
+        Map<Long, String> idToKey = nodes.stream()
+            .filter(n -> n.getId() != null && n.getNodeKey() != null)
+            .collect(Collectors.toMap(WfProcessNode::getId, WfProcessNode::getNodeKey, (a, b) -> a));
+        if (idToKey.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<WfNodeOperator> operators = operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
+            .in(WfNodeOperator::getNodeId, idToKey.keySet()));
+        operators.forEach(o -> o.setNodeKey(idToKey.get(o.getNodeId())));
+        return operators;
+    }
+
+    private WfNodeOperator toOperator(Long defId, String nodeKey, BpmnExtensionUtil.WfOperatorExt o) {
+        WfNodeOperator op = new WfNodeOperator();
+        op.setNodeKey(nodeKey);
+        op.setGroupNo(toIntSafely(o.groupNo));
+        op.setOpType(toIntSafely(o.opType));
+        op.setObjId(o.objId);
+        op.setLevelMin(toIntSafely(o.levelMin));
+        op.setLevelMax(toIntSafely(o.levelMax));
+        op.setBhxj(toIntSafely(o.bhxj));
+        op.setSignOrder(toIntSafely(o.signOrder));
+        op.setBatchNo(toIntSafely(o.batchNo));
+        op.setConditionJson(o.conditionJson);
+        op.setGroupName(o.groupName);
+        op.setCanView(toIntSafely(o.canView));
+        op.setIsCoadjutant(toIntSafely(o.isCoadjutant));
+        op.setCoadjutants(o.coadjutants);
+        op.setIsPending(toIntSafely(o.isPending));
+        op.setIsModify(toIntSafely(o.isModify));
+        op.setSignType(toIntSafely(o.signType));
+        return op;
+    }
+
+    /** 字段权限列表：BPMN {@code wf:fieldPerm} 优先，空/异常回退 wf_node_field_perm */
+    private List<WfNodeFieldPerm> loadTestFieldPerms(WfProcessDefinition def) {
+        if (bpmnReadable(def)) {
+            try {
+                BpmnModel model = parseBpmnModel(def.getBpmnXml());
+                List<WfNodeFieldPerm> result = new ArrayList<>();
+                for (UserTask task : model.getMainProcess().findFlowElementsOfType(UserTask.class, true)) {
+                    BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(task);
+                    if (ext == null || ext.fieldPerms.isEmpty()) {
+                        continue;
+                    }
+                    for (BpmnExtensionUtil.WfFieldPermExt f : ext.fieldPerms) {
+                        WfNodeFieldPerm p = new WfNodeFieldPerm();
+                        p.setDefId(def.getId());
+                        p.setNodeKey(task.getId());
+                        p.setScope(f.scope);
+                        p.setFieldName(f.field);
+                        p.setPerm(toIntSafely(f.perm));
+                        p.setIsVisible(toIntSafely(f.visible));
+                        p.setIsEditable(toIntSafely(f.editable));
+                        p.setIsRequired(toIntSafely(f.required));
+                        result.add(p);
+                    }
+                }
+                return result;
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 测试引擎字段权限 BPMN 读取失败，回退 wf_node_field_perm. defId={}, {}",
+                    def.getId(), e.getMessage());
+            }
+        }
+        if (fieldPermMapper == null) {
+            return Collections.emptyList();
+        }
+        return fieldPermMapper.selectList(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+            .eq(WfNodeFieldPerm::getDefId, def == null ? null : def.getId()));
+    }
+
+    private WfProcessNode findNode(List<WfProcessNode> nodes, String nodeKey) {
+        if (nodeKey == null) {
+            return null;
+        }
+        return nodes.stream().filter(n -> nodeKey.equals(n.getNodeKey())).findFirst().orElse(null);
+    }
+
+    /**
+     * 首节点：BPMN 读源时优先 nodeType=0（开始事件，其创建配置在镜像表/回退链中）；
+     * 表路径保持原语义（sortOrder 最小，NULL 排前）。
+     */
+    private WfProcessNode firstNodeOf(Long defId) {
+        if (defId == null) {
+            return null;
+        }
+        if (definitionFromBpmn) {
+            WfProcessDefinition def = defMapper.selectById(defId);
+            if (bpmnReadable(def)) {
+                List<WfProcessNode> nodes = loadTestNodes(def);
+                WfProcessNode start = nodes.stream()
+                    .filter(n -> n.getNodeType() != null && n.getNodeType() == 0)
+                    .min(Comparator.comparingInt(n -> n.getSortOrder() == null ? Integer.MAX_VALUE : n.getSortOrder()))
+                    .orElse(null);
+                if (start != null) {
+                    return start;
+                }
+                return nodes.stream()
+                    .filter(n -> n.getSortOrder() != null)
+                    .min(Comparator.comparingInt(WfProcessNode::getSortOrder))
+                    .orElse(nodes.isEmpty() ? null : nodes.get(0));
+            }
+        }
+        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+            .eq(WfProcessNode::getDefId, defId)
+            .orderByAsc(WfProcessNode::getSortOrder)
+            .last("LIMIT 1"));
+    }
+
+    private Integer toIntSafely(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    // ───────────── 预校验（T-14③：操作者匹配口径 nodeKey 化） ─────────────
+
+    private Map<String, String> validateBeforeRun(WfProcessDefinition def, List<WfNodeLink> links,
             List<WfProcessNode> nodeList, List<WfNodeOperator> operators) {
         Map<String, String> issues = new LinkedHashMap<>();
         // 1. 出口条件表达式含被 HTML 转义的运算符（XSS 过滤器把 > < & 转义成实体），引擎无法解析
@@ -635,12 +875,13 @@ public class WfTestServiceImpl implements IWfTestService {
                 }
             }
         }
-        // 2. 人工节点未设置操作者：审批(1) / 提交(2)
-        Set<Long> opNodeIds = operators == null ? Collections.emptySet()
-                : operators.stream().map(WfNodeOperator::getNodeId).collect(Collectors.toSet());
+        // 2. 人工节点未设置操作者：审批(1) / 提交(2)（T-14③：按 nodeKey 匹配，两种读源统一口径）
+        Set<String> opNodeKeys = operators == null ? Collections.emptySet()
+                : operators.stream().map(WfNodeOperator::getNodeKey)
+                    .filter(Objects::nonNull).collect(Collectors.toSet());
         for (WfProcessNode n : nodeList) {
             Integer t = n.getNodeType();
-            if (t != null && (t == 1 || t == 2) && !opNodeIds.contains(n.getId())) {
+            if (t != null && (t == 1 || t == 2) && !opNodeKeys.contains(n.getNodeKey())) {
                 issues.put(n.getNodeKey(),
                     "未设置操作者，请在「节点信息-操作者」中配置办理人后再测试");
             }
@@ -649,12 +890,9 @@ public class WfTestServiceImpl implements IWfTestService {
         //    与「模拟运行」的校验口径保持一致；此前两条路径都只校验审批/提交的操作者，
         //    导致创建 / 归档节点即使操作者与表单内容全空也被判「通过」。
         Set<String> fieldPermNodeKeys = new LinkedHashSet<>();
-        if (fieldPermMapper != null) {
-            for (WfNodeFieldPerm p : fieldPermMapper.selectList(
-                    Wrappers.<WfNodeFieldPerm>lambdaQuery().eq(WfNodeFieldPerm::getDefId, defId))) {
-                if (p.getNodeKey() != null) {
-                    fieldPermNodeKeys.add(p.getNodeKey());
-                }
+        for (WfNodeFieldPerm p : loadTestFieldPerms(def)) {
+            if (p.getNodeKey() != null) {
+                fieldPermNodeKeys.add(p.getNodeKey());
             }
         }
         for (WfProcessNode n : nodeList) {
@@ -663,7 +901,7 @@ public class WfTestServiceImpl implements IWfTestService {
                 continue;
             }
             String what = t == 0 ? "创建" : "归档";
-            if (!opNodeIds.contains(n.getId())) {
+            if (!opNodeKeys.contains(n.getNodeKey())) {
                 issues.putIfAbsent(n.getNodeKey(),
                     what + "节点未设置操作者，请在「节点信息-操作者」中配置后再测试");
                 continue;
@@ -1173,17 +1411,13 @@ public class WfTestServiceImpl implements IWfTestService {
         long begin = System.currentTimeMillis();
         List<String> logLines = new ArrayList<>();
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        List<WfProcessNode> nodeList = nodeMapper.selectList(
-            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, defId));
-        List<WfNodeLink> links = linkMapper.selectList(
-            Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, defId));
-        List<Long> nodeIds = nodeList.stream().map(WfProcessNode::getId).collect(Collectors.toList());
-        List<WfNodeOperator> operators = nodeIds.isEmpty() ? Collections.emptyList()
-            : operatorMapper.selectList(Wrappers.<WfNodeOperator>lambdaQuery()
-                .in(WfNodeOperator::getNodeId, nodeIds));
+        // T-14③：定义配置读源（BPMN 优先，逐节点读到空即回退 wf_* 镜像表）
+        List<WfProcessNode> nodeList = loadTestNodes(def);
+        List<WfNodeLink> links = loadTestLinks(def);
+        List<WfNodeOperator> operators = loadTestOperators(def, nodeList);
 
         // 预校验：配置不完整直接拦截（与「一键测试」run 同口径）
-        Map<String, String> issues = validateBeforeRun(defId, links, nodeList, operators);
+        Map<String, String> issues = validateBeforeRun(def, links, nodeList, operators);
         if (!issues.isEmpty()) {
             logLines.add(fmt.format(new Date()) + " 预校验发现 " + issues.size()
                 + " 个节点配置问题，无法发起测试：");
@@ -1286,10 +1520,8 @@ public class WfTestServiceImpl implements IWfTestService {
         }
         WfInstance inst = instanceMapper.selectById(instId);
         requireTestInst(inst, "state");
-        List<WfProcessNode> nodeList = nodeMapper.selectList(
-            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
-        List<WfNodeLink> links = linkMapper.selectList(
-            Wrappers.<WfNodeLink>lambdaQuery().eq(WfNodeLink::getDefId, inst.getDefId()));
+        List<WfProcessNode> nodeList = loadTestNodes(inst.getDefId());
+        List<WfNodeLink> links = loadTestLinks(inst.getDefId());
 
         Coverage cov = collectCoverage(inst.getEngineInstId());
         List<WfTask> todos = pendingTestTasks(instId);
@@ -1466,10 +1698,7 @@ public class WfTestServiceImpl implements IWfTestService {
                 collectLayoutRequired(inst.getFormId(), checkNodeKey, variables, layoutMissing);
                 if (!layoutMissing.isEmpty()) {
                     // 必须带「节点名」：否则用户只看到字段名，不知道是哪个节点的布局在要求必填。
-                    WfProcessNode curNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-                        .eq(WfProcessNode::getDefId, inst.getDefId())
-                        .eq(WfProcessNode::getNodeKey, checkNodeKey)
-                        .last("LIMIT 1"));
+                    WfProcessNode curNode = findNode(loadTestNodes(inst.getDefId()), checkNodeKey);
                     String curName = (curNode != null && curNode.getNodeName() != null && !curNode.getNodeName().isEmpty())
                         ? curNode.getNodeName() : checkNodeKey;
                     throw new ServiceException("节点【" + curName + "】以下字段为必填： "
@@ -1533,8 +1762,7 @@ public class WfTestServiceImpl implements IWfTestService {
             if (inst == null) {
                 continue;
             }
-            List<WfProcessNode> nodeList = nodeMapper.selectList(
-                Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
+            List<WfProcessNode> nodeList = loadTestNodes(inst.getDefId());
             WfTaskVO vo = new WfTaskVO();
             vo.setId(t.getId());
             vo.setInstId(t.getInstId());
@@ -1586,8 +1814,7 @@ public class WfTestServiceImpl implements IWfTestService {
         WfInstance inst = instanceMapper.selectById(instId);
         // 测试域守卫：避免用正式实例 id 读到正式待办（信息泄漏，V11）
         requireTestInst(inst, "todo");
-        List<WfProcessNode> nodeList = nodeMapper.selectList(
-            Wrappers.<WfProcessNode>lambdaQuery().eq(WfProcessNode::getDefId, inst.getDefId()));
+        List<WfProcessNode> nodeList = loadTestNodes(inst.getDefId());
         for (WfTask t : pendingTestTasks(instId)) {
             WfTaskVO vo = new WfTaskVO();
             vo.setId(t.getId());
@@ -1614,25 +1841,8 @@ public class WfTestServiceImpl implements IWfTestService {
         if (defId == null || StringUtil.isBlank(nodeKey)) {
             return false;
         }
-        WfProcessNode node = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
+        WfProcessNode node = findNode(loadTestNodes(defId), nodeKey);
         return node != null && node.getNodeType() != null && node.getNodeType() == 0;
-    }
-
-    /**
-     * 首节点（{@code sortOrder} 最小）＝ {@code instanceService.start} 内 {@code advance()} 自动完成的
-     * 「创建/申请人」节点；其表单在发起时提交，不会生成待办，因此必填需单独在首次提交时兜底校验。
-     */
-    private WfProcessNode firstNodeOf(Long defId) {
-        if (defId == null) {
-            return null;
-        }
-        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .orderByAsc(WfProcessNode::getSortOrder)
-            .last("LIMIT 1"));
     }
 
     /**

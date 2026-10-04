@@ -1,5 +1,6 @@
 package org.springblade.workflow.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -25,6 +26,10 @@ public class WfNodeOperator extends TenantEntity {
 
     @Schema(description = "流程节点ID")
     private Long nodeId;
+
+    @Schema(description = "节点键（T-14③ BPMN 读源承载归属；非表列，仅读侧装配）")
+    @TableField(exist = false)
+    private String nodeKey;
 
     @Schema(description = "操作组序号")
     private Integer groupNo;

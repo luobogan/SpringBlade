@@ -2357,25 +2357,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 String.join("；", warn));
         }
 
-        // ③ 结构一致性：BPMN 节点 vs 存活节点配置
-        List<WfProcessNode> aliveNodes = nodeMapper.selectList(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, def.getId()));
-        Set<String> alive = aliveNodes.stream().map(WfProcessNode::getNodeKey)
-            .filter(Objects::nonNull).collect(Collectors.toSet());
-        List<String> missingConf = bpmnNodeKeys.stream().filter(k -> !alive.contains(k)).collect(Collectors.toList());
-        if (!missingConf.isEmpty()) {
-            throw new ServiceException("发布被拒绝：BPMN 中有 " + missingConf.size() + " 个节点在流程配置里不存在（"
-                + String.join("、", missingConf) + "）→ 引擎会按 BPMN 跑，但这些节点没有办理人/出口配置，"
-                + "发起后会卡住或无人可办。请先在画布「保存」以按其重建节点配置，再发布。");
+        // ③ 结构一致性（T-14：BPMN 为唯一源，不再交叉比对 wf_process_node）。
+        // 每个 BPMN UserTask 必须携带完整的 wf:node 扩展，否则引擎按 BPMN 跑却无办理人/出口配置
+        // （发起后卡住/无人可办）。def.getBpmnXml() 即部署工件，缺扩展即说明画布未「保存」节点配置。
+        if (!WfBpmnExtensionReader.nodeExtsComplete(model)) {
+            throw new ServiceException("发布被拒绝：BPMN 中存在未配置节点扩展（wf:node）的节点 → "
+                + "引擎会按 BPMN 跑，但这些节点没有办理人/出口配置，发起后会卡住或无人可办。"
+                + "请在画布「保存」以写入节点配置，再发布。");
         }
-        Set<String> bpmnSet = new HashSet<>(bpmnNodeKeys);
-        List<String> ghostConf = alive.stream().filter(k -> !bpmnSet.contains(k)).collect(Collectors.toList());
-        if (!ghostConf.isEmpty()) {
-            log.warn("[blade-workflow] 发布提示：流程配置里有 {} 个节点不在 BPMN 中（多为已删除节点，不影响运行）：{}",
-                ghostConf.size(), String.join("、", ghostConf));
-        }
-        log.info("[blade-workflow] 发布门禁通过. defId={}, bpmnNodes={}, aliveNodes={}", def.getId(),
-            bpmnNodeKeys.size(), alive.size());
+        log.info("[blade-workflow] 发布门禁通过(结构级). defId={}, bpmnNodes={}", def.getId(), bpmnNodeKeys.size());
     }
 
     /**
