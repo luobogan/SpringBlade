@@ -15,6 +15,7 @@ import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
+import org.springblade.workflow.vo.WfProgressView;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -117,6 +118,15 @@ public class WfInstanceController {
         description = "流程图节点悬浮「操作者」面板数据：按节点返回已操作 / 已查看 / 未操作人员ID（姓名由前端人员字典解析）")
     public R<java.util.Map<String, WfNodeOperatorVO>> nodeOperators(@PathVariable("id") Long id) {
         return R.data(instanceService.nodeOperators(id));
+    }
+
+    @GetMapping("/{id}/progress")
+    @Operation(summary = "流程实例进度图（四色，纯 ACT_HI）",
+        description = "只读 ACT_HI 算四个集合（进行中/已完成/已走连线/拒绝点）+ 实例状态 + 实例绑定的 BPMN，"
+            + "供前端 BPMN Viewer 直接 addMarker。进行中=蓝、已完成/已走连线=绿、拒绝点=红（仅不通过态）、"
+            + "取消/拒绝态 EndEvent 由前端按实例状态纠偏去绿改灰。")
+    public R<WfProgressView> progress(@PathVariable("id") Long id) {
+        return R.data(instanceService.progress(id));
     }
 
     @GetMapping("/{id}/snapshot/{nodeKey}")

@@ -30,6 +30,8 @@ import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinition;
+import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricProcessInstance;
 import org.springframework.beans.factory.annotation.Value;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.ActHiProcinst;
@@ -68,6 +70,7 @@ import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springblade.workflow.vo.InstanceView;
+import org.springblade.workflow.vo.WfProgressView;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -2257,6 +2260,180 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * <p>nodeKey 取归档节点（nodeType=3）；未配置归档节点时退回「最后经过的节点」。
      * 操作人记 0（系统）、意见固定「流程归档」，与前端「流转意见」的节点名/动作标签展示对应。</p>
      */
+    /**
+     * 流程实例进度图（四色，纯 ACT_HI）。
+     *
+     * <p>只读 {@code ACT_HI_ACTINST} 算四个集合 + 实例状态，供前端 BPMN Viewer 直接 addMarker：</p>
+     * <ul>
+     *   <li>unfinished：endTime == null 的活动（进行中/当前节点）→ 蓝；</li>
+     *   <li>finished：endTime != null 的<b>活动</b>（剔除仍在进行中的，会签边界）→ 绿；</li>
+     *   <li>finishedSequenceFlow：endTime != null 的<b>连线</b>（条件网关实际走的分支）→ 绿；</li>
+     *   <li>rejected：仅实例为「不通过(2)」时，取最后一条退回日志的节点 → 红，并从 finished 移除（不又绿又红）。</li>
+     * </ul>
+     *
+     * <p>取消/拒绝态的 EndEvent 去绿由前端按 {@code instanceStatus}（2/3）在 Viewer 内完成，
+     * 本方法不识别 EndEvent。</p>
+     *
+     * <p>草稿 / 未部署到引擎（engineInstId 为空）的实例无轨迹，仅返回 BPMN + 实例状态。</p>
+     */
+    @Override
+    public WfProgressView progress(Long id) {
+        // 记录级鉴权：进度图同详情，仅发起人/参与人/管理员可见
+        WfInstance inst = requireVisible(id, "查看流程进度图");
+        WfProgressView view = new WfProgressView();
+        Integer status = inst.getStatus();
+        view.setInstanceStatus(status);
+
+        // BPMN：用实例实际使用的流程定义（defId → wf_definition.bpmn_xml，原始 XML），
+        // 即发起时的那一版，非 procKey 取最新（老单不串图，对齐文章）。
+        WfProcessDefinition def = (inst.getDefId() != null) ? defMapper.selectById(inst.getDefId()) : null;
+        String bpmn = (def != null) ? def.getBpmnXml() : null;
+        view.setBpmnXml(bpmn);
+
+        String engineInstId = inst.getEngineInstId();
+        if (engineInstId == null || bpmn == null) {
+            // 未部署到引擎 / 无 BPMN：无历史轨迹可算，仅返回 BPMN + 状态
+            return view;
+        }
+
+        // 纯 ACT_HI：历史活动实例（已按开始时间升序），含 startEvent / userTask / 网关 / sequenceFlow / endEvent
+        List<HistoricActivityInstance> acts = processService.historicActivities(engineInstId);
+        // 拒绝点节点 Key（仅不通过态有值）；取消态的 procEnd 用于识别「被强行关闭」活动
+        String rejectNodeKey = (WfInstance.STATUS_REJECTED == status) ? lastRejectNodeKey(inst) : null;
+        Date procEnd = null;
+        if (WfInstance.STATUS_CANCELED == status) {
+            HistoricProcessInstance procInst = processService.historicProcess(engineInstId);
+            procEnd = (procInst != null) ? procInst.getEndTime() : null;
+        }
+        // 四色计算抽成纯函数（见 fillActivityColors），便于无引擎 / 无鉴权的单测直接断言集合
+        fillActivityColors(view, acts, status, rejectNodeKey, procEnd);
+        return view;
+    }
+
+    /**
+     * 进度图四色集合计算（纯函数，与引擎 / 鉴权无关，便于单测断言）。
+     *
+     * <p>四个集合语义：</p>
+     * <ul>
+     *   <li>unfinished（蓝）：ACT_HI 中 endTime==null 的活动（当前节点 / 并行未结束分支）；</li>
+     *   <li>finished（绿）：已结束活动；finishedSeq（绿）：已走 sequenceFlow（条件网关实际分支）；</li>
+     *   <li>会签 / 并行边界：同一 activityId 可能既有已结束又有进行中记录，从 finished 移除仍在进行中的；</li>
+     *   <li>rejected（红，仅不通过态）：最后一条退回日志节点，从 finished 移除（避免又绿又红）；</li>
+     *   <li>cancelled（灰，仅取消态且无 EndEvent）：被强行关闭 / 仍在运行的活动——
+     *       其 endTime 为空（删除时仍在运行）或≈流程结束时刻（Flowable 删除事务补 endTime）；
+     *       开始 / 连线 / 网关不参与；若取消流经 EndEvent 则交给前端按 instanceStatus 纠偏。</li>
+     * </ul>
+     *
+     * @param view           进度图视图（直接写入五个集合）
+     * @param acts           历史活动实例（含 startEvent / userTask / 网关 / sequenceFlow / endEvent）
+     * @param status         实例状态（0运行中 1通过 2不通过 3撤销 4暂停）
+     * @param rejectNodeKey  拒绝点节点 Key（不通过态由 lastRejectNodeKey 提供，其余为 null）
+     * @param procEnd        流程实例结束时刻（取消态由 ACT_HI_PROCINST 提供，用于比对被强行关闭活动）
+     */
+    static void fillActivityColors(WfProgressView view, List<HistoricActivityInstance> acts,
+                                   Integer status, String rejectNodeKey, Date procEnd) {
+        Set<String> unfinished = new LinkedHashSet<>();
+        Set<String> finished = new LinkedHashSet<>();
+        Set<String> finishedSeq = new LinkedHashSet<>();
+        for (HistoricActivityInstance hai : acts) {
+            String aid = hai.getActivityId();
+            if (aid == null) {
+                continue;
+            }
+            if (hai.getEndTime() == null) {
+                // 进行中（当前节点 / 并行未结束分支）
+                unfinished.add(aid);
+            } else if ("sequenceFlow".equals(hai.getActivityType())) {
+                // 已走连线（条件网关实际分支）
+                finishedSeq.add(aid);
+            } else {
+                // 已结束活动
+                finished.add(aid);
+            }
+        }
+        // 会签 / 并行边界：同一 activityId 可能既有已结束又有进行中记录，
+        // 从 finished 移除仍在进行中的，保证「当前审」优先于「有人已同意」。
+        finished.removeAll(unfinished);
+
+        // 拒绝点 / 取消态 在本地集合上维护，最后一次性 set 进 view（避免列表与集合不同步）
+        Set<String> rejected = new LinkedHashSet<>();
+        Set<String> cancelled = new LinkedHashSet<>();
+
+        // 拒绝点（红）：仅不通过(2) 时生效，从 finished 移除避免又绿又红
+        if (WfInstance.STATUS_REJECTED == status && rejectNodeKey != null) {
+            rejected.add(rejectNodeKey);
+            finished.remove(rejectNodeKey);
+        }
+
+        // 中途取消置灰：取消态(3) 且流程没流经 EndEvent（走 deleteProcessInstance 终止，无 endEvent 历史），
+        // 被强行关闭 / 仍在运行的活动不能显绿，需置灰（cancel）。
+        // 识别信号：这些活动的 endTime 要么仍为空（删除时仍在运行），要么等于流程实例结束时刻
+        // （Flowable 在删除事务里给运行中的活动补 endTime）。已正常完成（endTime 远早于取消时刻）的节点保持绿；
+        // 开始 / 连线 / 网关不参与置灰，避免误灰。若取消走的是「到达 EndEvent」的干净路径，则交给前端按
+        // instanceStatus(3) 把 EndEvent 改灰（文章规则），本分支不介入。
+        if (WfInstance.STATUS_CANCELED == status) {
+            boolean hasEndEvent = false;
+            for (HistoricActivityInstance hai : acts) {
+                if ("endEvent".equals(hai.getActivityType())) {
+                    hasEndEvent = true;
+                    break;
+                }
+            }
+            if (!hasEndEvent) {
+                for (HistoricActivityInstance hai : acts) {
+                    String type = hai.getActivityType();
+                    if (type == null || "startEvent".equals(type) || "sequenceFlow".equals(type)
+                        || "exclusiveGateway".equals(type) || "parallelGateway".equals(type)
+                        || "inclusiveGateway".equals(type)) {
+                        continue;
+                    }
+                    Date end = hai.getEndTime();
+                    // 删除时仍在运行（endTime 空）＝被强行关闭；或删除事务补的 endTime（≈ 流程结束时刻）
+                    boolean inFlight = (end == null)
+                        || (procEnd != null && Math.abs(end.getTime() - procEnd.getTime()) <= 1000);
+                    if (inFlight && hai.getActivityId() != null) {
+                        cancelled.add(hai.getActivityId());
+                    }
+                }
+                // 从 进行中 / 已完成 移除，统一置灰（cancel），避免又绿 / 又蓝又灰
+                unfinished.removeAll(cancelled);
+                finished.removeAll(cancelled);
+            }
+        }
+
+        view.setUnfinishedActivityIds(new ArrayList<>(unfinished));
+        view.setFinishedActivityIds(new ArrayList<>(finished));
+        view.setFinishedSequenceFlowIds(new ArrayList<>(finishedSeq));
+        view.setRejectedActivityIds(new ArrayList<>(rejected));
+        view.setCancelledActivityIds(new ArrayList<>(cancelled));
+    }
+
+    /**
+     * 取实例最后一条退回（logType=3）日志的节点 Key，作为「拒绝点」红色高亮。
+     *
+     * <p>本系统退回/不通过是 {@code AdvanceSrc.REJECT} 走令牌移动（非 Flowable 任务删除），
+     * ACT_HI 无「rejected」删除原因，故从审批日志反推。读源=act 时日志来自 ACT_HI_COMMENT，
+     * 与 {@code logs()} 同源；读源=wf（默认）时从 {@code wf_approval_log} 取。</p>
+     */
+    private String lastRejectNodeKey(WfInstance inst) {
+        List<WfApprovalLog> logs;
+        if (actRead() && inst.getEngineInstId() != null) {
+            logs = actLogReader.readFromAct(inst.getEngineInstId(), inst.getId());
+        } else {
+            logs = logMapper.selectList(Wrappers.<WfApprovalLog>lambdaQuery()
+                .eq(WfApprovalLog::getInstId, inst.getId())
+                .orderByAsc(WfApprovalLog::getOperateTime));
+        }
+        // 倒序找最后一条退回日志的节点（nodeKey 非空）
+        for (int i = logs.size() - 1; i >= 0; i--) {
+            WfApprovalLog l = logs.get(i);
+            if (WfApprovalLog.LOG_REJECT.equals(l.getLogType()) && l.getNodeKey() != null) {
+                return l.getNodeKey();
+            }
+        }
+        return null;
+    }
+
     /**
      * 节点操作者情况（流程图节点悬浮「操作者」面板 + 节点下方「谁办了」）。
      *

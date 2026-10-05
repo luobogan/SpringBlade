@@ -8,6 +8,7 @@ import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
+import org.springblade.workflow.vo.WfProgressView;
 
 import java.util.Date;
 import java.util.List;
@@ -106,6 +107,17 @@ public interface IWfInstanceService {
      * @return nodeKey → 分组人员ID（没有办理记录的节点不会出现在结果里）
      */
     Map<String, WfNodeOperatorVO> nodeOperators(Long instId);
+
+    /**
+     * 流程实例进度图（四色，纯 ACT_HI）。
+     *
+     * <p>只读 {@code ACT_HI_ACTINST} 算四个 activityId 集合（进行中/已完成/已走连线/拒绝点）
+     * + 实例状态 + 实例绑定的 BPMN，供前端 BPMN Viewer 直接 addMarker，不自行猜测。</p>
+     *
+     * @param id 流程实例ID
+     * @return 进度图视图（四色集合 / BPMN / 实例状态）
+     */
+    WfProgressView progress(Long id);
 
     /**
      * 取指定节点的表单数据快照
