@@ -83,9 +83,24 @@ public class FormRenderVO implements Serializable {
     /**
      * 当前节点「操作菜单」配置允许的操作：submit/reject/forward/sign/opinion/attach/print/urge。
      * null = 未配置（不限制，按系统默认全部可用）；空数组 = 配置过但一个都不允许。
+     *
+     * <p>⚠️ 线上 null 语义不可靠：blade 全局 HTTP 转换器 {@code MappingApiJackson2HttpMessageConverter}
+     * 的 {@code nullToEmpty} 默认开启（{@code BladeJacksonProperties} 构造器置 TRUE），会把响应里的
+     * null List 序列化成 {@code []} —— 「未配置（不限制）」与「配置过但全部禁用」在 HTTP 响应中无法区分，
+     * 未配置节点会被前端误判为全部禁用、写操作按钮整体消失（dev 实测：测试页手动提交开始节点后，
+     * 首个审批节点只剩「保存」，「提交/退回」消失）。故新增 {@link #allowMenusUnset} 显式表达「未配置」。</p>
      */
     @Schema(description = "当前节点可用操作（来自节点信息「操作菜单」；null=不限制）")
     private List<String> allowMenus;
+
+    /**
+     * 「操作菜单」是否未配置（true=不限制，按系统默认全部可用）。
+     *
+     * <p>与 {@link #allowMenus} 配合使用：因为 {@code nullToEmpty} 会把 null 变 []，
+     * 前端必须以本字段（显式 boolean，不受空值序列化影响）判断「未配置」，而不能依赖 allowMenus==null。</p>
+     */
+    @Schema(description = "操作菜单是否未配置（true=不限制，全部可用）")
+    private Boolean allowMenusUnset;
 
     /** 当前节点签字意见是否必填（旧口径：等价于 mustInput=all） */
     @Schema(description = "签字意见是否必填（旧口径）")

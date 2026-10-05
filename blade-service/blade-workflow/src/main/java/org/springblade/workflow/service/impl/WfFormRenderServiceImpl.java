@@ -168,7 +168,13 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                 .eq(WfProcessNode::getNodeKey, nodeKey)
                 .last("LIMIT 1"));
         }
-        vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
+        List<String> allowMenus = WfNodeSettingsUtil.operateMenus(node);
+        vo.setAllowMenus(allowMenus);
+        // 「未配置=不限制」必须显式标记：blade 全局 HTTP 转换器 nullToEmpty=true（默认开）会把
+        // null List 序列化成 []，前端若用 allowMenus==null 判断「未配置」永远不成立，
+        // 未配置节点会被误判为「全部禁用」→ 写操作按钮（提交/退回…）整体消失
+        // （dev 实测：测试页手动提交开始节点后，首个审批节点只剩「保存」）。
+        vo.setAllowMenusUnset(allowMenus == null);
         fillSignOpinion(vo, node);
         // 节点信息 → 运行时消费：打印内容设置（打印模板页签的「打印内容设置」）
         vo.setPrintSet(WfNodeSettingsUtil.printSet(node));
@@ -244,7 +250,13 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                     .eq(WfProcessNode::getNodeKey, nodeKey)
                     .last("LIMIT 1"));
             }
-            vo.setAllowMenus(WfNodeSettingsUtil.operateMenus(node));
+            List<String> allowMenus = WfNodeSettingsUtil.operateMenus(node);
+        vo.setAllowMenus(allowMenus);
+        // 「未配置=不限制」必须显式标记：blade 全局 HTTP 转换器 nullToEmpty=true（默认开）会把
+        // null List 序列化成 []，前端若用 allowMenus==null 判断「未配置」永远不成立，
+        // 未配置节点会被误判为「全部禁用」→ 写操作按钮（提交/退回…）整体消失
+        // （dev 实测：测试页手动提交开始节点后，首个审批节点只剩「保存」）。
+        vo.setAllowMenusUnset(allowMenus == null);
             fillSignOpinion(vo, node);
             vo.setPrintSet(WfNodeSettingsUtil.printSet(node));
             vo.setOpinionDisplay(WfNodeSettingsUtil.opinionDisplay(node));
