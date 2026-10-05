@@ -42,7 +42,12 @@ public class AuthProvider {
 		DEFAULT_SKIP_URL.add("/menu/routes");
 		DEFAULT_SKIP_URL.add("/menu/auth-routes");
 		DEFAULT_SKIP_URL.add("/tenant/info");
+		// 登录页等场景读取的「公开参数值」接口：网关实际收到的路径带服务前缀
+		// （如 /blade-system/param/public-value，/api 前缀由前端代理剥离），
+		// 故放行必须带前缀，否则 AntPathMatcher 匹配不到 → 401 → 前端读不到开关、回落默认 true。
 		DEFAULT_SKIP_URL.add("/param/public-value");
+		DEFAULT_SKIP_URL.add("/blade-system/param/public-value");
+		DEFAULT_SKIP_URL.add("/api/blade-system/param/public-value");
 		DEFAULT_SKIP_URL.add("/order/create/**");
 		DEFAULT_SKIP_URL.add("/storage/deduct/**");
 		DEFAULT_SKIP_URL.add("/error/**");
