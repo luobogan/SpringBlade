@@ -29,6 +29,10 @@ import org.springblade.core.tool.utils.WebUtil;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
@@ -55,16 +59,35 @@ public class CaptchaTokenGranter implements ITokenGranter {
 	public UserInfo grant(TokenParameter tokenParameter) {
 		HttpServletRequest request = WebUtil.getRequest();
 
+		// 按租户读取「是否开启登录验证码」(captcha_mode)，关闭则该租户免验证码
+		String tenantId = tokenParameter.getArgs().getStr("tenantId");
+		boolean captchaRequired = true;
+		try {
+			RestTemplate restTemplate = new RestTemplate();
+			String url = "http://localhost:81/blade-system/param/public-value?paramKey=captcha_mode&tenantId=" + tenantId;
+			String body = restTemplate.getForObject(url, String.class);
+			if (body != null) {
+				JsonNode node = new ObjectMapper().readTree(body);
+				String data = node.path("data").asText(null);
+				if ("false".equals(data)) {
+					captchaRequired = false;
+				}
+			}
+		} catch (Exception ex) {
+			log.warn("读取租户验证码开关失败，默认要求验证码: {}", tenantId, ex);
+		}
+
 		String key = request.getHeader(TokenUtil.CAPTCHA_HEADER_KEY);
 		String code = request.getHeader(TokenUtil.CAPTCHA_HEADER_CODE);
 		// 获取验证码
 		String redisCode = Func.toStr(bladeRedis.getAndDel(CacheNames.CAPTCHA_KEY + key));
-		// 判断验证码
-		if (code == null || !StringUtil.equalsIgnoreCase(redisCode, code)) {
-			throw new ServiceException(TokenUtil.CAPTCHA_NOT_CORRECT);
+		// 判断验证码（仅当该租户开启验证码时校验）
+		if (captchaRequired) {
+			if (code == null || !StringUtil.equalsIgnoreCase(redisCode, code)) {
+				throw new ServiceException(TokenUtil.CAPTCHA_NOT_CORRECT);
+			}
 		}
 
-		String tenantId = tokenParameter.getArgs().getStr("tenantId");
 		String account = tokenParameter.getArgs().getStr("account");
 		String password = tokenParameter.getArgs().getStr("password");
 
