@@ -57,6 +57,7 @@ import org.springblade.workflow.service.IWfTestService;
 import org.springblade.workflow.service.IWfFormRenderService;
 import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.vo.TaskVO;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.vo.WfTestResultVO;
 import org.springblade.workflow.service.helper.WfApprovalLogActReader;
@@ -327,6 +328,10 @@ public class WfTestServiceImpl implements IWfTestService {
             int steps = 0;
             while (inst != null && WfInstance.STATUS_RUNNING == inst.getStatus() && steps < MAX_STEPS) {
                 steps++;
+                // 自愈：或签/会签下沉 MI 后，节点放行由引擎完成条件判定并删除同节点其余子任务；
+                // 若 wf_task 台账未同步关闭（历史实例 / 投影开关关闭 / 事件未覆盖），todos.get(0)
+                // 会优先抓到「引擎侧已不存在」的幽灵待办，审批必然失败 → 测试永久卡在当前节点。
+                closeStalePendingRows(inst, logLines, fmt);
                 List<WfTask> todos = pendingTestTasks(instId);
                 if (todos.isEmpty()) {
                     instanceService.advance(instId);
@@ -2335,6 +2340,53 @@ public class WfTestServiceImpl implements IWfTestService {
         final Set<String> visitedNodes = new LinkedHashSet<>();
         final List<String> pathNodes = new ArrayList<>();
         final Map<String, Integer> linkTimes = new LinkedHashMap<>();
+    }
+
+    /**
+     * 自愈式清理「幽灵待办」：{@code wf_task} 中仍为待办、但引擎侧已不存在的任务行，置为办结(4)。
+     *
+     * <p>成因：会签/或签下沉引擎多实例后，节点放行由引擎完成条件（或签 {@code nrOfCompletedInstances >= 1}）
+     * 判定，引擎会删除同节点其余 MI 子任务；自研会签时代这条路径由
+     * {@code WfTaskServiceImpl#closeSiblings} 显式把兄弟待办置办结，台账与引擎因此一致。
+     * 一旦该同步缺失，待办列表会出现幽灵待办，且自动测试每轮按 id 取 {@code todos.get(0)}
+     * 会优先抓到它，审批因引擎任务已不存在而失败，测试卡死（dev 实测：或签节点 1 通过后卡在节点 2）。
+     *
+     * <p>与 {@code WfStateProjector#onTaskCancelled}（TASK_CANCELLED 投影）互补：投影是根治，
+     * 本方法是兜底，覆盖历史实例与投影开关关闭的场景。</p>
+     */
+    private void closeStalePendingRows(WfInstance inst, List<String> logLines, SimpleDateFormat fmt) {
+        if (inst == null || inst.getEngineInstId() == null) {
+            return;
+        }
+        try {
+            List<WfTask> pendings = pendingTestTasks(inst.getId());
+            if (pendings.isEmpty()) {
+                return;
+            }
+            java.util.Set<String> live = new java.util.HashSet<>();
+            for (TaskVO t : processService.currentTasks(inst.getEngineInstId())) {
+                if (t != null && t.getTaskId() != null) {
+                    live.add(t.getTaskId());
+                }
+            }
+            Date now = new Date();
+            for (WfTask t : pendings) {
+                String engineTaskId = t.getEngineTaskId();
+                // 引擎侧查不到任何当前任务时不做判定（可能是引擎查询异常，避免误关真实待办）
+                if (engineTaskId == null || live.isEmpty() || live.contains(engineTaskId)) {
+                    continue;
+                }
+                WfTask patch = new WfTask();
+                patch.setId(t.getId());
+                patch.setStatus(WfTask.STATUS_FINISHED);
+                patch.setOperateTime(now);
+                taskMapper.updateById(patch);
+                logLines.add(fmt.format(new Date()) + " 清理幽灵待办：节点\"" + t.getNodeKey()
+                    + "\"（engineTaskId=" + engineTaskId + "）在引擎侧已不存在，置办结");
+            }
+        } catch (Exception e) {
+            log.warn("[WfTestServiceImpl] 清理幽灵待办失败（忽略）: {}", e.getMessage());
+        }
     }
 
     private List<WfTask> pendingTestTasks(Long instId) {

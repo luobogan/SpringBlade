@@ -75,6 +75,16 @@ public class WfEngineEventListener implements FlowableEventListener {
             case TASK_CREATED -> projector.onTaskCreated(taskId, procInstId, assignee);
             case TASK_ASSIGNED -> projector.onTaskAssigned(taskId, assignee);
             case TASK_COMPLETED -> projector.onTaskCompleted(taskId, procInstId);
+            // 会签/或签下沉 MI 后，节点放行由引擎完成条件判定，引擎会删除同节点其余 MI 子任务。
+            // Flowable 7.1 的 FlowableEngineEventType 没有 TASK_CANCELLED，删除任务以
+            // ENTITY_DELETED + Task 实体派发（taskId 已在上方从实体解析）。
+            // 不接这条会让被删者的 wf_task 永久停在待办(0)：形成幽灵待办，且自动测试每轮按 id 取
+            // todos.get(0) 会优先抓到它而审批失败、卡死（见 WfStateProjector#onTaskDeleted 注释）。
+            case ENTITY_DELETED -> {
+                if (taskId != null) {
+                    projector.onTaskDeleted(taskId, procInstId);
+                }
+            }
             default -> {
                 // 其余事件（变量/作业/活动/序列流等）不参与台账反写
             }

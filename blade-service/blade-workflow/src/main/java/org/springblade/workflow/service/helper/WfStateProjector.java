@@ -151,6 +151,46 @@ public class WfStateProjector {
         }
     }
 
+    /**
+     * 引擎删除任务（Flowable 7.1 的 {@code FlowableEngineEventType} 无 {@code TASK_CANCELLED}，
+     * 任务删除以 {@code ENTITY_DELETED} + Task 实体派发）→ 该引擎任务对应的待办置<b>办结(4)</b>。
+     *
+     * <p><b>为什么必须处理</b>：会签/或签下沉为引擎多实例后，节点放行由引擎完成条件
+     * （或签 {@code nrOfCompletedInstances >= 1}）判定，引擎会把同节点<b>其余 MI 子任务删除</b>；
+     * 而自研会签时代这条路径由 {@code WfTaskServiceImpl#closeSiblings} 显式把兄弟待办置办结。
+     * 若这里不补，被删除子任务对应的 {@code wf_task} 行会<b>永远停在待办(0)</b>：
+     * ① 真实待办列表出现幽灵待办；② 自动测试每轮按 id 取 {@code todos.get(0)} 会优先抓到它，
+     * 审批必然因引擎任务已不存在而失败，测试卡死在当前节点（dev 实测：或签节点 1 通过后卡在节点 2）。
+     * 终态取「办结(4)」与 {@code closeSiblings} 保持一致，语义为「已无需其再处理」。</p>
+     *
+     * <p>幂等：仅待办态需要关闭，已办/办结/协办等其它态不动，避免误改业务语义。</p>
+     */
+    public void onTaskDeleted(String taskId, String procInstId) {
+        if (taskId == null) {
+            log.warn("[WfStateProjector] 任务删除事件未携带 taskId，无法反写");
+            return;
+        }
+        List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getEngineTaskId, taskId));
+        if (rows.isEmpty()) {
+            log.info("[WfStateProjector][skip] 任务删除 -> 无 engine_task_id={} 的 wf_task 行，跳过反写", taskId);
+            return;
+        }
+        Date now = new Date();
+        for (WfTask t : rows) {
+            Integer cur = t.getStatus();
+            if (cur == null || cur != WfTask.STATUS_TODO) {
+                continue; // 幂等：仅待办态需要关闭，其余态不动
+            }
+            WfTask patch = new WfTask();
+            patch.setId(t.getId());
+            patch.setStatus(WfTask.STATUS_FINISHED);
+            patch.setOperateTime(now);
+            taskMapper.updateById(patch);
+            log.info("[WfStateProjector][write] 任务删除 -> wfTaskId={}（nodeKey={}）置办结(4)", t.getId(), t.getNodeKey());
+        }
+    }
+
     // ==================== 反写工具（幂等，只走 wf_* Mapper） ====================
 
     /**
