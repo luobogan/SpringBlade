@@ -1011,7 +1011,59 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             vo.setNextHandlerNames(archiveNames.isEmpty() ? null : String.join(",", archiveNames));
             result.add(vo);
         }
+        appendArchiveRecord(inst, result);
         return result;
+    }
+
+    /**
+     * 补一条「归档」流转记录（<b>读侧合成，不写库</b>）。
+     *
+     * <p><b>为什么补</b>：归档节点是 endEvent、引擎不会为它生成待办，因此也不会有审批记录 ——
+     * 实例走完最后一步后，流转意见里只剩最后一个审批节点的记录，看不到「归档」这一步；
+     * 而流程图 / 节点信息是按设计态把归档节点画出来的（还带节点信息里配置的操作者），
+     * 两边对不上（实测反馈：测试跑完后流转意见没有归档节点信息，流程图却有归档节点的人员）。
+     * 这里用实例真实的 {@code end_time} 与「最后一条真实记录的操作人」合成一条只读记录，
+     * 让流转意见与流程图口径一致。</p>
+     *
+     * <p><b>为什么不落库</b>：归档不是某个人的审批动作，写进 {@code wf_approval_log} 会污染
+     * 「正常流转仅认定 提交(2)/通过(0)」的统计口径；且读侧合成能让<b>历史实例立刻可见</b>，
+     * 不需要回刷数据。</p>
+     */
+    private void appendArchiveRecord(WfInstance inst, List<ApprovalLogVO> result) {
+        if (inst == null || inst.getStatus() == null
+            || inst.getStatus() != WfInstance.STATUS_APPROVED || result.isEmpty()) {
+            return;
+        }
+        String archiveKey = null;
+        String archiveName = null;
+        for (WfProcessNode n : loadNodes(inst.getDefId())) {
+            if (n.getNodeType() != null && n.getNodeType() == 3 && n.getNodeKey() != null) {
+                archiveKey = n.getNodeKey();
+                archiveName = (n.getNodeName() != null && !n.getNodeName().trim().isEmpty())
+                    ? n.getNodeName().trim() : "归档";
+                break;
+            }
+        }
+        if (archiveKey == null) {
+            return;
+        }
+        for (ApprovalLogVO vo : result) {
+            if (archiveKey.equals(vo.getNodeKey())) {
+                return; // 已有真实归档记录（个别流程会在归档节点留痕）则不重复补
+            }
+        }
+        ApprovalLogVO last = result.get(result.size() - 1);
+        ApprovalLogVO vo = new ApprovalLogVO();
+        vo.setNodeKey(archiveKey);
+        vo.setNodeName(archiveName);
+        vo.setOperator(last.getOperator());
+        vo.setLogType(WfApprovalLog.LOG_APPROVE);
+        vo.setLogTypeName("归档");
+        // 归档时间：优先实例 end_time；读源=act 时 loadInstance 返回的 stub 不带 end_time，
+        // 退化为「最后一条真实记录的时间」——归档紧接其后发生，取值仍真实且可用。
+        vo.setOperateTime(inst.getEndTime() != null ? inst.getEndTime() : last.getOperateTime());
+        vo.setNextHandlerIds("");
+        result.add(vo);
     }
 
     /**

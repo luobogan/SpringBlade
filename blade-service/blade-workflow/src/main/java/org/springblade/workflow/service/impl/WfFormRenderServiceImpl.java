@@ -3,7 +3,6 @@ package org.springblade.workflow.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.api.R;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -469,6 +468,21 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     /**
      * 是否可操作（有待办任务且办理人为当前用户）
      */
+    /**
+     * 是否可操作（该节点存在当前用户可办的待办）。
+     *
+     * <p><b>口径必须与写操作守卫 {@link WfAuthUtil#canOperateTask} 一致。</b>本方法原先只判
+     * 「待办办理人 == 当前登录人」，比写守卫多了一道限制：写守卫刻意允许管理员代办
+     * （见 {@code canOperateTask} 注释「管理员放行是刻意的」），而这里判 false → 渲染包
+     * {@code readonly=true} → 前端 {@code formEditable=false} → 非开始节点的
+     * 提交/退回/转发<b>整体隐藏</b>。结果是「后端允许办、前端点不了」。
+     * dev 实测：测试页手动提交开始节点后，节点 1 的待办属于 test1/testFind，
+     * 用 admin（流程管理员）登录时「提交」消失、只剩「保存」。</p>
+     *
+     * <p>这里直接复用守卫判定（本人 / 代理链上的原处理人 / 管理员）。真正的写操作仍由
+     * {@code WfTaskServiceImpl} 内的 {@code requireOperateTask} 兜底，因此并未放松任何鉴权，
+     * 只是让「按钮可见性」与「是否允许写」用同一把尺子。</p>
+     */
     private static boolean canOperate(WfTask task) {
         if (task == null) {
             return false;
@@ -476,8 +490,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         if (!Integer.valueOf(WfTask.STATUS_TODO).equals(task.getStatus())) {
             return false;
         }
-        Long current = SecureUtil.getUserId();
-        return current != null && current.equals(task.getAssignee());
+        return WfAuthUtil.canOperateTask(task);
     }
 
     private static boolean isEmpty(Object value) {
