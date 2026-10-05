@@ -101,8 +101,19 @@ public final class BpmnExtensionUtil {
 
 	// ---------------------------------------------------------- wf:node 读
 
-	public static WfNodeExt readNode(UserTask task) {
-		ExtensionElement node = firstExt(task, "node");
+	/**
+	 * 读取节点扩展（operator/fieldPerm/detailPerm/timeout/operation 等）。
+	 *
+	 * <p>入参由 {@code UserTask} 泛化为 {@link BaseElement}：流程的「创建节点」(startEvent) /
+	 * 「归档节点」(endEvent) 在 BPMN 里并非 UserTask，但它们同样承载 {@code wf:operator} 等扩展。
+	 * 早期仅扫描 UserTask 会导致 startEvent/endEvent 的操作者在「节点测试」预校验等读源中被漏读
+	 * （回退查 wf_node_operator 又因「去 wf_ 表」改造而为空 → 误报「未设置操作者」）。泛化后两类节点
+	 * 均可被统一读取，且既有 UserTask 调用点因 UserTask 是 BaseElement 子类而完全兼容。</p>
+	 *
+	 * @param element 任意 FlowElement（UserTask/StartEvent/EndEvent/Gateway…）
+	 */
+	public static WfNodeExt readNode(BaseElement element) {
+		ExtensionElement node = firstExt(element, "node");
 		if (node == null) {
 			return null;
 		}

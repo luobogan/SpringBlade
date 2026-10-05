@@ -6,6 +6,7 @@ import org.flowable.bpmn.model.BusinessRuleTask;
 import org.flowable.bpmn.model.CallActivity;
 import org.flowable.bpmn.model.EndEvent;
 import org.flowable.bpmn.model.FlowElement;
+import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.Gateway;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
 import org.flowable.bpmn.model.ManualTask;
@@ -72,22 +73,24 @@ public class WfBpmnExtensionReader {
 
     /** 读节点扩展（operator/fieldPerm/detailPerm/timeout/operation 等）；找不到返回 null */
     public BpmnExtensionUtil.WfNodeExt readNode(Long defId, String nodeKey) {
-        UserTask task = findUserTask(defId, nodeKey);
-        return task == null ? null : BpmnExtensionUtil.readNode(task);
+        FlowNode node = findFlowNode(defId, nodeKey);
+        return node == null ? null : BpmnExtensionUtil.readNode(node);
     }
 
     /**
      * 读单个节点（定义源 BPMN）→ {@link WfProcessNode}（去 wf_ 表：定义期节点配置改从 BPMN 读）。
      *
-     * <p>节点名取 BPMN {@code UserTask} 的 name，其余维度取 {@code wf:node} 扩展。
-     * BPMN 里没有对应 UserTask 返回 null（调用方按「未配置」处理或回退 wf_* 表）。</p>
+     * <p>节点名取 BPMN 元素的 name，其余维度取 {@code wf:node} 扩展。
+     * {@code findFlowNode} 已泛化到所有 {@link FlowNode}（含创建节点 startEvent / 归档节点 endEvent），
+     * 使按 nodeKey 单查也能命中这两类非 UserTask 的节点；BPMN 里没有对应元素则返回 null
+     * （调用方按「未配置」处理或回退 wf_* 表）。</p>
      */
     public WfProcessNode node(Long defId, String nodeKey) {
-        UserTask task = findUserTask(defId, nodeKey);
-        if (task == null) {
+        FlowNode n = findFlowNode(defId, nodeKey);
+        if (n == null) {
             return null;
         }
-        return toProcessNode(defId, nodeKey, task.getName(), BpmnExtensionUtil.readNode(task));
+        return toProcessNode(defId, nodeKey, n.getName(), BpmnExtensionUtil.readNode(n));
     }
 
     /**
@@ -219,10 +222,15 @@ public class WfBpmnExtensionReader {
     }
 
     private static WfProcessNode syntheticNode(Long defId, FlowElement e, int nodeType) {
-        WfProcessNode n = new WfProcessNode();
-        n.setDefId(defId);
-        n.setNodeKey(e.getId());
-        n.setNodeName(e.getName());
+        // 画布保存时同样会把 wf:node 扩展写到开始/结束/网关等非 UserTask 元素上（其 extJson 承载
+        // formContent / 超时 / 操作菜单等设置，见 FormContentDesignModal 的 writeExtJson）。
+        // 合成节点此前一律只填骨架、丢弃扩展，使这些节点的 extJson 恒为 null —— 预校验
+        // 「表单内容=节点布局」等项在开始(0)/归档(3)节点上永远判为未配置（dev 实测：test10021855
+        // 的开始/归档节点反复失败，而同一流程的 3 个 UserTask 正常通过）。
+        // 故：有扩展时按扩展构造（与 UserTask 走 toProcessNode 同口径），无扩展才退回骨架节点，
+        // 保持「未回填/未携带扩展」的历史行为不变（不破坏 nodeExtsComplete 守卫的回退语义）。
+        WfProcessNode n = toProcessNode(defId, e.getId(), e.getName(), BpmnExtensionUtil.readNode(e));
+        // 元素类型映射对非 UserTask 元素是权威口径（如 endEvent 的扩展里通常没写 nodeType）
         n.setNodeType(nodeType);
         return n;
     }
@@ -449,7 +457,15 @@ public class WfBpmnExtensionReader {
         return result;
     }
 
-    private UserTask findUserTask(Long defId, String nodeKey) {
+    /**
+     * 按 nodeKey（BPMN 元素 id）在 def 自身部署的模型中定位节点。
+     *
+     * <p>遍历所有 {@link FlowNode}（UserTask / StartEvent / EndEvent / Gateway…）而非仅 {@code UserTask}：
+     * 创建节点(startEvent) 与归档节点(endEvent) 同样承载 {@code wf:node} 扩展（操作者在「节点测试」预校验等
+     * 读源中被漏读的根因即在于「按 nodeKey 单查只扫 UserTask」）。readNode 入参已泛化为 BaseElement，
+     * 此处泛化后可统一命中各类节点，避免创建/归档节点按 nodeKey 读取时返回 null。</p>
+     */
+    private FlowNode findFlowNode(Long defId, String nodeKey) {
         // 锚定 def 自身的部署（与 nodes/links 一致），草稿/未部署返回 null 让调用方回退 wf_* 表，
         // 并避免按 procKey 取「最新版本」时把同 procKey 其他定义的模型错串到本 def（跨 def 串数据）。
         String procDefId = resolveOwnProcDefId(defId);
@@ -460,10 +476,10 @@ public class WfBpmnExtensionReader {
         if (model == null || model.getMainProcess() == null) {
             return null;
         }
-        Collection<UserTask> tasks = model.getMainProcess().findFlowElementsOfType(UserTask.class, true);
-        for (UserTask t : tasks) {
-            if (nodeKey.equals(t.getId())) {
-                return t;
+        Collection<FlowNode> nodes = model.getMainProcess().findFlowElementsOfType(FlowNode.class, true);
+        for (FlowNode n : nodes) {
+            if (nodeKey.equals(n.getId())) {
+                return n;
             }
         }
         return null;

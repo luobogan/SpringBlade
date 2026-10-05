@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.BpmnModel;
+import org.flowable.bpmn.model.FlowNode;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricProcessInstance;
@@ -713,14 +714,16 @@ public class WfTestServiceImpl implements IWfTestService {
                 BpmnModel model = parseBpmnModel(def.getBpmnXml());
                 List<WfNodeOperator> result = new ArrayList<>();
                 Set<String> bpmnKeys = new LinkedHashSet<>();
-                for (UserTask task : model.getMainProcess().findFlowElementsOfType(UserTask.class, true)) {
-                    BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(task);
+                // 遍历所有 FlowNode（UserTask / StartEvent / EndEvent / Gateway…），使创建节点(startEvent)
+                // 与归档节点(endEvent) 承载的 wf:operator 也能被读取；readNode 入参已泛化为 BaseElement。
+                for (FlowNode element : model.getMainProcess().findFlowElementsOfType(FlowNode.class, true)) {
+                    BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(element);
                     if (ext == null || ext.operators.isEmpty()) {
                         continue;
                     }
-                    bpmnKeys.add(task.getId());
+                    bpmnKeys.add(element.getId());
                     for (BpmnExtensionUtil.WfOperatorExt o : ext.operators) {
-                        result.add(toOperator(def.getId(), task.getId(), o));
+                        result.add(toOperator(def.getId(), element.getId(), o));
                     }
                 }
                 for (WfProcessNode n : nodes) {
@@ -778,15 +781,16 @@ public class WfTestServiceImpl implements IWfTestService {
             try {
                 BpmnModel model = parseBpmnModel(def.getBpmnXml());
                 List<WfNodeFieldPerm> result = new ArrayList<>();
-                for (UserTask task : model.getMainProcess().findFlowElementsOfType(UserTask.class, true)) {
-                    BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(task);
+                // 同一泛化：遍历所有 FlowNode，使创建/归档节点承载的 wf:fieldPerm 也能被读取
+                for (FlowNode element : model.getMainProcess().findFlowElementsOfType(FlowNode.class, true)) {
+                    BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(element);
                     if (ext == null || ext.fieldPerms.isEmpty()) {
                         continue;
                     }
                     for (BpmnExtensionUtil.WfFieldPermExt f : ext.fieldPerms) {
                         WfNodeFieldPerm p = new WfNodeFieldPerm();
                         p.setDefId(def.getId());
-                        p.setNodeKey(task.getId());
+                        p.setNodeKey(element.getId());
                         p.setScope(f.scope);
                         p.setFieldName(f.field);
                         p.setPerm(toIntSafely(f.perm));
