@@ -19,7 +19,6 @@ import org.flowable.bpmn.model.Task;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
 import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
-import org.flowable.bpmn.model.StartEvent;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.EventDefinition;
@@ -298,11 +297,17 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     /**
      * 节点列表（读源收口，P3-5 定义期）：开关开启时优先读 BPMN {@code wf:node} 扩展
-     * （锚定 def 自己的部署 procDefId），空（草稿/未部署）或异常时回退 {@code wf_process_node}。
+     * （锚定 def 自己的部署 procDefId；测试态优先读测试部署）。
+     *
+     * <p><b>未部署（草稿 / 无 procDefId）时改读「草稿 BPMN」</b>（{@code wf_process_definition.bpmn_xml}），
+     * 而非直接返回空：设计器要在发布前配置节点 / 操作者 / 表单内容 / 出口，而这些都依赖本列表；
+     * T-14 退役开关（{@code blade.workflow.wf-table-retirement.enabled=true}）开启时
+     * {@code wf_process_node} 回退已被禁用，若此处返回空就等于「不部署就没法配置节点」。
+     * 草稿兜底刻意<b>不套 nodeExtsComplete 守卫</b>（草稿是设计中的中间态，应如实展示）。</p>
      *
      * <p>仅供只读接口（{@code /definition/{id}/nodes}）使用；deploy 条件注入、saveBpmn 合并、
      * 另存版本复制、simulate、diff 等<b>内部路径必须继续走 {@link #nodes(Long)}</b>
-     * （读 wf_* 表）——BPMN 读源拿不到草稿数据，写路径不能依赖它。</p>
+     * （读 wf_* 表）——BPMN 读源/草稿兜底都拿不到完整写路径所需数据。</p>
      */
     @Override
     public List<WfProcessNode> loadNodes(Long defId) {
@@ -312,7 +317,15 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 if (fromBpmn != null && !fromBpmn.isEmpty()) {
                     return fromBpmn;
                 }
-                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_process_node. defId={}", defId);
+                // 未部署（草稿 / 无 procDefId）：部署读源拿不到模型，改读「草稿 BPMN」。
+                // 设计器要在发布前配置节点/操作者/表单内容/出口，而这些都依赖本列表；
+                // 若此处直接返回空，等于「不部署就没法配置节点」（T-14 退役开关开启时
+                // wf_process_node 回退已被禁用，见下）。口径与测试预校验 loadTestNodes 一致。
+                List<WfProcessNode> fromDraft = draftNodes(defId);
+                if (!fromDraft.isEmpty()) {
+                    return fromDraft;
+                }
+                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署且草稿无节点，回退 wf_process_node. defId={}", defId);
             } catch (Exception e) {
                 log.warn("[blade-workflow] 定义读源=BPMN 读取节点失败，回退 wf_process_node. defId={}, {}", defId, e.getMessage());
             }
@@ -322,6 +335,73 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             return nodes(defId);
         }
         return new ArrayList<>();
+    }
+
+    /**
+     * 读「草稿」BPMN（{@code wf_process_definition.bpmn_xml}）里的节点列表，供<b>未部署</b>定义在
+     * 设计期展示/配置节点使用（{@link #loadNodes} 的兜底分支）。
+     *
+     * <p>不套用读源的 {@code nodeExtsComplete} 完整性守卫：守卫的用途是「部署产物是否完整」，
+     * 而草稿本就是设计器正在编辑的中间态（可能只画了一半、扩展还没写全），此时应<b>如实展示</b>，
+     * 否则用户会看到空列表而不知原因。</p>
+     */
+    private List<WfProcessNode> draftNodes(Long defId) {
+        BpmnModel model = parseDraftBpmn(defId);
+        if (model == null || model.getMainProcess() == null) {
+            return List.of();
+        }
+        try {
+            return WfBpmnExtensionReader.toNodes(defId, model);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 草稿 BPMN 解析节点失败. defId={}, {}", defId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** 读「草稿」BPMN 里的出口（连线）列表，供未部署定义在设计期展示出口用（{@link #loadLinks} 的兜底分支）。 */
+    private List<WfNodeLink> draftLinks(Long defId) {
+        BpmnModel model = parseDraftBpmn(defId);
+        if (model == null || model.getMainProcess() == null) {
+            return List.of();
+        }
+        try {
+            return WfBpmnExtensionReader.toNodeLinks(defId, model);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 草稿 BPMN 解析出口失败. defId={}, {}", defId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 解析定义的草稿 BPMN 为模型；无内容或解析失败返回 {@code null}。
+     *
+     * <p>与 {@code saveBpmn} 同款容错：首次解析失败时剔除 {@code <bpmndi:BPMNDiagram>} 整段重试
+     * （bpmn-js 导出的画布交换信息偶尔会让 StAX 抛 Error reading XML，而节点/出口解析不关心它）。</p>
+     */
+    private BpmnModel parseDraftBpmn(Long defId) {
+        if (defId == null) {
+            return null;
+        }
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null || def.getBpmnXml() == null || def.getBpmnXml().isBlank()) {
+            return null;
+        }
+        BpmnXMLConverter converter = new BpmnXMLConverter();
+        try {
+            return converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(def.getBpmnXml().getBytes(StandardCharsets.UTF_8)), false, false);
+        } catch (Exception e) {
+            try {
+                String stripped = def.getBpmnXml()
+                    .replaceAll("(?s)<bpmndi:BPMNDiagram.*?</bpmndi:BPMNDiagram>", "");
+                return converter.convertToBpmnModel(
+                    () -> new ByteArrayInputStream(stripped.getBytes(StandardCharsets.UTF_8)), false, false);
+            } catch (Exception e2) {
+                log.warn("[blade-workflow] 草稿 BPMN 解析失败（设计期节点/出口将回退表读源）. defId={}, {}",
+                    defId, e2.getMessage());
+                return null;
+            }
+        }
     }
 
     @Override
@@ -458,6 +538,25 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         // 会签/或签/依次下沉多实例（开关默认关闭，与正式部署同口径）
         deployXml = applyMultiInstanceIfEnabled(deployXml, defId);
         String deploymentId = processService.deployProcessForTest(testKey, def.getTenantId(), deployXml);
+        // 记录本次测试部署的 procDefId：让「配置面板」在测试态读到测试实际会跑的那份 BPMN。
+        // 否则用户在设计器配好操作菜单/表单内容后「保存 → 测 试」，面板仍按 proc_def_id 读
+        // 上一次正式部署的旧模型（保存只更新草稿 bpmn_xml、不刷新部署），表现为「配置消失了」。
+        // ⚠️ 仅配置展示类读源（nodes()/links()）在测试态优先用它；node()/operators() 仍读正式部署，
+        //    避免真实实例在测试态读到被 neutralizeForTest 降级过的元素。
+        try {
+            String testProcDefId = processService.latestProcDefId(testKey);
+            if (testProcDefId != null && !testProcDefId.isBlank()) {
+                WfProcessDefinition patch = new WfProcessDefinition();
+                patch.setId(defId);
+                patch.setTestProcDefId(testProcDefId);
+                defMapper.updateById(patch);
+                def.setTestProcDefId(testProcDefId);
+            }
+        } catch (Exception e) {
+            // 记录失败不影响测试部署本身（面板退回读正式部署即可）
+            log.warn("[blade-workflow] 记录测试部署 procDefId 失败（面板将退回读正式部署）. defId={}, testKey={}, {}",
+                defId, testKey, e.getMessage());
+        }
         log.info("[blade-workflow] 流程定义已测试部署到引擎（未改发布状态，独立 key 不顶正式版本）. "
             + "defId={}, testKey={}, deploymentId={}", defId, testKey, deploymentId);
         return deploymentId;
@@ -1622,7 +1721,12 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 if (fromBpmn != null && !fromBpmn.isEmpty()) {
                     return fromBpmn;
                 }
-                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署（草稿/无 procDefId），回退 wf_node_link. defId={}", defId);
+                // 未部署（草稿）：改读草稿 BPMN 的连线（与 loadNodes 同口径，见其注释）
+                List<WfNodeLink> fromDraft = draftLinks(defId);
+                if (!fromDraft.isEmpty()) {
+                    return fromDraft;
+                }
+                log.info("[blade-workflow] 定义读源=BPMN：该定义未部署且草稿无出口，回退 wf_node_link. defId={}", defId);
             } catch (Exception e) {
                 log.warn("[blade-workflow] 定义读源=BPMN 读取出口失败，回退 wf_node_link. defId={}, {}", defId, e.getMessage());
             }
@@ -1972,13 +2076,14 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         return o;
     }
 
-    /** 元素 → 节点类型；非节点元素（网关/子流程等）返回 null。0创建 1审批 3归档 */
+    /** 元素 → 节点类型；非节点元素（起点连接器/子流程等）返回 null。0创建 1审批 3归档 */
     private Integer nodeTypeOf(FlowElement fe) {
-        if (fe instanceof StartEvent) {
-            return 0;
-        }
+        // 创建/申请人填单 = UserTask 且 wf:node.nodeType=0（业务语义），与读源 WfBpmnExtensionReader.toNodes
+        // ①段（toProcessNode 读 wf:node.nodeType）口径一致。StartEvent 是 BPMN 必需的起点连接器，
+        // 引擎发起时自动完成、不承载业务 → 不落 wf_process_node（返回 null 由 saveBpmn 跳过）。
         if (fe instanceof UserTask) {
-            return 1;
+            BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(fe);
+            return (ext != null && "0".equals(ext.nodeType)) ? 0 : 1;
         }
         if (fe instanceof EndEvent) {
             return 3;

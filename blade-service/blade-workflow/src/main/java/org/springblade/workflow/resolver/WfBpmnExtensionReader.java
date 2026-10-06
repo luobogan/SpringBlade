@@ -90,7 +90,22 @@ public class WfBpmnExtensionReader {
         if (n == null) {
             return null;
         }
-        return toProcessNode(defId, nodeKey, n.getName(), BpmnExtensionUtil.readNode(n));
+        // 薄 StartEvent：BPMN 仅要求流程存在起点，创建/申请人填单已改为 UserTask(nodeType=0)，
+        // StartEvent 不承载业务语义（引擎发起时自动完成）→ 不是业务节点，返回 null
+        // （调用方按「未配置」处理）。endEvent 仍是归档节点(3)，照常返回。
+        if (n instanceof StartEvent) {
+            return null;
+        }
+        WfProcessNode p = toProcessNode(defId, nodeKey, n.getName(), BpmnExtensionUtil.readNode(n));
+        // 非 UserTask 业务元素（结束/网关/等待/自动…）：元素类型映射是 nodeType 的权威口径，
+        // 与 nodes()/syntheticNode 对齐（这些元素的 wf:node 常缺 nodeType 属性）。
+        if (!(n instanceof UserTask)) {
+            Integer t = nodeTypeByElement(n);
+            if (t != null) {
+                p.setNodeType(t);
+            }
+        }
+        return p;
     }
 
     /**
@@ -104,7 +119,8 @@ public class WfBpmnExtensionReader {
      * <p>解析走 {@link #resolveOwnProcDefId}（def 自己的部署）：草稿/未部署返回空列表，由调用方回退 wf_* 表。</p>
      */
     public List<WfNodeLink> links(Long defId) {
-        BpmnModel model = loadOwnModel(defId);
+        // 配置展示读源：测试态优先读测试部署（与测试实际运行的 BPMN 同版本，见 resolveConfigProcDefId）
+        BpmnModel model = loadConfigModel(defId);
         if (model == null || !nodeExtsComplete(model)) {
             logIncompleteFallback(defId, model);
             return List.of();
@@ -120,7 +136,8 @@ public class WfBpmnExtensionReader {
      * <p>解析走 {@link #resolveOwnProcDefId}（def 自己的部署）：草稿/未部署返回空列表，由调用方回退 wf_* 表。</p>
      */
     public List<WfProcessNode> nodes(Long defId) {
-        BpmnModel model = loadOwnModel(defId);
+        // 配置展示读源：测试态优先读测试部署（与测试实际运行的 BPMN 同版本，见 resolveConfigProcDefId）
+        BpmnModel model = loadConfigModel(defId);
         if (model == null || !nodeExtsComplete(model)) {
             logIncompleteFallback(defId, model);
             return List.of();
@@ -132,6 +149,46 @@ public class WfBpmnExtensionReader {
     private BpmnModel loadOwnModel(Long defId) {
         String procDefId = resolveOwnProcDefId(defId);
         return procDefId == null ? null : modelCache.computeIfAbsent(procDefId, this::loadModel);
+    }
+
+    /**
+     * 加载<b>配置展示用</b>的 def 模型：测试态（{@code status=3}）且已「测 试」部署过时，
+     * 优先用测试部署的 procDefId，使配置面板与测试实际运行的 BPMN 同版本。
+     *
+     * <p><b>为什么需要</b>：画布「保存」只更新草稿 {@code bpmn_xml}、<b>不刷新部署</b>，而配置面板
+     * （节点信息 / 出口信息）按 {@code proc_def_id} 读已部署模型。于是「配好操作菜单 → 保存 → 测 试」
+     * 后，{@code proc_def_id} 仍指向上一次正式部署，面板读到旧模型（extJson 为空），
+     * 表现为「我明明配了，操作菜单却没了」——这是真实的用户困惑来源。</p>
+     *
+     * <p><b>边界（重要）</b>：仅 {@code nodes()} / {@code links()}（纯配置展示）走本方法；
+     * {@code node()} / {@code operators()} 与运行期共用、继续读正式部署（{@link #resolveOwnProcDefId}），
+     * 以免真实实例在测试态下读到被 {@code neutralizeForTest} 降级过的元素
+     * （businessRuleTask/ThrowEvent/带定时器事件 → manualTask）。</p>
+     */
+    private BpmnModel loadConfigModel(Long defId) {
+        String procDefId = resolveConfigProcDefId(defId);
+        return procDefId == null ? null : modelCache.computeIfAbsent(procDefId, this::loadModel);
+    }
+
+    /** 配置展示读源的 procDefId：测试态且已测试部署 → 测试部署；否则回退正式部署。 */
+    private String resolveConfigProcDefId(Long defId) {
+        try {
+            WfProcessDefinition def = defMapper.selectById(defId);
+            if (def == null) {
+                return null;
+            }
+            if (def.getStatus() != null && def.getStatus() == 3) {
+                String testProcDefId = def.getTestProcDefId();
+                if (testProcDefId != null && !testProcDefId.isBlank()) {
+                    return testProcDefId;
+                }
+            }
+            String procDefId = def.getProcDefId();
+            return (procDefId == null || procDefId.isBlank()) ? null : procDefId;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 配置展示读源解析 procDefId 失败，回退正式部署. defId={}, {}", defId, e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -168,10 +225,12 @@ public class WfBpmnExtensionReader {
      * 仅回填 defId/nodeKey/nodeName（与 {@link #toProcessNode} 语义一致）。
      *
      * <p><b>非 UserTask 元素合成（2026-09-30 实测补缺）</b>：回填/保存只把 {@code wf:node} 扩展写在
-     * UserTask 上，但 {@code wf_process_node} 还含开始(0)/结束(3)/网关(7)/等待(5)/自动处理(6) 等行——
-     * 发起页按 nodeType=0 定位开始节点，退回剔除也依赖类型，缺失会造成「BPMN 读源比表读少行」。
-     * 类型映射对齐 DB 实测约定（dev 库 428 行分布）：StartEvent→0、EndEvent→3、Gateway→7、
+     * UserTask 上，但 {@code wf_process_node} 还含结束(3)/网关(7)/等待(5)/自动处理(6) 等行——
+     * 退回剔除、出口、节点名渲染都依赖类型，缺失会造成「BPMN 读源比表读少行」。
+     * 类型映射：EndEvent→3、Gateway→7、
      * ReceiveTask/中间抛出/捕获事件→5、Service/Script/Send/BusinessRule/CallActivity→6、ManualTask→1。
+     * StartEvent 是 BPMN 必需的起点连接器，创建/申请人填单已改为 UserTask({@code nodeType=0})，
+     * 故 StartEvent 不再合成进 {@code wf_process_node}。
      * 合成节点无 sortOrder（BPMN 扩展未承载）排末尾，且无 signOrder/allowReject 等扩展维度（按 null=默认处理）。</p>
      */
     public static List<WfProcessNode> toNodes(Long defId, BpmnModel model) {
@@ -185,9 +244,7 @@ public class WfBpmnExtensionReader {
             result.add(toProcessNode(defId, t.getId(), t.getName(), BpmnExtensionUtil.readNode(t)));
         }
         // ② 非 UserTask 元素合成（含子流程，BoundaryEvent 挂在 activity 上、不在此遍历范围）
-        for (StartEvent e : process.findFlowElementsOfType(StartEvent.class, true)) {
-            result.add(syntheticNode(defId, e, 0));
-        }
+        //    StartEvent 是 BPMN 起点连接器，创建/申请人填单已改为 UserTask(nodeType=0)，不合成。
         for (EndEvent e : process.findFlowElementsOfType(EndEvent.class, true)) {
             result.add(syntheticNode(defId, e, 3));
         }
@@ -219,6 +276,25 @@ public class WfBpmnExtensionReader {
             return 1;
         }
         return null;
+    }
+
+    /**
+     * 非 UserTask 元素 → 权威 nodeType（供 {@link #node} 单查使用），在 {@link #syntheticNodeType}
+     * 基础上额外覆盖 EndEvent→3 / Gateway→7。StartEvent 是起点连接器（创建节点已改为 UserTask），
+     * 不参与映射。
+     *
+     * <p>toNodes() 已分别遍历 EndEvent/Gateway 并合成（见其 ② 段），其循环③的
+     * syntheticNodeType(FlowElement) 刻意不覆盖它们以避免重复条目；本方法仅用于单查 node()，
+     * 因此需完整覆盖，保证「结束节点(3)/网关(7)」等判定与 nodes() 一致。</p>
+     */
+    private static Integer nodeTypeByElement(FlowNode n) {
+        if (n instanceof EndEvent) {
+            return 3;
+        }
+        if (n instanceof Gateway) {
+            return 7;
+        }
+        return syntheticNodeType(n);
     }
 
     private static WfProcessNode syntheticNode(Long defId, FlowElement e, int nodeType) {

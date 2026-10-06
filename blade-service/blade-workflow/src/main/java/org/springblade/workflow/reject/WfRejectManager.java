@@ -67,13 +67,14 @@ public class WfRejectManager {
     /**
      * 计算当前节点可退回的目标节点集合（不含当前节点）——纯函数核心（数据来源无关）。
      *
-     * <p>只保留「引擎能停留的节点」：创建(0)/审批(1)/提交(2)。归档(3)/等待(5)/自动处理(6)/网关(7)
-     * 在 BPMN 里不是等待态（startEvent/endEvent/receiveTask/serviceTask/gateway），
+     * <p>只保留「引擎能停留的节点」：创建(0)/审批(1)/提交(2) —— 这三类都是 {@code UserTask} 等待态。
+     * 归档(3)/等待(5)/自动处理(6)/网关(7) 在 BPMN 里不是等待态（endEvent/receiveTask/serviceTask/gateway），
      * token 移过去不会停住 —— 会立刻沿出口继续流出，表现为「退回了但没动」，
      * 落在网关上还会按条件重新选分支（可能走回原节点或跳到别的分支）。</p>
      *
-     * <p>创建节点(0)在引擎里同样是 startEvent，但它有专门的「退回发起人」路径
-     * （见 {@code WfTaskServiceImpl#reject} → {@code rejectToStarter}），故保留为候选。</p>
+     * <p>创建节点(0)「申请人填单」同样是 {@code UserTask} 等待态（早期建模为 startEvent 时不是等待态，
+     * 需靠专门的「退回发起人」路径；该错配已根治），故它与其余 UserTask 一样可正常作为退回目标：
+     * 引擎会停住并生成真实待办（办理人=发起人）。</p>
      *
      * @param links  出口连线（wf_node_link 表或 BPMN wf:link+wf:foldedLink）
      * @param nodes  节点配置（wf_process_node 表或 BPMN wf:node）

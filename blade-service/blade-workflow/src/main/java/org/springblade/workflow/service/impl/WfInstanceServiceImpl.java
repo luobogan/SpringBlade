@@ -488,9 +488,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             inst.setProcDefId(procDefId);
             inst.setIsGray(gray ? 1 : 0);
             instanceMapper.updateById(inst);
+            // 草稿合成待办（无引擎任务）删除后由引擎重建。⚠️ 合成待办的 engine_task_id 在库里存的是
+            // 空字符串 ''（见 saveDraft），故必须同时匹配 isNull 与 =''，只用 isNull 会漏删空串行，
+            // 造成草稿提升后残留一条无引擎待办（污染待办列表与一致性告警）。
             taskMapper.delete(Wrappers.<WfTask>lambdaQuery()
                 .eq(WfTask::getInstId, inst.getId())
-                .isNull(WfTask::getEngineTaskId));
+                .and(w -> w.isNull(WfTask::getEngineTaskId).or().eq(WfTask::getEngineTaskId, "")));
         } else {
             inst.setEngineInstId(engineInstId);
             inst.setDefId(def.getId());
@@ -547,11 +550,51 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             actWriter.writeRequestIdBound(engineInstId, bound ? 1 : 0);
         }
 
+        // 方案 B（发起即完成创建任务）：创建节点已是 UserTask 等待态，startInstance 后引擎在其上生成了
+        // 真实任务（办理人=创建人）。因创建人已在发起页填完表单并点「发起」，这里由程序立即完成该任务
+        // → token 流入第一个审批节点，再由 advance 同步 wf_task / 当前节点。这样既保留「创建节点是真实
+        // 等待态、引擎真实流经」（根治语义），又对用户无感、不出现二次填单。
+        completeStarterCreateTask(inst, engineInstId, firstNodeKey, vars);
+
         advance(inst.getId());
         log.info("[blade-workflow] 发起流程成功. instId={}, defId={}, bizKey={}, 自检(业务行={}, request_id={}, 引擎部署={})",
             inst.getId(), def.getId(), bizKey,
             inst.getBusinessRowReady(), (ownBusinessRow ? "回填结果见上" : "无需回填"), engineMatched);
         return inst.getId();
+    }
+
+    /**
+     * 方案 B：发起时立即完成创建节点（申请人填单）的真实引擎任务。
+     *
+     * <p>创建节点已从 {@code startEvent} 改为 {@code UserTask(nodeType=0)} 等待态：{@code startInstance}
+     * 自动完成薄起点后，引擎在创建节点上生成真实任务并停住（办理人=创建人）。因创建人已在发起页
+     * 填完表单点「发起」，此处程序立即完成该任务，使 token 流入第一个审批节点，随后由 {@code advance}
+     * 同步 {@code wf_task} / 当前节点 —— 保留「创建节点是真实等待态、引擎真实流经」的根治语义，
+     * 同时对用户无感、不出现二次填单。</p>
+     *
+     * <p>若创建节点上不存在活动引擎任务（如首节点并非创建节点、或创建节点被网关跳过），则不强行
+     * complete，直接交给 {@code advance} 正常推进，避免误完成其它节点的任务。</p>
+     */
+    private void completeStarterCreateTask(WfInstance inst, String engineInstId, String createNodeKey,
+                                           Map<String, Object> vars) {
+        if (createNodeKey == null || createNodeKey.isEmpty()) {
+            return;
+        }
+        TaskVO createTask = null;
+        for (TaskVO t : processService.currentTasks(engineInstId)) {
+            if (createNodeKey.equals(t.getTaskDefinitionKey())) {
+                createTask = t;
+                break;
+            }
+        }
+        if (createTask == null) {
+            log.info("[blade-workflow] 发起后创建节点无活动任务，跳过自动完成，由 advance 正常推进. instId={}, createNode={}",
+                inst.getId(), createNodeKey);
+            return;
+        }
+        processService.completeTask(createTask.getTaskId(), vars == null ? new HashMap<>(4) : vars);
+        log.info("[blade-workflow] 发起即完成创建任务(方案B)：token 流入后续节点. instId={}, createNode={}, engineTaskId={}",
+            inst.getId(), createNodeKey, createTask.getTaskId());
     }
 
     @Override
@@ -717,7 +760,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (inst.getIsTest() != null && inst.getIsTest() == 1 && !WfAuthUtil.isAdmin()) {
             throw new WfAccessDeniedException("该流程为测试数据，无权查看");
         }
-        if (actRead()) {
+        // 草稿实例直接走业务表：它从未启动引擎，ACT_HI_PROCINST 里没有行，
+        // 若走下面的 act 分支会抛「流程实例不存在(ACT)」—— 这正是「保存草稿后刷新/重开链接
+        // 报『该草稿已不存在』」的另一处根因（与 loadInstance 的回退配套）。
+        boolean isDraft = inst.getStatus() != null && inst.getStatus() == WfInstance.STATUS_DRAFT;
+        if (actRead() && !isDraft) {
             // 读源=act：台账从原生 ACT_HI_PROCINST 取（BUSINESS_ID_=雪花业务ID，与鉴权用的 wf_instance.id 同源）
             ActHiProcinst t = actProcinstMapper.selectOne(ActInstanceConverter.queryByBusinessId(id));
             if (t == null) {
@@ -749,7 +796,26 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 .ge(beginTime != null, ActHiProcinst::getStartTime, beginTime)
                 .le(endTime != null, ActHiProcinst::getStartTime, endTime)
                 .orderByDesc(ActHiProcinst::getStartTime));
-            return result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
+            IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
+            // ⚠️ 草稿实例只存在于业务表 wf_instance（从未启动引擎 → ACT_HI_PROCINST 无对应行），
+            //    act 读源下若不补回，「我的请求」里保存过的草稿会凭空消失（用户会误以为草稿被删了，
+            //    进而出现「草稿可能已在…我的请求…中删除」的自我印证）。故把草稿合并到列表前部。
+            if (status == null || status == WfInstance.STATUS_DRAFT) {
+                List<WfInstance> drafts = instanceMapper.selectList(Wrappers.<WfInstance>lambdaQuery()
+                    .eq(WfInstance::getStarter, WfAuthUtil.userId())
+                    .eq(WfInstance::getIsTest, 0)
+                    .eq(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
+                    .like(title != null && !title.isBlank(), WfInstance::getTitle, title)
+                    .orderByDesc(WfInstance::getStartTime));
+                if (drafts != null && !drafts.isEmpty()) {
+                    List<InstanceVO> merged = new java.util.ArrayList<>(drafts.size() + voPage.getRecords().size());
+                    drafts.forEach(d -> merged.add(toInstanceVO(d)));
+                    merged.addAll(voPage.getRecords());
+                    voPage.setRecords(merged);
+                    voPage.setTotal(voPage.getTotal() + drafts.size());
+                }
+            }
+            return voPage;
         }
         Page<WfInstance> page = new Page<>(
             (current == null || current < 1) ? 1 : current,
@@ -843,18 +909,30 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         if (actRead()) {
             ActHiProcinst t = actProcinstMapper.selectOne(ActInstanceConverter.queryByBusinessId(instId));
-            if (t == null) {
-                return null;
+            if (t != null) {
+                WfInstance stub = new WfInstance();
+                stub.setId(t.getBusinessId());
+                stub.setStarter(t.getStarter());
+                stub.setStatus(ActHiProcinst.statusCode(t.getBusinessStatus()));
+                stub.setCurrentNodeKey(t.getCurrentNodeKey());
+                stub.setIsTest(t.getIsTest());
+                stub.setDefId(t.getDefId());
+                stub.setEngineInstId(t.getId());
+                return stub;
             }
-            WfInstance stub = new WfInstance();
-            stub.setId(t.getBusinessId());
-            stub.setStarter(t.getStarter());
-            stub.setStatus(ActHiProcinst.statusCode(t.getBusinessStatus()));
-            stub.setCurrentNodeKey(t.getCurrentNodeKey());
-            stub.setIsTest(t.getIsTest());
-            stub.setDefId(t.getDefId());
-            stub.setEngineInstId(t.getId());
-            return stub;
+            // ⚠️ 草稿实例在引擎表里「天生不存在」：ACT_HI_PROCINST 要等流程 start 才建行，
+            //    而草稿（status=草稿）由 saveDraft 只写业务表 wf_instance、从未启动引擎。
+            //    旧逻辑此处直接 return null → 读源=act 时草稿一律被判「流程实例不存在」，
+            //    前端表现为**保存草稿后刷新/重开带 instanceId 的链接即报「该草稿已不存在」**，
+            //    草稿根本无法续填（保存成功却提示草稿不存在）。
+            //    故 act 查不到时回退业务表，但**只认草稿**：非草稿实例以引擎表为权威，
+            //    业务表有而引擎表无属异常（如引擎侧已物理清理），仍视为不存在，避免误读陈旧数据。
+            WfInstance draft = instanceMapper.selectById(instId);
+            if (draft != null && draft.getStatus() != null
+                && draft.getStatus() == WfInstance.STATUS_DRAFT) {
+                return draft;
+            }
+            return null;
         }
         return instanceMapper.selectById(instId);
     }
@@ -1603,12 +1681,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * <p>背景：drift_check.sql 的「A 类漂移」（引擎有任务、业务缺 wf_task → 用户看不到该待办）
      * 此前只能靠人工跑脚本发现，静默期长；此处把该校验运行期化，漂移即时可见。</p>
      *
-     * <p>已排除「退回发起人 → 等待重新提交」这一<b>合法中间态</b>（{@link #awaitingCreatorResubmit}）：
-     * {@code WfTaskServiceImpl#rejectToStarter} 刻意让引擎 token 停在第一个审批节点（保证引擎始终有
-     * 活动任务、不被 advance 判成「无活动任务=流程结束」而误归档），业务侧则只给发起人一条
-     * {@code engine_task_id} 为空的合成待办 —— 故该态下引擎任务本就无 wf_task 对应，属预期表现；
-     * 发起人重新提交后走 resubmitByCreator 重新入流，漂移自动消失。不加此排除会对每单退回发起人
-     * 的实例狂刷误报。</p>
+     * <p>注：旧模型曾需排除「退回发起人 → 等待重新提交」中间态（当时引擎停在第一个审批节点、
+     * 业务侧只有 engine_task_id 为空的合成待办）。创建节点改为 UserTask 真实等待态后，退回发起人
+     * 时引擎停在创建节点且有<b>真实</b> wf_task 对应，不再存在该漂移态，故无需任何排除。</p>
      *
      * @param inst        当前实例
      * @param engineTasks 引擎当前活动任务（advanceInternal 内已取得；TaskQuery 只返回 userTask，无需再判类型）
@@ -1616,11 +1691,6 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private void warnIfEngineTaskMismatch(WfInstance inst, List<TaskVO> engineTasks) {
         try {
             if (inst == null || engineTasks == null || engineTasks.isEmpty()) {
-                return;
-            }
-            if (awaitingCreatorResubmit(inst.getId())) {
-                log.debug("[blade-workflow] 跳过任务一致性告警：实例处于「退回发起人→等待重新提交」合法中间态. instId={}",
-                    inst.getId());
                 return;
             }
             // 一次性查出本实例待办并取 engine_task_id 集合，避免逐条查库（N+1）
@@ -1644,22 +1714,6 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             log.warn("[blade-workflow] 任务一致性兜底告警失败（忽略）. instId={}",
                 inst == null ? null : inst.getId(), e);
         }
-    }
-
-    /**
-     * 是否处于「退回发起人 → 等待重新提交」合法中间态：存在一条 {@code engine_task_id}
-     * 为空/NULL 的待办（合成任务，与草稿待办同一套机制）。判据与 drift_check.sql 第二节
-     * 的排除条件完全一致，保证脚本与运行期两处口径相同。
-     */
-    private boolean awaitingCreatorResubmit(Long instId) {
-        if (instId == null) {
-            return false;
-        }
-        Long cnt = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .and(w -> w.isNull(WfTask::getEngineTaskId).or().eq(WfTask::getEngineTaskId, "")));
-        return cnt != null && cnt > 0;
     }
 
     /**
@@ -2512,7 +2566,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             vo.getViewed().remove(op);
         }
 
-        // ③ 开始节点：引擎在发起时自动完成、不生成待办，其办理人即发起人（申请人）
+        // ③ 创建节点（nodeType=0）：补录发起人为该节点已办。
+        //    方案B 下发起时由 completeStarterCreateTask 程序 complete 创建任务的真实引擎任务，
+        //    **不在 wf_task 留下任何行**；且 act 读源下该节点的 ACT_HI_COMMENT 无 USER_ID_
+        //    （blade 从未给创建任务的引擎任务设置办理人，办理人是 advance 按 wf:operator 解析后
+        //    写入 wf_task 的）→ ② 的日志归组在 act 读源下补不上发起人，故这里是唯一兜底。
+        //    wf 读源下 ② 已含 starter，此处 addOperatorId 为幂等去重，不会重复计。
         if (inst != null && inst.getStarter() != null) {
             WfProcessNode startNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
                 .eq(inst.getDefId() != null, WfProcessNode::getDefId, inst.getDefId())
@@ -2549,10 +2608,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         } catch (Exception e) {
             log.warn("[blade-workflow] 查询归档节点失败，流转意见退回最后经过节点. instId={}", inst.getId(), e);
         }
-        // 归档人：按归档节点（nodeType=3）配置的「操作者」解析（典型配置为「创建人本人」→ 发起人）。
+        // 归档人：优先按归档节点（nodeType=3）配置的「操作者」解析（典型配置为「创建人本人」→ 发起人）。
         // ⚠️ 不能写死 0（系统）：归档节点上明明配置了办理人（上一节点的「接收人」就是解析它得到的），
         //    若这里固定记系统，流转意见的归档那行会显示「系统」，与节点配置的归档人不一致。
-        //    解析不到（未配操作者 / 类型不可解析）才回退 0。
+        // 解析不到（未配操作者 / 类型不可解析）时的兜底链：最后一位实际办理人 → 发起人 → 系统(0)。
+        //    手工新建的流程常不会给 endEvent 配操作者（它是纯连接器、不生成任务），若无兜底，
+        //    归档行会一律显示「系统」，对用户毫无意义；退到「最后办理人」最贴近真实语义。
         Long operator = 0L;
         if (archive != null) {
             try {
@@ -2562,10 +2623,45 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     operator = ids.get(0);
                 }
             } catch (Exception e) {
-                log.warn("[blade-workflow] 解析归档节点办理人失败，回退系统. instId={}", inst.getId(), e);
+                log.warn("[blade-workflow] 解析归档节点办理人失败，转按最后办理人/发起人兜底. instId={}", inst.getId(), e);
             }
         }
+        if (operator == null || operator == 0L) {
+            operator = lastDoneOperator(inst.getId());
+        }
+        if (operator == null || operator == 0L) {
+            operator = inst.getStarter() != null ? inst.getStarter() : 0L;
+        }
         appendLog(inst.getId(), null, nodeKey, operator, WfApprovalLog.LOG_APPROVE, "流程归档");
+    }
+
+    /**
+     * 取本实例<b>最后一位实际办理人</b>（最近一条已办/办结待办的办理人），用于归档人兜底。
+     *
+     * <p>归档节点（endEvent）不生成引擎任务、其操作者仅用于记「归档人」；手工新建的流程通常不会
+     * 配它。此时若直接记 0（系统），流转意见的归档行对用户毫无意义。退到「最后一位实际办理人」最贴近
+     * 真实语义（谁把流程推到归档的就算谁归档）。</p>
+     *
+     * @return 办理人 id；无已办记录或查不到时返回 {@code null}（由调用方继续兜底到发起人）
+     */
+    private Long lastDoneOperator(Long instId) {
+        if (instId == null) {
+            return null;
+        }
+        try {
+            List<WfTask> done = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, instId)
+                .in(WfTask::getStatus, WfTask.STATUS_DONE, WfTask.STATUS_FINISHED)
+                .isNotNull(WfTask::getAssignee)
+                .orderByDesc(WfTask::getId)
+                .last("LIMIT 1"));
+            if (done != null && !done.isEmpty()) {
+                return done.get(0).getAssignee();
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 查询最后办理人失败，归档人回退发起人. instId={}, {}", instId, e.getMessage());
+        }
+        return null;
     }
 
     private void appendLog(Long instId, Long taskId, String nodeKey, Long operator,

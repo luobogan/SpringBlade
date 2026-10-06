@@ -86,6 +86,22 @@ public class WfProcessDefinition extends TenantEntity {
     @Schema(description = "激活版本的引擎流程定义ID（ACT_RE_PROCDEF.ID_）；NULL=尚未部署")
     private String procDefId;
 
+    /**
+     * 测试态（{@code status=3}）最近一次「测 试」部署产生的引擎流程定义ID（独立 key {@code procKey__test}）。
+     *
+     * <p><b>用途</b>：让<b>配置面板</b>（节点信息 / 出口信息列表）在测试态读到「测试实际会跑的那份 BPMN」，
+     * 而不是上一次正式部署的旧版本。此前用户在设计器里配好操作菜单/表单内容并「保存 → 测 试」，
+     * 却因 {@link #procDefId} 仍指向旧正式部署而看到「配置消失了」——根因是保存只更新草稿
+     * {@code bpmn_xml}、不刷新部署，而面板按 {@link #procDefId} 读已部署模型。</p>
+     *
+     * <p><b>边界</b>：仅配置展示类读源（{@code nodes()/links()}）在测试态优先用它；
+     * 与运行期共用的 {@code node()/operators()} 仍读 {@link #procDefId}（正式部署），
+     * 避免真实实例在测试态下读到被 {@code neutralizeForTest} 降级过的元素。
+     * NULL = 从未点过「测 试」。</p>
+     */
+    @Schema(description = "测试态最近一次测试部署的引擎流程定义ID（procKey__test）；NULL=从未测试部署")
+    private String testProcDefId;
+
     @Schema(description = "是否自由流程")
     private Integer isFree;
 

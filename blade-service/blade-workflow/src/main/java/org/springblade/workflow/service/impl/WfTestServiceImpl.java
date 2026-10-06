@@ -289,8 +289,9 @@ public class WfTestServiceImpl implements IWfTestService {
             if (startDto.getDataId() == null) {
                 startDto.setDataId(IdWorker.getId());
             }
-            // 开始节点必填校验（发起前）：开始节点在 start 时即自动完成，不会进入待办循环，
-            // 必须在此用场景表单值校验，否则必填未填会被引擎直接放过（假通过）。
+            // 创建节点（nodeType=0）必填校验（发起前）：创建节点已是 UserTask 真实等待态，但方案B 下
+            // instanceService.start 内部由 completeStarterCreateTask **程序立即 complete** 该任务、
+            // 不建 wf_task 待办行 → 它不会进入待办循环，必须在此用场景表单值校验，否则必填未填被放过（假通过）。
             String startErr = startNodeRequiredError(def, sc.formData);
             if (startErr != null) {
                 WfProcessNode sn = firstNodeOf(defId);
@@ -305,7 +306,8 @@ public class WfTestServiceImpl implements IWfTestService {
             logLines.add(fmt.format(new Date()) + " [场景" + idx + "] 已真实发起测试实例 instId=" + instId
                 + "（engineInstId=" + (inst == null ? "" : inst.getEngineInstId()) + "）");
 
-            // 叙述：创建（开始）节点（引擎在 start 时已自动办结，不在待办循环里）
+            // 叙述：创建节点（nodeType=0）——真实 UserTask，但方案B 由程序 complete 且不建 wf_task 行，
+            // 不在待办循环里。此处只补一段叙述，并让 lastNodeKey 从创建节点起算（保证第一条出口条件可对）。
             WfProcessNode createNode = null;
             for (WfProcessNode n : nodeList) {
                 if (n.getNodeType() != null && n.getNodeType() == 0) {
@@ -719,7 +721,7 @@ public class WfTestServiceImpl implements IWfTestService {
                 BpmnModel model = parseBpmnModel(def.getBpmnXml());
                 List<WfNodeOperator> result = new ArrayList<>();
                 Set<String> bpmnKeys = new LinkedHashSet<>();
-                // 遍历所有 FlowNode（UserTask / StartEvent / EndEvent / Gateway…），使创建节点(startEvent)
+                // 遍历所有 FlowNode（UserTask / StartEvent / EndEvent / Gateway…），使创建节点(UserTask nodeType=0)
                 // 与归档节点(endEvent) 承载的 wf:operator 也能被读取；readNode 入参已泛化为 BaseElement。
                 for (FlowNode element : model.getMainProcess().findFlowElementsOfType(FlowNode.class, true)) {
                     BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(element);
@@ -826,7 +828,7 @@ public class WfTestServiceImpl implements IWfTestService {
     }
 
     /**
-     * 首节点：BPMN 读源时优先 nodeType=0（开始事件，其创建配置在镜像表/回退链中）；
+     * 首节点：BPMN 读源时取 nodeType=0（创建节点 ——「申请人填单」已是 UserTask 真实等待态）；
      * 表路径保持原语义（sortOrder 最小，NULL 排前）。
      */
     private WfProcessNode firstNodeOf(Long defId) {
@@ -906,13 +908,17 @@ public class WfTestServiceImpl implements IWfTestService {
         }
         for (WfProcessNode n : nodeList) {
             Integer t = n.getNodeType();
-            if (t == null || (t != 0 && t != 3)) {
+            if (t == null || t != 0) {
+                // 只对「创建(0)」做硬性要求：它的办理人决定「退回发起人」时待办发给谁，缺了流程会走不通。
+                // 「归档(3)」不再要求操作者 —— 归档节点在 BPMN 里是 endEvent，引擎不为它生成任务，
+                // 其操作者仅用于流转意见里记「归档人」；运行期解析不到会兜底（见 WfInstanceServiceImpl
+                // 归档人解析：退最后办理人 → 退发起人 → 退系统），故此处阻断只会让「手工建的流程」
+                // 因为一个纯展示性字段跑不了测试，属于过度约束。
                 continue;
             }
-            String what = t == 0 ? "创建" : "归档";
             if (!opNodeKeys.contains(n.getNodeKey())) {
                 issues.putIfAbsent(n.getNodeKey(),
-                    what + "节点未设置操作者，请在「节点信息-操作者」中配置后再测试");
+                    "创建节点未设置操作者，请在「节点信息-操作者」中配置后再测试");
                 continue;
             }
         }
@@ -1457,9 +1463,10 @@ public class WfTestServiceImpl implements IWfTestService {
                 processService.latestProcDefId(def.getProcKey() + WorkflowConstant.TEST_DEPLOY_KEY_SUFFIX));
             startDto.setTitle("【测试】" + (def.getName() == null ? "" : def.getName()));
             startDto.setDataId(IdWorker.getId());
-            // 说明：开始节点（创建/申请人）在 instanceService.start 时即被 advance() 自动完成、不生成待办。
+            // 说明：创建节点（nodeType=0，真实 UserTask 等待态）在 instanceService.start 内部由
+            // completeStarterCreateTask **程序 complete**、且不建 wf_task 行 → 不生成待办。
             // 这里**不拦截**发起，目的是让实例先建出来 → 右侧面板直接显示真实实例表单，用户可在表单里
-            // 补齐必填后手动「提交」/或点「开始自动测试」。开始节点的必填改在「本实例首次提交」时校验
+            // 补齐必填后手动「提交」/或点「开始自动测试」。创建节点的必填改在「本实例首次提交」时校验
             // （见 step()），既不会假通过，也不会出现「有必填项就连实例都建不出来」的死路。
             Long instId = instanceService.start(startDto);
 
@@ -1618,10 +1625,11 @@ public class WfTestServiceImpl implements IWfTestService {
         // 当前待办所在节点：一次提交只办理「一个节点」的待办（交互式测试＝逐节点推进）
         String curNodeKey = todos.get(0).getNodeKey();
 
-        // 「开始节点（申请人）」表单的提交：只做必填校验 + 落快照，**不推进引擎**。
-        // 原因：开始节点在 instanceService.start 时已被 advance() 自动完成、不生成待办，引擎本就停在
-        // 下一个待办节点上；若在这里顺手把那个待办办掉，测试者就再没机会办理它
-        //（现象：「开始节点提交后，任务非待办状态，不可处理」）。
+        // 「创建节点（申请人，nodeType=0）」表单的提交：只做必填校验 + 落快照，**不推进引擎**。
+        // 原因：创建节点虽是真实 UserTask 等待态，但方案B 下 instanceService.start 已由
+        // completeStarterCreateTask 程序 complete 掉它、且不建 wf_task 行 → 它永不入 todos，
+        // 引擎停在下一个待办节点上；若在这里顺手把那个待办办掉，测试者就再没机会办理它
+        //（现象：「创建节点提交后，任务非待办状态，不可处理」）。
         // 返回的 currentNodeKey 会让前端面板自动切到该节点，继续办理。
         WfProcessNode firstNode = firstNodeOf(inst.getDefId());
         boolean fromStartNode = firstNode != null
@@ -1714,8 +1722,9 @@ public class WfTestServiceImpl implements IWfTestService {
                         + String.join("、", layoutMissing));
                 }
             }
-            // 首节点（创建/申请人）必填兜底：开始节点在 instanceService.start 时即被 advance() 自动完成、
-            // 不生成待办，其表单只在本实例「首次提交」时才有机会校验——否则开始节点必填未填会被静默放过（假通过）。
+            // 创建节点（nodeType=0）必填兜底：方案B 下它在 start 时已被 completeStarterCreateTask 程序
+            // complete、且不建 wf_task 行 → 其表单只在本实例「首次提交」时才有机会校验，
+            // 否则创建节点必填未填会被静默放过（假通过）。
             // 判据：该实例尚无「已办」任务（即当前是首次提交）；校验值用本次提交的表单值（含快照兜底）。
             // 注：firstNode 已在外层取好（同一提交内复用）。
             if (firstNode != null && !firstNode.getNodeKey().equals(t.getNodeKey())) {
@@ -1855,10 +1864,11 @@ public class WfTestServiceImpl implements IWfTestService {
     }
 
     /**
-     * 开始节点（nodeType=0）必填校验：在 instanceService.start 发起之前调用。
-     * <p>关键点：开始节点在 {@code instanceService.start} 内部 {@code advance()} 时被<strong>自动完成</strong>，
-     * 不会生成待办任务，因此永远不会进入「自动测试」的待办循环或「手动提交」的 step 校验分支。
-     * 若不在发起前单独校验，开始节点表单必填未填会被引擎直接放过，测试「假通过」。</p>
+     * 创建节点（nodeType=0）必填校验：在 instanceService.start 发起之前调用。
+     * <p>关键点：创建节点虽是真实 {@code UserTask} 等待态，但方案B 下在
+     * {@code instanceService.start} 内部由 {@code completeStarterCreateTask} <strong>程序 complete</strong>，
+     * 且不生成 {@code wf_task} 待办行，因此永远不会进入「自动测试」的待办循环或「手动提交」的 step 校验分支。
+     * 若不在发起前单独校验，创建节点表单必填未填会被引擎直接放过，测试「假通过」。</p>
      * <p>同时覆盖两类必填：①「字段权限=必填」（权限矩阵，formRenderService.validate）；
      * ②「布局字段必填」（formmodeClient 布局 JSON 的 fieldMeta.required / fieldAttr==3）。</p>
      *
@@ -1868,8 +1878,8 @@ public class WfTestServiceImpl implements IWfTestService {
         if (def == null) {
             return null;
         }
-        // 首节点（sortOrder 最小）＝ advance() 在发起时自动完成的那个节点，其表单（sc.formData）
-        // 正是测试提交的开始节点表单。注意：首节点未必是 nodeType=0，故按 sortOrder 取而非按 nodeType。
+        // 取创建节点（nodeType=0，BPMN 读源下即「申请人填单」UserTask）；其表单（sc.formData）
+        // 正是测试提交时填写的表单。
         WfProcessNode startNode = firstNodeOf(def.getId());
         if (startNode == null) {
             return null;
