@@ -1,0 +1,32 @@
+# 消息中心服务 Nacos 配置
+# dataId: blade-message-dev.yaml   group: DEFAULT_GROUP
+#
+# 说明：
+# 1. 数据源(blade.datasource.dev.*)、Redis(spring.data.redis.*)、JWT 签名密钥(blade.token.sign-key)
+#    均由共享配置 blade-dev.yaml / blade.yaml 提供，本文件一般无需重复声明。
+# 2. 本文件存在的主要目的是：blade-message 服务以 dev 启动时，Nacos 配置导入会按约定读取
+#    dataId=blade-message-dev.yaml；若该 dataId 不存在会启动告警/失败，因此此处保留一个最小可用配置。
+# 3. 端口与各数据源引用已在服务本地 application-dev.yml 中定义；此处显式声明端口，
+#    使本 dataId 在脱离本地 application-dev.yml 时也能独立拉起服务。
+# 4. 网关侧需配合（不在本文件，需在网关的 blade.yaml 里调整）：
+#    a) 网关路由：需为 blade-message 增加一条路由并 StripPrefix=1，否则前端 /api/blade-message/**
+#       经网关转发为 /blade-message/** 后，消息服务只有 /message/** 映射而 404。
+#       - id: blade-message
+#         uri: lb://blade-message
+#         predicates:
+#           - Path=/blade-message/**
+#         filters:
+#           - StripPrefix=1
+#    b) WS 握手放行：WebSocket 走 ?token= 透传 JWT，网关 AuthFilter 仅识别 Blade-Auth 头/参数，
+#       故需在网关 blade.yaml 的 blade.secure.skip-url 增加 /blade-message/ws/**（或代码层 AuthProvider
+#       的默认白名单），由消息中心 MessageHandshakeHandler 自行校验 JWT。
+#   注：当前联调阶段消息服务以 localtest 启动（application-localtest.yml，已关闭 Nacos 配置、
+#       保留服务发现），故本 Nacos 配置非必需；正式 dev 启动前请发布本文件。
+
+server:
+  port: 8130
+
+blade:
+  token:
+    # 与 blade.yaml 一致的签名密钥，供 AuthUtil 解析网关转发的 Blade-Auth 头
+    sign-key: qHJlcyzQ7YoGmHA7wZzvioTKYzYMaugG

@@ -1,0 +1,31 @@
+# 本地自包含测试配置（仅用于 AI 端到端联调，测试完成后删除；生产用 Nacos blade-message-dev.yaml）
+server:
+  port: 8130
+
+spring:
+  application:
+    name: blade-message
+  cloud:
+    nacos:
+      # 关闭 Nacos 配置，避免缺失 blade-message-dev.yaml 导致启动失败；数据源/Redis/密钥本地直配
+      config:
+        enabled: false
+      # 保留 Nacos 服务发现，向网关注册 blade-message 以便路由
+      discovery:
+        enabled: true
+        server-addr: 127.0.0.1:8848
+  datasource:
+    url: jdbc:mysql://localhost:3306/blade?useSSL=false&useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&tinyInt1isBit=false&allowMultiQueries=true&serverTimezone=GMT%2B8
+    username: root
+    password: 123456
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: 123456
+      database: 0
+
+blade:
+  token:
+    # 与 blade.yaml 一致的签名密钥，供 AuthUtil 解析网关转发的 Blade-Auth 头
+    sign-key: qHJlcyzQ7YoGmHA7wZzvioTKYzYMaugG

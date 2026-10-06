@@ -25,6 +25,7 @@
         <module>blade-pay</module>
         <module>blade-formmode</module>
         <module>blade-workflow</module>
+        <module>blade-message</module>
     </modules>
 
     <dependencies>

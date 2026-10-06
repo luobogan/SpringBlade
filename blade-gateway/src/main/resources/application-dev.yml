@@ -1,4 +1,14 @@
 blade:
+  # WebSocket 握手放行：浏览器 WS 握手无法携带自定义请求头，
+  # 仅通过 ?token= 透传 JWT；网关 AuthFilter 只认 Blade-Auth，
+  # 故需将消息中心 WS 路径加入白名单，由消息服务 MessageHandshakeHandler 自行校验 token。
+  # 覆盖不同代理前缀约定：/api/blade-message/ws/**（前端 dev 代理）、
+  # /blade-message/ws/**（网关路由前缀）、/ws/message/**（已剥离前缀）。
+  secure:
+    skip-url:
+      - /ws/message/**
+      - /blade-message/ws/**
+      - /api/blade-message/ws/**
   #多团队协作服务配置
   loadbalancer:
     #开启配置

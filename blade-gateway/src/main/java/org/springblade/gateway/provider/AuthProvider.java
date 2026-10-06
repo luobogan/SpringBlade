@@ -61,6 +61,10 @@ public class AuthProvider {
 		DEFAULT_SKIP_URL.add("/*/v3/api-docs/**");
 		DEFAULT_SKIP_URL.add("/swagger-ui/**");
 		DEFAULT_SKIP_URL.add("/swagger-ui.html");
+		// 消息中心 WebSocket：浏览器 WS 握手无法携带自定义请求头，仅通过 ?token= 透传 JWT；
+		// 网关 AuthFilter 只认 Blade-Auth，故需放行 /ws/message/**（发现定位器已剥离 /blade-message 前缀，
+		// 网关实际看到的是 /ws/message/**）。生产环境建议改放 Nacos blade.yaml 的 blade.secure.skip-url。
+		DEFAULT_SKIP_URL.add("/ws/message/**");
 	}
 
 	/**

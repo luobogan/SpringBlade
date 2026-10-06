@@ -14,8 +14,9 @@
         <blade.tool.version>5.0.2</blade.tool.version>
 
         <!-- Flowable 流程引擎版本（Apache-2.0，自行集成）
-             当前指向【本地源码构建】的 8.1.0-SNAPSHOT：源码 D:\workproject\springbladeandreact\flowable-engine，
-             已安装到 E:\project\mavenLib，构建需加 -Dmaven.repo.local=E:\project\mavenLib。
+             当前指向【本地源码构建】的 8.1.0-SNAPSHOT：源码 E:\project\springbladeandreact\flowable-engine，
+             已安装到 D:\project\mavenLib；仓库路径已固化在 .mvn/maven.config（-Dmaven.repo.local=D:\project\mavenLib），
+             命令行与 IDE 均统一使用 D:\project\mavenLib，无需手动追加参数。
              ⚠ 风险：8.1.0-SNAPSHOT 的 CURRENT_VERSION=8.1.0.1，而库内 schema.version=8.0.0.0；
                官方尚无 8.0.0→8.1.0 升级脚本，且 databaseSchemaUpdate=none 会【跳过版本校验】，
                可启动但存在静默 schema 不一致风险（见 docs/Flowable8升级执行记录.md）。
@@ -111,6 +112,11 @@
             <dependency>
                 <groupId>org.springblade</groupId>
                 <artifactId>blade-workflow-api</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springblade</groupId>
+                <artifactId>blade-message-api</artifactId>
                 <version>${revision}</version>
             </dependency>
             <!-- dynamic-datasource -->

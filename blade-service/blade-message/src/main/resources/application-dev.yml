@@ -1,0 +1,28 @@
+# 服务器端口
+server:
+  port: 8130
+
+spring:
+  application:
+    name: blade-message
+  cloud:
+    nacos:
+      # Nacos 控制台账号（与网关一致）
+      username: nacos
+      password: nacos
+      config:
+        server-addr: 127.0.0.1:8848
+        file-extension: yaml
+      discovery:
+        server-addr: 127.0.0.1:8848
+  # 从 Nacos 引入共享配置 + 本服务扩展配置（public 命名空间，DEFAULT_GROUP）
+  config:
+    import:
+      - optional:nacos:blade.yaml
+      - optional:nacos:blade-dev.yaml
+      - optional:nacos:blade-message-dev.yaml
+  # 数据源配置（值来自共享配置 blade-dev.yaml）
+  datasource:
+    url: ${blade.datasource.dev.url}
+    username: ${blade.datasource.dev.username}
+    password: ${blade.datasource.dev.password}
