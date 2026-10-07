@@ -49,4 +49,10 @@ public class SessionVO extends Session {
 	@Schema(description = "成员用户ID列表")
 	private List<Long> memberIds;
 
+	/**
+	 * 会话展示头像（私聊 = 对方成员头像）
+	 */
+	@Schema(description = "会话展示头像（私聊为对方成员头像）")
+	private String avatar;
+
 }

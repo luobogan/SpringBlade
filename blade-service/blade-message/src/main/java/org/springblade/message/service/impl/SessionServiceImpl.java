@@ -23,6 +23,7 @@ import org.springblade.core.mp.base.BaseServiceImpl;
 import org.springblade.core.mp.support.Condition;
 import org.springblade.core.mp.support.Query;
 import org.springblade.core.secure.BladeUser;
+import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.message.dto.SessionCreateDTO;
@@ -33,10 +34,14 @@ import org.springblade.message.mapper.SessionMemberMapper;
 import org.springblade.message.service.ISessionService;
 import org.springblade.message.vo.SessionVO;
 import org.springblade.message.wrapper.SessionWrapper;
+import org.springblade.system.user.entity.User;
+import org.springblade.system.user.entity.UserInfo;
+import org.springblade.system.user.feign.IUserClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -51,6 +56,7 @@ import java.util.stream.Collectors;
 public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> implements ISessionService {
 
 	private final SessionMemberMapper sessionMemberMapper;
+	private final IUserClient userClient;
 
 	@Override
 	public IPage<SessionVO> pageSessions(Query query, BladeUser user) {
@@ -79,6 +85,13 @@ public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> 
 			return vo;
 		}).collect(Collectors.toList());
 
+		// 私聊会话标题/头像回填：会话表 name 为空时取对方成员姓名，避免前端只能显示「私聊会话」。
+		// 同一页内对方用户去重解析（Map 缓存），避免逐会话重复 Feign 调用。
+		Map<Long, User> userCache = new HashMap<>();
+		for (SessionVO vo : vos) {
+			fillPrivateSessionTitle(vo, user, userCache);
+		}
+
 		IPage<SessionVO> result = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
 		result.setRecords(vos);
 		return result;
@@ -97,7 +110,7 @@ public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> 
 		}
 		// 两人会话幂等复用
 		if (memberIds.size() == 2) {
-			SessionVO exist = findTwoPersonSession(memberIds);
+			SessionVO exist = findTwoPersonSession(memberIds, user);
 			if (exist != null) {
 				return exist;
 			}
@@ -134,7 +147,7 @@ public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> 
 		return vo;
 	}
 
-	private SessionVO findTwoPersonSession(List<Long> memberIds) {
+	private SessionVO findTwoPersonSession(List<Long> memberIds, BladeUser user) {
 		Long a = memberIds.get(0);
 		Long b = memberIds.get(1);
 		List<SessionMember> aMembers = sessionMemberMapper.selectList(
@@ -161,9 +174,43 @@ public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> 
 					vo.setUnreadCount(0);
 					vo.setMemberCount(members.size());
 					vo.setMemberIds(members.stream().map(SessionMember::getUserId).collect(Collectors.toList()));
+					fillPrivateSessionTitle(vo, user, new HashMap<>());
 					return vo;
 				}
 			}
+		}
+		return null;
+	}
+
+	/**
+	 * 私聊会话标题/头像回填：两人会话不入库名称（name 为空），取对方成员的姓名/头像作为展示，
+	 * 否则前端会话列表只能兜底显示「私聊会话」。解析失败不影响主流程（保持空名称由前端兜底）。
+	 */
+	private void fillPrivateSessionTitle(SessionVO vo, BladeUser user, Map<Long, User> userCache) {
+		if (vo == null || !Integer.valueOf(1).equals(vo.getType()) || Func.isNotBlank(vo.getName())) {
+			return;
+		}
+		Long otherId = vo.getMemberIds() == null ? null : vo.getMemberIds().stream()
+			.filter(id -> !id.equals(user.getUserId()))
+			.findFirst().orElse(null);
+		if (otherId == null) {
+			return;
+		}
+		User other = userCache.computeIfAbsent(otherId, this::resolveUser);
+		if (other != null) {
+			vo.setName(Func.isBlank(other.getName()) ? other.getRealName() : other.getName());
+			vo.setAvatar(other.getAvatar());
+		}
+	}
+
+	private User resolveUser(Long userId) {
+		try {
+			R<UserInfo> result = userClient.userInfo(userId);
+			if (result != null && result.isSuccess() && result.getData() != null) {
+				return result.getData().getUser();
+			}
+		} catch (Exception ignored) {
+			// 用户信息解析失败不影响会话主流程
 		}
 		return null;
 	}

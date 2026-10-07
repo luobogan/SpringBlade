@@ -214,7 +214,9 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 					log.setCreateDept(Func.toLong(user.getDeptId()));
 					log.setStatus(1);
 					log.setIsDeleted(0);
-					messageReadLogMapper.insert(log);
+					// 幂等插入（INSERT IGNORE）：并发 markRead 的 check-then-insert 竞态下，
+					// 唯一键 uk_blade_message_read_log_msg_user 冲突直接跳过，不再抛 Duplicate entry
+					messageReadLogMapper.insertIgnore(log);
 				}
 			}
 		}
