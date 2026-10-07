@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.SecureUtil;
-import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.dto.FormDataDTO;
 import org.springblade.formmode.dto.FormDataSaveDTO;
@@ -18,6 +17,7 @@ import org.springblade.formmode.mapper.WorkflowBillFieldMapper;
 import org.springblade.formmode.service.IApprovalTriggerService;
 import org.springblade.formmode.service.IFormDataService;
 import org.springblade.formmode.service.IFormModeService;
+import org.springblade.formmode.utils.BizValueCoercer;
 import org.springblade.formmode.utils.TableNameContextHolder;
 import org.springblade.formmode.utils.TableNameUtil;
 import org.springblade.formmode.vo.FormDataVO;
@@ -112,16 +112,10 @@ public class FormDataServiceImpl implements IFormDataService {
         } catch (Exception ignored) {}
 
         // 目标表真实列（小写集合）：审计列/业务列只写表中存在的，
-        // 兼容 modedatacreator(ecology 迁移) / modedatacreater / lastMod* 等命名差异
-        Set<String> tableCols = new HashSet<>();
-        for (Map<String, Object> col : jdbcTemplate.queryForList(
-            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-            mainTableName)) {
-            Object name = col.get("COLUMN_NAME");
-            if (name != null) {
-                tableCols.add(String.valueOf(name).toLowerCase());
-            }
-        }
+        // 兼容 modedatacreator(ecology 迁移) / modedatacreater / lastMod* 等命名差异。
+        // 列类型元信息按表动态读取（对所有业务表生效），写值时按列类型兜底。
+        Map<String, BizValueCoercer.ColumnMeta> colMeta = BizValueCoercer.loadColumnMeta(jdbcTemplate, mainTableName);
+        Set<String> tableCols = new HashSet<>(colMeta.keySet());
 
         if (isCreate) {
             appendAuditColumn(columns, placeholders, values, tableCols,
@@ -158,7 +152,7 @@ public class FormDataServiceImpl implements IFormDataService {
             if (value == null) {
                 value = fieldValues.get(field.getFieldname());
             }
-            values.add(value != null ? value.toString() : null);
+            values.add(BizValueCoercer.coerce(colMeta.get(dbName.toLowerCase()), value));
         }
 
         // 执行SQL
@@ -190,7 +184,7 @@ public class FormDataServiceImpl implements IFormDataService {
                     setParts.add("`" + dbName + "`=?");
                     Object value = finalFieldValues.get(dbName);
                     if (value == null) value = finalFieldValues.get(field.getFieldname());
-                    updateValues.add(value != null ? value.toString() : null);
+                    updateValues.add(BizValueCoercer.coerce(colMeta.get(dbName.toLowerCase()), value));
                 }
                 if (setParts.isEmpty()) {
                     setParts.add("`id`=`id`");
@@ -385,6 +379,9 @@ public class FormDataServiceImpl implements IFormDataService {
      *   <li>只写目标表<b>真实存在</b>的列（不同表单的审计列名不同：{@code modedatacreator} /
      *       {@code modedatacreater} / {@code lastModDate}…），字段值按<b>字段名</b>（= 列名，
      *       大小写不敏感）匹配，匹配不上的键直接忽略，绝不拼出未知列。</li>
+     *   <li>字段值统一经 {@link BizValueCoercer#coerce}按<b>目标列真实类型</b>兜底：数值列
+     *       收到空串/对象/越界值降级为 null，字符串列超长截断 —— 单个字段类型不匹配
+     *       不会让整行写入失败（否则 workflow 侧会退化成「占位 dataId」）。</li>
      * </ul>
      */
     @Override
@@ -431,16 +428,11 @@ public class FormDataServiceImpl implements IFormDataService {
             throw new RuntimeException("表单表名不合法: " + tableName);
         }
 
-        // 目标表真实列（小写 → 实际列名），后续只按它取值/写值
+        // 目标表真实列（小写 → 实际列名）+ 列类型元信息。类型在写入时从 information_schema 动态读取，
+        // 因此对**所有**业务表生效（存量自建表 + 前端新建的表），无需按表名硬编码。
         Map<String, String> columns = new LinkedHashMap<>();
-        for (Map<String, Object> col : jdbcTemplate.queryForList(
-            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-            tableName)) {
-            Object name = col.get("COLUMN_NAME");
-            if (name != null) {
-                columns.put(String.valueOf(name).toLowerCase(), String.valueOf(name));
-            }
-        }
+        Map<String, BizValueCoercer.ColumnMeta> colMeta = BizValueCoercer.loadColumnMeta(jdbcTemplate, tableName);
+        colMeta.forEach((k, m) -> columns.put(k, m.name));
         if (columns.isEmpty()) {
             throw new RuntimeException("业务表不存在: " + tableName);
         }
@@ -467,12 +459,16 @@ public class FormDataServiceImpl implements IFormDataService {
                 if (StringUtil.isBlank(k)) {
                     return;
                 }
-                String col = columns.get(k.toLowerCase());
+                String ck = k.toLowerCase();
+                String col = columns.get(ck);
                 // 表里没这列 / 是系统列（由审计逻辑接管，不被业务值覆盖）→ 忽略
                 if (col == null || isSystemField(col)) {
                     return;
                 }
-                row.put(col, normalizeValue(v));
+                // ⚠️ 按目标列类型兜底：类型不兼容的单个字段降级（数值列→null、字符串列→截断），
+                // 不再让整行 INSERT 失败 —— 整行失败会被 workflow 侧回退成「占位 dataId」，
+                // 表现为"业务数据行未创建成功"，比丢一个字段严重得多。
+                row.put(col, BizValueCoercer.coerce(colMeta.get(ck), v));
             });
         }
         // 关联流程实例ID（雪花）→ request_id：发起流程后由 workflow 侧回填，用于「单据 ↔ 流程」双向反查。
@@ -538,19 +534,6 @@ public class FormDataServiceImpl implements IFormDataService {
         String col = columns.get(name.toLowerCase());
         if (col != null && !row.containsKey(col)) {
             row.put(col, value);
-        }
-    }
-
-    /** 统一值类型：基本类型原样（交给 JDBC），复杂对象（明细行/富文本结构等）落 JSON 串 */
-    private static Object normalizeValue(Object v) {
-        if (v == null || v instanceof CharSequence || v instanceof Number
-            || v instanceof Boolean || v instanceof java.util.Date) {
-            return v;
-        }
-        try {
-            return JsonUtil.toJson(v);
-        } catch (Exception e) {
-            return String.valueOf(v);
         }
     }
 

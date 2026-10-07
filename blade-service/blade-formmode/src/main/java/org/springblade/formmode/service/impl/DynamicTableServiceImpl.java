@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.formmode.entity.FieldDefinition;
 import org.springblade.formmode.service.IDynamicTableService;
 import org.springblade.formmode.service.IFieldDefinitionService;
+import org.springblade.formmode.utils.BizValueCoercer;
 import org.springblade.formmode.utils.TableNameUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
@@ -429,6 +430,9 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
         Set<String> newColumnNames = newColumns.stream()
                 .map(col -> ((String) col.get("COLUMN_NAME")).toLowerCase())
                 .collect(Collectors.toSet());
+        // 列类型元信息（对所有业务表动态读取）：备份行按新表列类型兜底，
+        // 避免列类型变更后恢复数据时整行 INSERT 失败。
+        Map<String, BizValueCoercer.ColumnMeta> colMeta = BizValueCoercer.loadColumnMeta(jdbcTemplate, tableName);
 
         // 构建字段定义中的列名集合
         Set<String> fieldColumnNames = new HashSet<>();
@@ -467,7 +471,7 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                         }
                         columns.append("`").append(colName).append("`");
                         values.append("?");
-                        params.add(row.get(colName));
+                        params.add(BizValueCoercer.coerce(colMeta.get(colName), row.get(colName)));
                     }
                 }
 
