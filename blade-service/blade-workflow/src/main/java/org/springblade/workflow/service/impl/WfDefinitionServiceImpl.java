@@ -1008,6 +1008,19 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 if (!childElements(wfNode, "wf:timeout").isEmpty()) {
                     importNodeTimeoutsFromWfNode(defId, nodeKey, wfNode);
                 }
+                // 节点扩展 JSON（操作菜单 / 退回白名单 / 表单内容等自由 JSON）：
+                // 从 wf:extJson 子元素取出写回 wf_process_node.ext_json，使导入 BPMN 也能落库。
+                // 仅当 BPMN 显式携带时才同步，过渡期双轨安全（未迁移节点不会被洗空）。
+                Element extJsonEl = firstChildElement(wfNode, "wf:extJson");
+                if (extJsonEl != null) {
+                    String ej = extJsonEl.getTextContent();
+                    if (ej != null && !ej.isBlank()) {
+                        WfProcessNode extNode = new WfProcessNode();
+                        extNode.setId(nodeId);
+                        extNode.setExtJson(ej.trim());
+                        nodeMapper.updateById(extNode);
+                    }
+                }
                 continue;
             }
 
