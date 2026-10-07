@@ -799,20 +799,29 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
             // ⚠️ 草稿实例只存在于业务表 wf_instance（从未启动引擎 → ACT_HI_PROCINST 无对应行），
             //    act 读源下若不补回，「我的请求」里保存过的草稿会凭空消失（用户会误以为草稿被删了，
-            //    进而出现「草稿可能已在…我的请求…中删除」的自我印证）。故把草稿合并到列表前部。
+            //    进而出现「草稿可能已在…我的请求…中删除」的自我印证）。
             if (status == null || status == WfInstance.STATUS_DRAFT) {
-                List<WfInstance> drafts = instanceMapper.selectList(Wrappers.<WfInstance>lambdaQuery()
+                var draftQ = Wrappers.<WfInstance>lambdaQuery()
                     .eq(WfInstance::getStarter, WfAuthUtil.userId())
                     .eq(WfInstance::getIsTest, 0)
                     .eq(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
-                    .like(title != null && !title.isBlank(), WfInstance::getTitle, title)
-                    .orderByDesc(WfInstance::getStartTime));
-                if (drafts != null && !drafts.isEmpty()) {
-                    List<InstanceVO> merged = new java.util.ArrayList<>(drafts.size() + voPage.getRecords().size());
-                    drafts.forEach(d -> merged.add(toInstanceVO(d)));
-                    merged.addAll(voPage.getRecords());
-                    voPage.setRecords(merged);
-                    voPage.setTotal(voPage.getTotal() + drafts.size());
+                    .like(title != null && !title.isBlank(), WfInstance::getTitle, title);
+                // ① total 与「当前页」无关：否则翻到第 2 页时 total 少掉草稿数，
+                //    前端「共 N 条」会随翻页跳变、末页判定错乱。
+                Long draftTotal = instanceMapper.selectCount(draftQ);
+                long dc = draftTotal == null ? 0L : draftTotal;
+                voPage.setTotal(voPage.getTotal() + dc);
+                // ② 记录只在第一页并入：否则每翻一页草稿都被重复插入一次（同一草稿出现多遍）。
+                if (dc > 0 && (current == null || current <= 1)) {
+                    List<WfInstance> drafts = instanceMapper.selectList(draftQ
+                        .orderByDesc(WfInstance::getStartTime));
+                    if (drafts != null && !drafts.isEmpty()) {
+                        List<InstanceVO> merged =
+                            new java.util.ArrayList<>(drafts.size() + voPage.getRecords().size());
+                        drafts.forEach(d -> merged.add(toInstanceVO(d)));
+                        merged.addAll(voPage.getRecords());
+                        voPage.setRecords(merged);
+                    }
                 }
             }
             return voPage;

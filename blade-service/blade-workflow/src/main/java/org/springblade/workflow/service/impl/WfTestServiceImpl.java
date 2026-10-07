@@ -922,19 +922,15 @@ public class WfTestServiceImpl implements IWfTestService {
                 continue;
             }
         }
-        // 4. 表单内容：会渲染表单的节点（0创建/1审批/2提交/3归档）必须设置为「节点布局」。
-        //    本系统已屏蔽「普通模式」，故「是否设置了表单内容」= ext_json.settings.formContent.mode
-        //    是否为 custom；未设置（含存量的 normal）一律视为未配置。
-        for (WfProcessNode n : nodeList) {
-            Integer t = n.getNodeType();
-            if (t == null || t < 0 || t > 3) {
-                continue;
-            }
-            if (!"custom".equals(WfNodeSettingsUtil.str(n.getExtJson(), "formContent", "mode"))) {
-                issues.putIfAbsent(n.getNodeKey(),
-                    "未设置表单内容，请在「节点信息-表单内容」选择「节点布局」后再测试");
-            }
-        }
+        // 4. 【已移除】表单内容：此前要求「会渲染表单的节点必须设置为「节点布局」(custom)」，
+        //    未设置即阻断测试。该约束**过度**：
+        //    - 本系统已屏蔽「普通模式」，custom 是**唯一可选模式** —— 未设置等于「取默认值」，
+        //      而不是「用户主动选择不配」，两者不该有区别；
+        //    - 未配节点布局时表单会回退到表单级布局，渲染与提交功能完全正常；
+        //    - 后果是新建流程会因一个「没有第二种选择的配置」跑不了测试，用户被迫逐个节点
+        //      打开「表单内容」点一遍（与「手工创建的流程要补配置」同源）。
+        //    新建节点的 ext_json 已默认写入 formContent.mode=custom（设计器 emptyExtJson），
+        //    存量节点缺该字段也不再视为配置问题。
         return issues;
     }
 
