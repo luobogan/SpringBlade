@@ -48,13 +48,23 @@ public class UserImportListener extends AnalysisEventListener<UserExcel> {
 	 */
 	private final IUserService userService;
 
+	/**
+	 * 导入失败明细（逐行），对齐 P0-8「导入含重复工号的文件 → 明确报错到行」
+	 */
+	private final List<String> errors = new ArrayList<>();
+
 	@Override
 	public void invoke(UserExcel data, AnalysisContext context) {
+		// 回填 Excel 物理行号（表头占 1 行，故 +1），供入库失败时定位到具体行
+		if (data != null && context != null && context.readRowHolder() != null
+			&& context.readRowHolder().getRowIndex() != null) {
+			data.setRowNum(context.readRowHolder().getRowIndex() + 1);
+		}
 		list.add(data);
 		// 达到BATCH_COUNT，则调用importer方法入库，防止数据几万条数据在内存，容易OOM
 		if (list.size() >= batchCount) {
 			// 调用importer方法
-			userService.importUser(list);
+			errors.addAll(userService.importUser(list));
 			// 存储完成清理list
 			list.clear();
 		}
@@ -63,7 +73,7 @@ public class UserImportListener extends AnalysisEventListener<UserExcel> {
 	@Override
 	public void doAfterAllAnalysed(AnalysisContext analysisContext) {
 		// 调用importer方法
-		userService.importUser(list);
+		errors.addAll(userService.importUser(list));
 		// 存储完成清理list
 		list.clear();
 	}

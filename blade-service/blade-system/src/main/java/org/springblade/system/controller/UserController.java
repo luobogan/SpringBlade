@@ -45,6 +45,7 @@ import org.springblade.system.excel.UserImportListener;
 import org.springblade.system.service.IUserService;
 import org.springblade.system.user.entity.User;
 import org.springblade.system.user.vo.UserVO;
+import org.springblade.system.vo.UserFormSchemaVO;
 import org.springblade.system.wrapper.UserWrapper;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -178,6 +179,60 @@ public class UserController {
 	}
 
 	/**
+	 * 用户字段唯一性预检（对齐 ecology HrmResourceCheck.jsp 的提交前校验）
+	 */
+	@PostMapping("/check")
+	@Operation(summary = "字段唯一性预检", description = "传入field(account/workCode/certificateNum)、value、tenantId(仅超管可指定)、excludeId(编辑场景)")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R<Boolean> check(@Parameter(description = "字段名", required = true) @RequestParam String field,
+							@Parameter(description = "字段值", required = true) @RequestParam String value,
+							@Parameter(description = "租户编号(仅超管可指定)") @RequestParam(required = false) String tenantId,
+							@Parameter(description = "排除的用户主键(编辑场景排除自身)") @RequestParam(required = false) Long excludeId) {
+		return R.data(userService.checkUserFieldUnique(field, value, tenantId, excludeId));
+	}
+
+	/**
+	 * 按编码规则生成下一个工号（对齐 ecology CodeRuleManager.generateRuleCode）
+	 */
+	@GetMapping("/work-code/next")
+	@Operation(summary = "生成下一个工号", description = "传入tenantId(仅超管可指定)、deptId(预留)")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R<String> nextWorkCode(@Parameter(description = "租户编号(仅超管可指定)") @RequestParam(required = false) String tenantId,
+								  @Parameter(description = "部门主键(预留:按部门维度取码)") @RequestParam(required = false) Long deptId) {
+		return R.data(userService.nextWorkCode(tenantId));
+	}
+
+	/**
+	 * 用户新增表单 schema（P2：字段配置驱动，对齐 ecology getHrmResourceAddForm）
+	 */
+	@GetMapping("/add-form-schema")
+	@Operation(summary = "用户表单schema", description = "传入tenantId(仅超管可指定)")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R<List<UserFormSchemaVO>> addFormSchema(@Parameter(description = "租户编号(仅超管可指定)") @RequestParam(required = false) String tenantId) {
+		return R.data(userService.formSchema(tenantId));
+	}
+
+	/**
+	 * 用户自定义字段值（P2：对齐 ecology cus_fielddata 回显）
+	 */
+	@GetMapping("/ext-data")
+	@Operation(summary = "用户自定义字段值", description = "传入userId")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R<Map<Long, String>> extData(@Parameter(description = "用户主键", required = true) @RequestParam Long userId) {
+		return R.data(userService.getExtData(userId));
+	}
+
+	/**
+	 * 用户信息完善度（P3-3，对齐 ecology HrmInfoStatus）
+	 */
+	@GetMapping("/complete-status")
+	@Operation(summary = "用户信息完善度", description = "传入userId")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R<Map<String, Integer>> completeStatus(@Parameter(description = "用户主键", required = true) @RequestParam Long userId) {
+		return R.data(userService.getCompleteStatus(userId));
+	}
+
+	/**
 	 * 修改密码
 	 */
 	@PostMapping("/update-password")
@@ -216,16 +271,21 @@ public class UserController {
 		if ((!StringUtils.endsWithIgnoreCase(filename, ".xls") && !StringUtils.endsWithIgnoreCase(filename, ".xlsx"))) {
 			throw new RuntimeException("请上传正确的excel文件!");
 		}
+		UserImportListener importListener = new UserImportListener(userService);
 		InputStream inputStream;
 		try {
-			UserImportListener importListener = new UserImportListener(userService);
 			inputStream = new BufferedInputStream(file.getInputStream());
 			ExcelReaderBuilder builder = FastExcel.read(inputStream, UserExcel.class, importListener);
 			builder.doReadAll();
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-		return R.success("操作成功");
+		// 逐行失败明细（对齐 P0-8：重复工号/账号/证件号要报错到行）
+		List<String> errors = importListener.getErrors();
+		if (errors.isEmpty()) {
+			return R.success("操作成功");
+		}
+		return R.data(errors, "导入完成，失败 " + errors.size() + " 行");
 	}
 
 	/**

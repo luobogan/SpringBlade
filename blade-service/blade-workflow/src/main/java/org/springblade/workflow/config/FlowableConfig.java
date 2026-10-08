@@ -16,6 +16,7 @@ import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import org.springblade.workflow.listener.WfEngineEventListener;
+import org.springblade.workflow.listener.WfBizCallbackListener;
 
 import javax.sql.DataSource;
 import java.io.File;
@@ -61,6 +62,7 @@ public class FlowableConfig {
     private final PlatformTransactionManager transactionManager;
     private final ResourcePatternResolver resourcePatternResolver;
     private final ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider;
+    private final ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider;
 
     /** 诊断用：装配阶段解析出的实际库名 / 库内 schema 版本 / history，统一打印自检结论 */
     private String resolvedCatalog;
@@ -70,11 +72,13 @@ public class FlowableConfig {
     public FlowableConfig(DataSource dataSource,
                           PlatformTransactionManager transactionManager,
                           ResourcePatternResolver resourcePatternResolver,
-                          ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider) {
+                          ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider,
+                          ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider) {
         this.dataSource = dataSource;
         this.transactionManager = transactionManager;
         this.resourcePatternResolver = resourcePatternResolver;
         this.wfEngineEventListenerProvider = wfEngineEventListenerProvider;
+        this.wfBizCallbackListenerProvider = wfBizCallbackListenerProvider;
     }
 
     @Bean
@@ -132,6 +136,14 @@ public class FlowableConfig {
         if (ledgerListener != null) {
             configuration.setEventListeners(List.of(ledgerListener));
             log.info("[FlowableConfig] 已注册方案C 台账事件监听 WfEngineEventListener（ledger-listener.enabled=true）");
+        }
+        // P3-2 业务回调监听：人员状态流转流程审批完成后回调 blade-system 落库 person_status。
+        // 与台账监听同构（只依赖 wf_* Mapper，无引擎 Service），故同样走 setEventListeners 直接装配。
+        // 独立开关 blade.workflow.biz-callback.enabled（默认 true），关闭即完全回到「只有台账、无业务回调」。
+        WfBizCallbackListener bizListener = wfBizCallbackListenerProvider.getIfAvailable();
+        if (bizListener != null) {
+            configuration.setEventListeners(List.of(bizListener));
+            log.info("[FlowableConfig] 已注册 P3 业务回调监听 WfBizCallbackListener（biz-callback.enabled=true）");
         }
         // 自动部署流程定义
         configuration.setDeploymentResources(

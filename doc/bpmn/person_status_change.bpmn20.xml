@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  人员状态变更审批流程（P3，对齐 ecology HrmResourceTryAction / FireAction）
+  procKey = person_status_change
+
+  用法：blade 设计器 /definition/import 导入后 /definition/{id}/deploy 发布，
+       再把 defId 或 procKey 配到 blade_person_status_flow.flow_key。
+
+  变量约定（由 blade-system 发起时注入 StartProcessDTO.variables）：
+    approver  审批人 userId（默认取直属主管 managerId，无主管时取发起人的 admin）
+    userId    被办理的用户 id
+    fromStatus / toStatus  变更前 / 变更后人员状态
+    wfOutcome 审批结果：approve 通过 / reject 驳回
+
+  语义：只有走到「审批通过」结束事件，引擎才派发 PROCESS_COMPLETED，
+        blade-system 收到回调后落库 person_status；驳回则退回发起节点重新提交。
+  RULES: XML comments must not contain consecutive hyphens.
+  ============================================================================
+-->
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:wf="http://www.springblade.org/workflow"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             targetNamespace="http://www.springblade.org/workflow"
+             xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL http://www.omg.org/spec/BPMN/20100524/DI/BPMN20.xsd">
+
+  <process id="person_status_change" name="人员状态变更审批" isExecutable="true">
+
+    <startEvent id="StartEvent_1" name="开始" flowable:initiator="initiator"/>
+    <sequenceFlow id="Flow_1" name="发起" sourceRef="StartEvent_1" targetRef="Task_Apply"/>
+
+    <userTask id="Task_Apply" name="发起办理" flowable:assignee="${initiator}">
+      <documentation>由发起人提交人员状态变更申请，发起人节点由引擎自动完成。</documentation>
+      <extensionElements>
+        <wf:node nodeType="0" signOrder="1" mergeType="1" passNum="1" allowReject="0"
+                 allowForward="0" autoApprove="0" sortOrder="1" multiInstance="0">
+          <wf:operator groupNo="1" opType="3" objId="${initiator}" bhxj="0" signOrder="1" batchNo="1" canView="1"/>
+          <wf:operation btnName="提交" btnOrder="1" actionType="2" enabled="1">
+            <wf:right rightType="person" rightValue="${initiator}"/>
+          </wf:operation>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_2" name="提交审批" sourceRef="Task_Apply" targetRef="Task_Approve"/>
+
+    <userTask id="Task_Approve" name="主管审批" flowable:assignee="${approver}">
+      <documentation>直属主管（或人事管理员）审批：通过后生效，驳回则退回发起节点重新提交。</documentation>
+      <extensionElements>
+        <wf:node nodeType="1" signOrder="1" mergeType="1" passNum="1" allowReject="1"
+                 allowForward="1" autoApprove="0" sortOrder="2" multiInstance="0">
+          <wf:operator groupNo="1" opType="3" objId="${approver}" bhxj="0" signOrder="1" batchNo="1" canView="1"/>
+          <wf:operation btnName="审批通过" btnOrder="1" actionType="2" enabled="1">
+            <wf:right rightType="person" rightValue="${approver}"/>
+          </wf:operation>
+          <wf:operation btnName="驳回" btnOrder="2" actionType="2" enabled="1">
+            <wf:right rightType="person" rightValue="${approver}"/>
+          </wf:operation>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_3" name="审批" sourceRef="Task_Approve" targetRef="Gateway_1"/>
+
+    <exclusiveGateway id="Gateway_1" name="审批结果" default="Flow_Approve"/>
+    <sequenceFlow id="Flow_Approve" name="通过" sourceRef="Gateway_1" targetRef="EndEvent_Approved"/>
+    <sequenceFlow id="Flow_Reject" name="驳回" sourceRef="Gateway_1" targetRef="Task_Apply">
+      <conditionExpression xsi:type="tFormalExpression">${wfOutcome == 'reject'}</conditionExpression>
+    </sequenceFlow>
+
+    <endEvent id="EndEvent_Approved" name="审批通过"/>
+
+  </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane bpmnElement="person_status_change" id="BPMNPlane_1">
+      <bpmndi:BPMNShape bpmnElement="StartEvent_1" id="StartEvent_1_di">
+        <omgdc:Bounds x="120" y="215" width="30" height="30"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Apply" id="Task_Apply_di">
+        <omgdc:Bounds x="200" y="190" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Approve" id="Task_Approve_di">
+        <omgdc:Bounds x="380" y="190" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Gateway_1" id="Gateway_1_di">
+        <omgdc:Bounds x="555" y="205" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="EndEvent_Approved" id="EndEvent_Approved_di">
+        <omgdc:Bounds x="660" y="215" width="30" height="30"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="Flow_1" id="Flow_1_di">
+        <omgdi:waypoint x="150" y="230"/><omgdi:waypoint x="200" y="230"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_2" id="Flow_2_di">
+        <omgdi:waypoint x="320" y="230"/><omgdi:waypoint x="380" y="230"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_3" id="Flow_3_di">
+        <omgdi:waypoint x="500" y="230"/><omgdi:waypoint x="555" y="230"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_Approve" id="Flow_Approve_di">
+        <omgdi:waypoint x="605" y="230"/><omgdi:waypoint x="660" y="230"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_Reject" id="Flow_Reject_di">
+        <omgdi:waypoint x="580" y="205"/><omgdi:waypoint x="580" y="120"/><omgdi:waypoint x="260" y="120"/><omgdi:waypoint x="260" y="190"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</definitions>

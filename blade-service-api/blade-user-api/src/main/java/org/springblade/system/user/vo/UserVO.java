@@ -63,6 +63,12 @@ public class UserVO extends User {
 	private String postName;
 
 	/**
+	 * 直接上级姓名（对齐 ecology ManagerID 展示；managerId 为空或 -1 时无直属主管）
+	 */
+	@BladeView(Views.Summary.class)
+	private String managerName;
+
+	/**
 	 * 性别
 	 */
 	@BladeView(Views.Detail.class)

@@ -16,6 +16,7 @@
 package org.springblade.auth.granter;
 
 import org.springblade.auth.enums.BladeUserEnum;
+import org.springblade.auth.utils.PersonStatusGuard;
 import org.springblade.auth.utils.TokenUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.redis.cache.BladeRedis;
@@ -82,6 +83,8 @@ public class PasswordTokenGranter implements ITokenGranter {
 			log.error("用户登录失败, 账号:{}, IP:{}", account, WebUtil.getIP());
 			throw new ServiceException(TokenUtil.USER_NOT_FOUND);
 		} else {
+			// P3-5 在职性校验：解聘(4) 拒绝登录（对齐 ecology ResourceComInfo 在职判定）
+			PersonStatusGuard.check(userInfo.getUser().getPersonStatus());
 			// 处理登录成功
 			TokenUtil.handleLoginSuccess(bladeRedis, tenantId, account);
 		}

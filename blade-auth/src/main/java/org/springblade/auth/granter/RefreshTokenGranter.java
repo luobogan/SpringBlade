@@ -17,6 +17,7 @@ package org.springblade.auth.granter;
 
 import io.jsonwebtoken.Claims;
 import lombok.AllArgsConstructor;
+import org.springblade.auth.utils.PersonStatusGuard;
 import org.springblade.core.launch.constant.TokenConstant;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
@@ -51,6 +52,10 @@ public class RefreshTokenGranter implements ITokenGranter {
 			if (tokenType.equals(TokenConstant.REFRESH_TOKEN)) {
 				R<UserInfo> result = userClient.userInfo(Func.toLong(claims.get(TokenConstant.USER_ID)));
 				userInfo = result.isSuccess() ? result.getData() : null;
+				// P3-5 在职性校验：连刷新令牌路径一并拦截，否则已登录的离职账号可无限续期
+				if (userInfo != null && userInfo.getUser() != null) {
+					PersonStatusGuard.check(userInfo.getUser().getPersonStatus());
+				}
 			}
 		}
 		return userInfo;

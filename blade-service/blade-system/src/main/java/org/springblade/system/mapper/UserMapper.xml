@@ -99,8 +99,9 @@
         </where>
     </select>
 
+    <!-- P0：导出需带上工号/人员状态（对齐 UserExcel 新增列；证件号属敏感信息，不导出） -->
     <select id="exportUser" resultType="org.springblade.system.excel.UserExcel">
-        SELECT id, tenant_id, account, name, real_name, email, phone, birthday, role_id, dept_id, post_id FROM blade_user ${ew.customSqlSegment}
+        SELECT id, tenant_id, account, work_code, person_status, name, real_name, email, phone, birthday, role_id, dept_id, post_id FROM blade_user ${ew.customSqlSegment}
     </select>
 
     <select id="selectUsersByRoleId" resultMap="userResultMap">

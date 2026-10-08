@@ -26,6 +26,7 @@ import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.entity.UserOauth;
 import org.springblade.system.user.vo.UserVO;
 import org.springblade.system.excel.UserExcel;
+import org.springblade.system.vo.UserFormSchemaVO;
 
 import java.util.List;
 import java.util.Map;
@@ -170,10 +171,15 @@ public interface IUserService extends BaseService<User> {
 
 	/**
 	 * 导入用户数据
+	 * <p>
+	 * 复用 {@link #submit(User)} 的校验链（账号/工号/证件号查重），对齐 Ecology 批量建档同源校验；
+	 * 逐行独立提交，单行失败不影响其余行，失败原因以「第 N 行：原因」的形式返回，
+	 * 对齐 P0-8「导入含重复工号的文件 → 明确报错到行」。
 	 *
 	 * @param data 用户导入数据集合
+	 * @return 失败明细（逐行）；为空表示全部导入成功
 	 */
-	void importUser(List<UserExcel> data);
+	List<String> importUser(List<UserExcel> data);
 
 	/**
 	 * 获取导出用户数据
@@ -204,4 +210,47 @@ public interface IUserService extends BaseService<User> {
 	boolean registerGuest(User user, Long oauthId);
 
 	boolean saveUserOauth(UserOauth userOauth);
+
+	/**
+	 * 用户字段唯一性预检（对齐 ecology HrmResourceCheck.jsp 的提交前校验）
+	 *
+	 * @param field     字段名（account / workCode / certificateNum）
+	 * @param value     字段值
+	 * @param tenantId  租户编号（超管可指定，其他用户强制当前会话租户）
+	 * @param excludeId 排除的用户主键（编辑场景排除自身）
+	 * @return true=可用（未被占用）
+	 */
+	boolean checkUserFieldUnique(String field, String value, String tenantId, Long excludeId);
+
+	/**
+	 * 按编码规则生成下一个工号（对齐 ecology CodeRuleManager.generateRuleCode）
+	 *
+	 * @param tenantId 租户编号
+	 * @return 生成的工号；该租户未配置编码规则时返回 null
+	 */
+	String nextWorkCode(String tenantId);
+
+	/**
+	 * 读取用户自定义字段值（P2，对齐 ecology cus_fielddata）
+	 *
+	 * @param userId 用户主键
+	 * @return fieldId -> fieldValue
+	 */
+	Map<Long, String> getExtData(Long userId);
+
+	/**
+	 * 读取用户信息完善度（P3-3，对齐 ecology HrmInfoStatus）
+	 *
+	 * @param userId 用户主键
+	 * @return item -> done(0/1)
+	 */
+	Map<String, Integer> getCompleteStatus(Long userId);
+
+	/**
+	 * 获取用户新增表单 schema（P2，对齐 ecology getHrmResourceAddForm）
+	 *
+	 * @param tenantId 租户编号（超管可指定，其他用户强制当前会话租户）
+	 * @return 分组 + 字段元数据；无配置时返回空集合
+	 */
+	List<UserFormSchemaVO> formSchema(String tenantId);
 }

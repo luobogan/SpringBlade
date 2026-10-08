@@ -18,6 +18,8 @@ package org.springblade.message.feign;
 import org.springblade.core.tool.api.R;
 import org.springblade.message.constant.MessageConstant;
 import org.springblade.message.dto.MessageSendDTO;
+import org.springblade.message.dto.SessionCreateDTO;
+import org.springblade.message.vo.SessionVO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -49,5 +51,15 @@ public interface IMessageClient {
 	 */
 	@PostMapping(API_PREFIX + "/message/send")
 	R<Boolean> send(@RequestBody MessageSendDTO dto);
+
+	/**
+	 * 创建会话（两人会话幂等复用：成员完全相同则直接返回既有会话）
+	 * <p>P3-4：建档后向直属主管发消息前需先取得会话ID（{@code MessageSendDTO.sessionId} 为事实必填）。</p>
+	 *
+	 * @param dto 会话成员（当前登录用户会自动补齐为成员之一）
+	 * @return 会话信息（含 id）
+	 */
+	@PostMapping(API_PREFIX + "/session/create")
+	R<SessionVO> createSession(@RequestBody SessionCreateDTO dto);
 
 }

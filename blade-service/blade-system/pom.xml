@@ -34,6 +34,16 @@
             <groupId>org.springblade</groupId>
             <artifactId>blade-starter-excel</artifactId>
         </dependency>
+        <!-- P3：状态流转审批 —— 通过 Feign 发起 Flowable 流程（契约 IWorkflowClient 位于该 api 模块） -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-workflow-api</artifactId>
+        </dependency>
+        <!-- P3-4：建档后向直属主管发送待办/欢迎消息 -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-message-api</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

@@ -31,6 +31,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Date;
+import java.util.Map;
 
 /**
  * 实体类（已集成商城会员字段）
@@ -65,6 +66,26 @@ public class User extends TenantEntity {
 	 * 密码
 	 */
 	private String password;
+	/**
+	 * 工号（对齐 ecology workcode；租户内唯一，可由编码规则自动生成）
+	 */
+	@Schema(description = "工号")
+	private String workCode;
+	/**
+	 * 人员状态（对齐 ecology hrmresource.status 经典枚举：0 试用 / 1 正式 / 2 临时 / 3 延期 / 4 解聘 / 5 退休；新建默认正式）
+	 */
+	@Schema(description = "人员状态:0试用 1正式 2临时 3延期 4解聘 5退休")
+	private Integer personStatus;
+	/**
+	 * 证件号（主账号范围业务唯一，应用层校验）
+	 */
+	@Schema(description = "证件号")
+	private String certificateNum;
+	/**
+	 * 密码盐值（预留，配合加盐算法惰性升级）
+	 */
+	@Schema(description = "密码盐值")
+	private String salt;
 	/**
 	 * 昵称
 	 */
@@ -218,5 +239,13 @@ public class User extends TenantEntity {
 	@Schema(description = "主题设置(JSON)")
 	@TableField("theme_setting")
 	private String themeSetting;
+
+	/**
+	 * 自定义字段值：fieldId -> value（P2，对齐 ecology cus_fielddata）
+	 * 非持久化列：保存时由 UserServiceImpl 写入 blade_user_ext_data，读取走 /user/ext-data。
+	 */
+	@Schema(description = "自定义字段值(fieldId->value,非持久化列)")
+	@TableField(exist = false)
+	private Map<Long, String> extData;
 
 }

@@ -51,6 +51,16 @@ public interface IDeptService extends IService<Dept> {
 	List<DeptVO> tree(String tenantId);
 
 	/**
+	 * 带数据权限的部门树（对齐 ecology DepartmentBrowser3 的 rightLevel SQL）
+	 * <p>超管返回全量；非超管仅返回「当前用户所在部门 + 其下属部门 + 祖先链」子树，
+	 * 供用户创建/编辑表单的部门选择器按可见范围裁剪。</p>
+	 *
+	 * @param tenantId 入参 tenantId（仅超管生效）
+	 * @return 裁剪后的部门树
+	 */
+	List<DeptVO> treeScope(String tenantId);
+
+	/**
 	 * 列表（含超管判定 + 当前租户隔离）
 	 *
 	 * @param dept 查询条件 Map
@@ -90,5 +100,22 @@ public interface IDeptService extends IService<Dept> {
 	 * @return 是否成功
 	 */
 	boolean remove(List<Long> ids);
+
+	/**
+	 * 封存组织（对齐 ecology CancelDepartmentCmd/CancelSubCompanyCmd）
+	 * <p>前置校验：子组织必须已全部封存；组织下无在职人员。封存≠删除，可解封。</p>
+	 *
+	 * @param ids 组织主键集合
+	 * @return 是否成功
+	 */
+	boolean cancel(List<Long> ids);
+
+	/**
+	 * 解封组织（对齐 ecology ISCanceledDepartmentCmd/ISCanceledSubCompanyCmd）
+	 *
+	 * @param ids 组织主键集合
+	 * @return 是否成功
+	 */
+	boolean isCanceled(List<Long> ids);
 
 }

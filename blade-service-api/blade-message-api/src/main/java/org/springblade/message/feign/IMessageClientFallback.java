@@ -17,6 +17,8 @@ package org.springblade.message.feign;
 
 import org.springblade.core.tool.api.R;
 import org.springblade.message.dto.MessageSendDTO;
+import org.springblade.message.dto.SessionCreateDTO;
+import org.springblade.message.vo.SessionVO;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,6 +31,11 @@ public class IMessageClientFallback implements IMessageClient {
 
 	@Override
 	public R<Boolean> send(MessageSendDTO dto) {
+		return R.fail("消息中心服务暂不可用");
+	}
+
+	@Override
+	public R<SessionVO> createSession(SessionCreateDTO dto) {
 		return R.fail("消息中心服务暂不可用");
 	}
 

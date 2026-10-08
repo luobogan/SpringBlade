@@ -26,7 +26,7 @@ public class EcologyDataSourceConfig {
 	//   ecology.url  = jdbc:sqlserver://127.0.0.1:1433;DatabaseName=ecology2020_demo
 	//   ecology.user = sa  /  ecology.password = 1
 	private static final String ECOLOGY_JDBC_URL =
-		"jdbc:sqlserver://127.0.0.1:1433;databaseName=ecology2020_demo;encrypt=false;trustServerCertificate=true";
+		"jdbc:sqlserver://192.168.1.5:1433;databaseName=ecology2020_demo;encrypt=false;trustServerCertificate=true";
 	private static final String ECOLOGY_USERNAME = "sa";
 	private static final String ECOLOGY_PASSWORD = "1";
 	private static final String ECOLOGY_DRIVER = "com.microsoft.sqlserver.jdbc.SQLServerDriver";

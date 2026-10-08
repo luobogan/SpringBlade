@@ -15,6 +15,7 @@
  */
 package org.springblade.system.excel;
 
+import cn.idev.excel.annotation.ExcelIgnore;
 import lombok.Data;
 
 import java.io.Serial;
@@ -33,6 +34,10 @@ public class UserExcel implements Serializable {
 	private String tenantId;
 
 	private String account;
+
+	private String workCode;
+
+	private Integer personStatus;
 
 	private String name;
 
@@ -55,5 +60,12 @@ public class UserExcel implements Serializable {
 	private String postName;
 
 	private String birthday;
+
+	/**
+	 * Excel 物理行号（1 基），由 {@link UserImportListener} 回填，仅用于导入逐行报错定位。
+	 * 不参与导入/导出列映射，故标记为 ExcelIgnore。
+	 */
+	@ExcelIgnore
+	private Integer rowNum;
 
 }

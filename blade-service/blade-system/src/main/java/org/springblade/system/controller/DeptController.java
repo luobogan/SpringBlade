@@ -86,6 +86,16 @@ public class DeptController extends BladeController {
 	}
 
 	/**
+	 * 带数据权限的部门树（对齐 ecology DepartmentBrowser3 rightLevel）
+	 * 超管返回全量；非超管仅返回当前用户可见部门子树，供用户创建/编辑表单的部门选择器裁剪。
+	 */
+	@GetMapping("/tree-scope")
+	@Operation(summary = "带数据权限的部门树", description = "非超管按当前用户可见部门范围裁剪")
+	public R<List<DeptVO>> treeScope(String tenantId) {
+		return R.data(deptService.treeScope(tenantId));
+	}
+
+	/**
 	 * 新增或修改
 	 */
 	@PostMapping("/submit")
@@ -103,6 +113,26 @@ public class DeptController extends BladeController {
 	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	public R remove(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
 		return R.status(deptService.remove(Func.toLongList(ids)));
+	}
+
+	/**
+	 * 封存组织（对齐 ecology canceled：前置校验「无在职人员、无未封存子组织」，可解封）
+	 */
+	@PostMapping("/cancel")
+	@Operation(summary = "封存组织", description = "传入ids")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R cancel(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
+		return R.status(deptService.cancel(Func.toLongList(ids)));
+	}
+
+	/**
+	 * 解封组织
+	 */
+	@PostMapping("/is-canceled")
+	@Operation(summary = "解封组织", description = "传入ids")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	public R isCanceled(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
+		return R.status(deptService.isCanceled(Func.toLongList(ids)));
 	}
 
 

@@ -68,6 +68,15 @@ public class UserWrapper extends BaseEntityWrapper<User, UserVO> {
 			String tenantName = tenantService.getTenantNameByTenantId(user.getTenantId());
 			userVO.setTenantName(tenantName);
 		}
+		// 直接上级姓名：-1/null 表示无直属主管（DB 默认 -1，对齐 ecology ManagerID）
+		Long managerId = user.getManagerId();
+		if (managerId != null && managerId > 0) {
+			User manager = userService.getById(managerId);
+			if (manager != null) {
+				userVO.setManagerName(
+					Func.isNotEmpty(manager.getRealName()) ? manager.getRealName() : manager.getName());
+			}
+		}
 		return userVO;
 	}
 

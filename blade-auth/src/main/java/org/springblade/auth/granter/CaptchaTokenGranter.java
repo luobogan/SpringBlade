@@ -16,6 +16,7 @@
 package org.springblade.auth.granter;
 
 import org.springblade.auth.enums.BladeUserEnum;
+import org.springblade.auth.utils.PersonStatusGuard;
 import org.springblade.auth.utils.TokenUtil;
 import org.springblade.common.cache.CacheNames;
 import org.springblade.core.log.exception.ServiceException;
@@ -26,13 +27,10 @@ import org.springblade.core.tool.utils.DigestUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.core.tool.utils.WebUtil;
+import org.springblade.system.feign.IParamClient;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
@@ -51,6 +49,7 @@ public class CaptchaTokenGranter implements ITokenGranter {
 	public static final String GRANT_TYPE = "captcha";
 
 	private IUserClient userClient;
+	private IParamClient paramClient;
 	private BladeRedis bladeRedis;
 
 	private BladeAuthProperties authProperties;
@@ -59,19 +58,16 @@ public class CaptchaTokenGranter implements ITokenGranter {
 	public UserInfo grant(TokenParameter tokenParameter) {
 		HttpServletRequest request = WebUtil.getRequest();
 
-		// 按租户读取「是否开启登录验证码」(captcha_mode)，关闭则该租户免验证码
+		// 按租户读取「是否开启登录验证码」(captcha_mode)，关闭则该租户免验证码。
+		// 经 Feign(IParamClient) 走 Nacos 服务发现调用 blade-system 公开接口 /param/public-value，
+		// 替代原 RestTemplate 写死 host:port 的 HTTP 自调用（网关/回环路径变化会导致 404）。
+		// 读取失败（fallback 返回 null 或抛异常）时保持要求验证码，即 fail-closed。
 		String tenantId = tokenParameter.getArgs().getStr("tenantId");
 		boolean captchaRequired = true;
 		try {
-			RestTemplate restTemplate = new RestTemplate();
-			String url = "http://localhost:81/blade-system/param/public-value?paramKey=captcha_mode&tenantId=" + tenantId;
-			String body = restTemplate.getForObject(url, String.class);
-			if (body != null) {
-				JsonNode node = new ObjectMapper().readTree(body);
-				String data = node.path("data").asText(null);
-				if ("false".equals(data)) {
-					captchaRequired = false;
-				}
+			R<String> result = paramClient.publicValue("captcha_mode", tenantId);
+			if (result != null && result.isSuccess() && "false".equals(result.getData())) {
+				captchaRequired = false;
 			}
 		} catch (Exception ex) {
 			log.warn("读取租户验证码开关失败，默认要求验证码: {}", tenantId, ex);
@@ -119,6 +115,8 @@ public class CaptchaTokenGranter implements ITokenGranter {
 			log.error("用户登录失败, 账号:{}, IP:{}", account, WebUtil.getIP());
 			throw new ServiceException(TokenUtil.USER_NOT_FOUND);
 		} else {
+			// P3-5 在职性校验：解聘(4) 拒绝登录（对齐 ecology ResourceComInfo 在职判定）
+			PersonStatusGuard.check(userInfo.getUser().getPersonStatus());
 			// 处理登录成功
 			TokenUtil.handleLoginSuccess(bladeRedis, tenantId, account);
 		}
