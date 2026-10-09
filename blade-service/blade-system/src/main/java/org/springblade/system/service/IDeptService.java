@@ -69,6 +69,16 @@ public interface IDeptService extends IService<Dept> {
 	List<DeptVO> selectList(Map<String, Object> dept);
 
 	/**
+	 * 获取组织子树 ID 集合（含自身与全部子孙，对齐 ecology ancestors 链推导）
+	 * <p>供用户列表按组织树节点（公司/分部/部门）过滤：用户 dept_id 为 CSV，
+	 * 命中子树内任一 ID 即返回。</p>
+	 *
+	 * @param deptId 组织树节点 ID（公司/分部/部门均可）
+	 * @return 子树 ID 集合；节点不存在返回空集合
+	 */
+	List<Long> getDeptChildIds(Long deptId);
+
+	/**
 	 * 获取部门ID
 	 *
 	 * @param tenantId  租户ID

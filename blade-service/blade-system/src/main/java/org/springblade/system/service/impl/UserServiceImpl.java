@@ -335,9 +335,27 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 
 	@Override
 	public IPage<UserVO> selectPage(Map<String, Object> user, Query query) {
+		// 组织树过滤（v1.5）：deptId 为组织树节点（公司/分部/部门），需先从通用参数中摘除——
+		// 否则 Condition 会生成 dept_id 等值匹配（dept_id 为 CSV 多部门，公司/分部节点不在其中，必然失配）
+		Object deptIdParam = user.remove("deptId");
 		QueryWrapper<User> queryWrapper = Condition.getQueryWrapper(user, User.class);
 		if (!SecureUtil.isAdministrator()) {
 			queryWrapper.lambda().eq(User::getTenantId, SecureUtil.getTenantId());
+		}
+		String deptId = Func.toStr(deptIdParam, null);
+		if (Func.isNotEmpty(deptId)) {
+			List<Long> deptIds = deptService.getDeptChildIds(Func.toLong(deptId, 0L));
+			if (deptIds.isEmpty()) {
+				// 节点不存在：返回空页而非全量
+				queryWrapper.lambda().apply("1 = 0");
+			} else {
+				// dept_id 为 CSV：命中子树内任一 ID 即返回（FIND_IN_SET 参数化，避免 LIKE 子串误配）
+				queryWrapper.lambda().and(w -> {
+					for (Long id : deptIds) {
+						w.or(inner -> inner.apply("FIND_IN_SET({0}, dept_id) > 0", String.valueOf(id)));
+					}
+				});
+			}
 		}
 		return UserWrapper.build().pageVO(page(Condition.getPage(query), queryWrapper));
 	}

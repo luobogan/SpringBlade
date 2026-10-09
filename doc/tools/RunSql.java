@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,15 +30,37 @@ public class RunSql {
 		try (Connection conn = DriverManager.getConnection(url, user, pwd); Statement st = conn.createStatement()) {
 			for (String s : stmts) {
 				try {
-					st.execute(s);
+					boolean hasRs = st.execute(s);
 					ok++;
-					System.out.println("OK   -> " + preview(s));
+					if (hasRs) {
+						printRs(st.getResultSet());
+					} else {
+						System.out.println("OK(" + st.getUpdateCount() + " rows) -> " + preview(s));
+					}
 				} catch (Exception e) {
 					System.out.println("FAIL -> " + preview(s) + "  [" + e.getMessage() + "]");
 				}
 			}
 		}
 		System.out.println("EXECUTED " + ok + "/" + stmts.size());
+	}
+
+	/** SELECT 结果集紧凑打印（最多 50 行，列以 | 分隔）。 */
+	private static void printRs(ResultSet rs) throws Exception {
+		ResultSetMetaData md = rs.getMetaData();
+		int n = md.getColumnCount();
+		StringBuilder head = new StringBuilder();
+		for (int i = 1; i <= n; i++) head.append(i == 1 ? "" : " | ").append(md.getColumnLabel(i));
+		System.out.println("RS  -> " + head);
+		int rows = 0;
+		while (rs.next() && rows < 50) {
+			StringBuilder row = new StringBuilder("     ");
+			for (int i = 1; i <= n; i++) row.append(i == 1 ? "" : " | ").append(rs.getString(i));
+			System.out.println(row);
+			rows++;
+		}
+		if (rows == 50) System.out.println("     ...(截断，最多显示 50 行)");
+		System.out.println("     [" + rows + " rows]");
 	}
 
 	private static String preview(String s) {

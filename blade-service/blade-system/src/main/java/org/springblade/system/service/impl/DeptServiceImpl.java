@@ -39,6 +39,8 @@ import org.springblade.system.wrapper.DeptWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -77,6 +79,37 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements ID
 			? Func.toStr(tenantId, SecureUtil.getTenantId())
 			: SecureUtil.getTenantId();
 		return ForestNodeMerger.merge(baseMapper.tree(resolvedTenantId));
+	}
+
+	@Override
+	public List<Long> getDeptChildIds(Long deptId) {
+		if (deptId == null || deptId <= 0) {
+			return new ArrayList<>();
+		}
+		// 组织表量级小，全量加载后内存 BFS 展开子树（无租户过滤：ID 全局唯一，跨租户无碰撞）
+		List<Dept> all = this.list();
+		Map<Long, List<Long>> childrenMap = new HashMap<>();
+		for (Dept d : all) {
+			childrenMap.computeIfAbsent(d.getParentId(), k -> new ArrayList<>()).add(d.getId());
+		}
+		List<Long> result = new ArrayList<>();
+		Set<Long> visited = new HashSet<>();
+		Queue<Long> queue = new LinkedList<>();
+		queue.offer(deptId);
+		visited.add(deptId);
+		while (!queue.isEmpty()) {
+			Long cur = queue.poll();
+			result.add(cur);
+			List<Long> children = childrenMap.get(cur);
+			if (children != null) {
+				for (Long child : children) {
+					if (visited.add(child)) {
+						queue.offer(child);
+					}
+				}
+			}
+		}
+		return result;
 	}
 
 	@Override

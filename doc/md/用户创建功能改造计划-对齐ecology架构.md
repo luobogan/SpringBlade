@@ -3,7 +3,8 @@
 > 目标页面：`http://192.168.1.4:8000/system/user`（用户管理 → 新增用户）
 > 参考项目：`D:\Weaver2020\ecology`（E9 部署版，前端 JSP/JS） + `E:\project\ecology\ecology\src`（E9 源码，weaver.* / com.engine.*）
 > 本项目：`E:\project\springbladeandreact\ant-design-pro`（前端） + `E:\project\springbladeandreact\SpringBlade`（后端）
-> 文档版本：v1.4（2026-10-08）
+> 文档版本：v1.5（2026-10-09）
+> v1.5 修订：新增 §15「组织架构四实体补全」——补齐文档此前缺失的**公司实体（hrmcompany）表结构**、四实体层级关系总览、组织管理前端交互链路（公司/分部/部门/人员浏览器）、配套表（分部/部门自定义字段 defined、岗位/职务类别/办公地点字典、虚拟组织 4 表）与 hrmresource 29 列全量比对缺失字段清单（assistantid/costcenterid/jobactivitydesc/dsporder/mobilecall/account），并给出迁移补充建议（岗位 hrmjobtitles→blade_post 等）；同批将可落项补入第 10 章（§10.1 范围行、§10.2 映射行、§10.3 步骤/幂等、§10.5 核对、§10.6 补迁注意），且**岗位补迁已执行核对通过**；§15.2 补「公司 vs 总部」辨析、§15.7 补集团多租户与统计权衡
 > v1.4 修订：① **新增 §14「P3 实施记录：状态流转工作流化 + 伴生初始化」**（5 步全量）；② 修订 §6 风险表在职判定口径，与 §5-P3-5 统一为「在职 `in (0,1,2,3,5)`，仅 4 解聘拒绝登录」（原表述含"退休"属文档内部矛盾，按裁定统一）
 > v1.3 修订：① 新增 §12「P0-8 收尾：Excel 导入导出与新字段对齐」（补齐导出 SQL 缺列 + 导入逐行容错报错到行）；② §11.2 回填 P1 接口级验证实测结果（6 项全过）；③ 新增 §13「P2 实施记录：字段配置驱动 + 自定义字段」
 > v1.1 修订（查漏）：① 修正 person_status 枚举口径（PmAction 0-8 为流程场景类型，非字段值），统一两处 DEFAULT=1；② 补「逻辑删除 × 唯一键」对策（删除时置空编号）；③ P1 补直接上级/头像上传步骤；④ P0 补 Excel 导入导出同步；⑤ P3 补离职状态登录联动；⑥ 预检接口补防枚举措施；⑦ 8.5 补部门→分部归属推导规则；⑧ 风险表 +3 行
@@ -12,7 +13,7 @@
 > 🆕 **本次补齐**：Excel 导入导出与 P0 新字段对齐（§12）——`exportUser` SQL 补 `work_code`/`person_status`、导入改为**逐行容错 + 行号级报错**（对齐 P0-8「重复工号报错到行」）。已编译通过，**待重打包重启后回归**。
 > 🆕 **P2 已实施（2026-10-08，§13）**：三张配置/扩展表已建（dev 库执行成功）、schema 接口 + 扩展表写入 + 前端配置驱动渲染已完成并编译通过（后端 EXIT=0、前端 tsc 无新增错误），**待重打包重启后联调**。
 > 🆕 **P3 已实施（2026-10-08，§14）**：状态流转配置表/记录表 + 信息完善度表已建（dev 库 5/5 成功）、审批发起与回调链路、伴生初始化、主管消息通知、在职性登录拦截（三个 Granter）已完成并编译通过（blade-system / blade-workflow / blade-auth 均 EXIT=0，前端 tsc 无新增错误），**已重打包重启并联调通过**（`doc/tools/verify-p3.cjs` 直连 8100/8106，11 项全过：建档→完善度4项、可用流转、降级直改、流转记录、在职可登录 → 解聘被拒「账号已停用」→ 恢复可登录）。
-> **待办**：① Ecology 数据迁移（第 10 章，用户选择暂缓）；② 审批闭环端到端验证（需先启动 Nacos + blade-workflow 并部署 §14.5 的 BPMN）。
+> **待办**：① ~~Ecology 数据迁移（第 10 章，用户选择暂缓）~~ **已执行（2026-10-08，见 §10.6）**；② 审批闭环端到端验证（需先启动 Nacos + blade-workflow 并部署 §14.5 的 BPMN）。
 > ⚠️ **环境提示**：Nacos（8848）、网关（81）、blade-auth（8100）、blade-system（8106）当前均在线；运行中的 jar 位于 `D:\project\springbladeandreact\SpringBlade\{模块}\target\*.jar`（JDK `D:\project\weaver\jdk\bin\java.exe`）。P3 改动已从 D: 工作副本 `mvn package -DskipTests` 重打包并重启 blade-auth/blade-system 生效（2026-10-08）；验证脚本 `verify-p3.cjs` 仍按**直连 8100/8106** 编写，与网关/Nacos 无关，可独立运行。
 
 ---
@@ -254,6 +255,11 @@
 - `D:\Weaver2020\ecology\hrm\resource\EditHrmCustomField.jsp`（字段配置维护）
 - `D:\Weaver2020\ecology\hrm\company\DepartmentBrowser3.jsp`、`D:\Weaver2020\ecology\hrm\jobtitles\JobTitlesBrowser.jsp`
 
+**组织管理前端（v1.5 补，§15.3）**
+- `D:\Weaver2020\ecology\hrm\company\HrmCompanyEdit.jsp`（公司编辑，单条记录）/ `HrmSubCompanyAdd.jsp` / `HrmSubCompanyEdit.jsp`（分部）
+- `D:\Weaver2020\ecology\hrm\company\HrmDepartmentAdd.jsp` / `HrmDepartmentEdit.jsp`（部门）/ `HrmCompany_left.jsp`（左侧组织树 → `/hrm/tree/HrmCompany_XML.jsp`）
+- `D:\Weaver2020\ecology\org\OrgChartHRM.jsp`、`D:\Weaver2020\ecology\hrm\company\HrmDepartLayoutAjax.jsp`（组织架构图与异步 JSON）
+
 **Ecology 源码（只读参考）**
 - `E:\project\ecology\ecology\src\com\api\hrm\web\HrmResourceAddAction.java`
 - `E:\project\ecology\ecology\src\com\api\hrm\service\HrmResourceAddService.java`（save L809 / saveSimple L604）
@@ -263,6 +269,13 @@
 - `E:\project\ecology\ecology\src\com\weaver\procedure\hrmresourcebasicinfo\Hrmresourcebasicinfo_insert.java`（主表列清单权威来源）
 - `E:\project\ecology\ecology\src\com\engine\hrm\util\CodeRuleManager.java`（工号编码规则）
 - `E:\project\ecology\ecology\src\weaver\general\PasswordUtil.java`（SM3 加盐）
+
+**组织实体后端（v1.5 补，§15）**
+- `E:\project\ecology\ecology\src\weaver\hrm\company\CompanyComInfo.java`（hrmcompany 缓存与列证据）
+- `E:\project\ecology\ecology\src\com\engine\hrm\cmd\organization\EditCompanyCmd.java` / `GetCompanyFormFieldCmd.java`（公司仅 3 业务列）
+- `E:\project\ecology\ecology\src\com\engine\hrm\cmd\organization\AddSubCompanyCmd.java`（companyid=1 硬编码：L79）/ `EditDepartmentCmd.java`（部门→分部级联：L189-204）
+- `E:\project\ecology\ecology\src\com\engine\hrm\util\HrmOrganizationUtil.java`（双树 10 级上限：L77-94 / L96-111）
+- `E:\project\ecology\ecology\src\weaver\hrm\definedfield\HrmDeptFieldManagerE9.java`（分部/部门自定义字段动态加列：L302-305）
 
 **SpringBlade 改造涉及**
 - 前端：`ant-design-pro/src/pages/System/User/UserAdd.tsx`、`UserEdit.tsx`、`UserView.tsx`、`User.tsx`；`src/services/system/user.ts`；`src/utils/sm2.ts`
@@ -441,6 +454,8 @@ ALTER TABLE blade_dept
 | `mobile_show_type` | tinyint | `mobileshowtype` | 手机号对外展示方式 | 隐私控制，可选 |
 | `work_start_date` | date | 入职相关（Ecology 由工作流日期字段承载） | 入职日期 | 状态机（转正/工龄）依赖，建议 P3 随状态流转一并加 |
 
+> 🔎 v1.5 查漏：以 `Hrmresourcebasicinfo_insert.java:19` 的 29 列逐字比对后，上表与 §9.4 之外另有 6 列此前未覆盖（`assistantid` 助理 / `costcenterid` 成本中心 / `jobactivitydesc` 职务描述 / `dsporder` 显示顺序 / `mobilecall` 备用手机 / `account` 系统账号列），字段级证据与处置建议统一见 §15.5。
+
 ## 9.4 明确不迁移的 Ecology 字段（及理由）
 
 | Ecology 字段 | 不迁移理由 |
@@ -473,10 +488,18 @@ ALTER TABLE blade_dept
 | `hrmsubcompany`（分部） | `blade_dept`（`dept_type=1`） | `dst_id = 1_000_000_000 + src_id` | `supsubcomid=0 → parent_id=0` |
 | `hrmdepartment`（部门） | `blade_dept`（`dept_type=2`） | `dst_id = 2_000_000_000 + src_id` | 顶级部门（`supdepid=0`）挂到其分部节点下；其余挂 `2e9+supdepid`；`subcompany_id = 1e9+subcompanyid1` |
 | `hrmresource`（人员） | `blade_user` | **保留源 id 原值**（小整数，与雪花 ID 无冲突；`manager_id` 引用天然自洽） | 租户统一 `'000000'` |
+| `hrmjobtitles`（岗位，v1.5 补） | `blade_post` | `dst_id = 3_000_000_000 + src_id` | **先于人员迁移**（人员 `post_id` 依赖）；`jobtitlename → post_name`、`jobtitlecode → post_code`（空取 `jobtitlemark`，再空生成 `JT+src_id`；实测该列 varchar(12)，超长/重复回退 `JT+src_id`）、`jobtitleremark → remark`、`canceled='1' → status=0`、`tenant_id='000000'`、`category=1`（BladeX 默认分类，按现场字典可调）；`jobdepartmentid` 无对应维度不迁移（§15.6-7） |
+| `hrmcompany`（公司，单行，v1.5 补） | `blade_tenant` | —（**不 INSERT 新行**） | 仅可选同步：`UPDATE blade_tenant SET tenant_name = <companyname>`（§15.2 映射：companyname→tenant_name、companyweb→domain）；`hrmjobcall`/`hrmlocations` 两字典暂不迁移，人员对应列置 NULL（§15.6-3）；虚拟组织 4 表不迁移（§15.6-6） |
 
-偏移量常量（`1e9` / `2e9`）远离雪花 ID 量级（~1e18）与既有业务数据，且分部/部门分命名空间避免主键互撞。
+偏移量常量（`1e9` / `2e9` / `3e9`）远离雪花 ID 量级（~1e18）与既有业务数据，且分部/部门/岗位分命名空间避免主键互撞。
 
 ## 10.2 字段映射与转换规则
+
+> 🔁 **名称归一化规则（维森 → 鼎泰）**：迁移时，分部节点与部门节点的**名称类文本字段**（`dept_name` 简称 / `full_name` 全称）中出现的「维森」二字一律替换为「鼎泰」（`name.replace("维森","鼎泰")`）后再写入 blade。要点：
+> - **适用范围仅限分部/部门**（`dept_type=1/2` 的 `blade_dept` 节点）；**不**对人员（`blade_user`）姓名做此替换——人员姓名不含公司名，按 §10.2 人员映射原值保留（loginid/real_name/work_code 等不受影响）。
+> - 替换须在生成 `pinyin`（§8.5 由 `dept_name+full_name` 生成）**之前**完成，否则拼音仍按「维森」生成，与新名不一致。
+> - 替换后可能产生**同名冲突**（同父下两个「维森研发部」→ 均变「鼎泰研发部」，违反 §8.5 同父唯一约束）。迁移工具需对替换结果做去重/后缀处理（如「鼎泰研发部(2)」），并在迁移报告记录此类调整。
+> - `dept_code`/`subcompany_id` 等编号与外键不受影响，仅名称文本替换。
 
 **分部 → blade_dept**：
 
@@ -504,6 +527,7 @@ ALTER TABLE blade_dept
 | status | person_status | 经典枚举直拷（0试用/1正式/2临时/3延期/4解聘/5退休） |
 | certificatenum | certificate_num | 直拷；空忽略 |
 | departmentid | dept_id | `2e9 + departmentid`（单值；Blade CSV 语义下即"主部门"） |
+| jobtitle | post_id | `3e9 + jobtitle`（依赖岗位先行迁移）；岗位不存在或 `canceled='1'` → NULL + 迁移日志；`jobcall`/`locationid` 暂不迁移，对应列置 NULL（§15.6-3） |
 | managerid | manager_id | `→ blade_user.id`（本批映射后自洽；找不到映射则 NULL） |
 | mobile / email / sex / birthday | phone / email / sex / birthday | birthday 取日期部分；sex NULL→0 |
 | password | password | **不可迁移**（Ecology 哈希算法/盐未知）：统一取 admin 当前密码哈希（`SELECT password FROM blade_user WHERE account='admin' LIMIT 1`），迁移完成后由管理员重置；此决策写入迁移报告 |
@@ -518,10 +542,10 @@ ALTER TABLE blade_dept
 - **执行步骤**：
   1. `--dry-run` 仅打印统计不写库；
   2. 幂等 DDL：查 `information_schema.columns`，逐列补齐 §5-P0 与 §8.5 的 `blade_user`/`blade_dept` 追加列与索引（已存在则跳过）——即使改造 SQL 未手工执行也能自愈；
-  3. 迁移分部 → 部门 → 人员（顺序保证父节点先落库）；
+  3. 迁移分部 → 部门 → 岗位 → 人员（顺序保证父节点与被引用字典先落库）；
   4. 二次遍历计算 `ancestors`；
   5. 输出迁移报告：各表 insert/update/skip 计数 + 跳过明细（重复 loginid/workcode/缺失引用）。
-- **幂等**：`blade_dept`/`blade_user` 均带 `ecology_id bigint NULL` 追溯列（DDL 随步骤 2 创建）+ `ON DUPLICATE KEY UPDATE`；重跑=覆盖刷新，不会重复插入。
+- **幂等**：`blade_dept`/`blade_user`/`blade_post` 均带 `ecology_id bigint NULL` 追溯列（DDL 随步骤 2 创建）+ `ON DUPLICATE KEY UPDATE`；重跑=覆盖刷新，不会重复插入。
 - **回滚**：迁移前 `mysqldump` 备份 `blade_user`/`blade_dept` 两表；回滚 = 还原备份 + 可选 `DELETE WHERE ecology_id IS NOT NULL`。
 
 ## 10.4 执行前置检查清单（改造完成后逐项打勾）
@@ -538,12 +562,41 @@ ALTER TABLE blade_dept
 
 | 验证项 | 方式 |
 |---|---|
-| 计数核对 | 源 `select count(*) from hrmsubcompany/hrmdepartment/hrmresource` vs 目标 `select count(*) from blade_dept where ecology_id is not null`（分部/部门分开数）/ `blade_user where ecology_id is not null` |
+| 计数核对 | 源 `select count(*) from hrmsubcompany/hrmdepartment/hrmjobtitles/hrmresource` vs 目标 `select count(*) from blade_dept where ecology_id is not null`（分部/部门分开数）/ `blade_post where ecology_id is not null` / `blade_user where ecology_id is not null` |
 | 树完整性 | 抽查 3 个分部+部门：`parent_id`、`ancestors`、`subcompany_id` 链正确；无孤儿节点（parent 指向不存在的 id） |
 | 用户抽测 | 任取 3 个迁移用户：真实登录（重置后密码）、`/user/info` 回读 work_code/person_status/dept_id、消息中心 StaffRoster 可见 |
 | 组织页抽测 | `/system` 部门树分部/部门分层渲染；封存节点不可选（`canceled=1`） |
 | 幂等抽测 | 重跑迁移程序：计数不变、无重复行 |
 | 既有数据回归 | admin 等既有用户（`ecology_id IS NULL`）不受影响；登录/工作流/消息中心回归 §7 清单 |
+
+## 10.6 执行记录（2026-10-08）
+
+> 工具：`doc/tools/EcologyOrgMigration.java`（单文件 JDBC，JDK 21 源码模式；内置 §10.2「维森→鼎泰」替换 + 同名冲突后缀处理 + 自愈 DDL + `--dry-run` + 幂等 `ON DUPLICATE KEY UPDATE`）；`doc/tools/VerifyMigration.java` 用于回读核对。
+> 连接：E9 `jdbc:sqlserver://192.168.1.5:1433;databaseName=ecology2020_demo`（sa/1，本机 TCP 1433 可达）；blade `jdbc:mysql://localhost:3306/blade`（root/123456）。
+
+**执行步骤与结果**：
+1. `--dry-run` 只读预演：分部 13 / 部门 43 / 人员 506，无重复账号/工号跳过项。
+2. 执行前自动备份：`blade_user_bak_20261008` / `blade_dept_bak_20261008`（纯 SQL `CREATE TABLE ... LIKE` + `INSERT SELECT`）。
+3. 自愈 DDL：补齐 `ecology_id` 追溯列（其余 §5-P0/§8.5 列此前已落库，跳过）。
+4. 写入：分部 13、部门 43、人员 506，全部插入（幂等键为显式 id，重跑可覆盖）。
+5. 二次遍历计算 `ancestors`（迁移节点 `ecology_id IS NOT NULL` 全部非空）。
+
+**名称归一化核对（§10.2）**：
+- 分部/部门名称含「维森」残留数 = **0** ✅
+- 分部/部门名称含「鼎泰」数 = **11** ✅（抽样如 `鼎泰科技股份有限责任公司` 等）
+- 人员姓名未做替换（按规则仅分部/部门），抽样人员 `real_name` 仍为 E9 原值 ✅
+
+**抽样回读**：迁移人员 `dept_id`（`2e9+departmentid` 单值 CSV）、`manager_id`（直取 E9 id）、`person_status`（原值）、`work_code`（原值）均正确；`ecology_id` 已标记，可追溯与幂等重跑。
+
+**遗留/注意**：
+- `pinyin` 字段本工具未生成（§8.5 由 blade 侧组织保存时维护），如需拼音检索可在 blade 侧触发一次组织保存或后续补生成；
+- 迁移后建议在前端 `/system`（部门树分部/部门分层、封存节点）与 `/system/user` 做一次人工抽测（§10.5 树完整性/用户抽测）；
+- 密码统一取 admin 当前哈希（E9 哈希算法未知，按 §10.2 决策），迁移用户首次登录需管理员重置。
+- **v1.5 查漏补迁（已执行 2026-10-09）**：工具新增岗位迁移（`hrmjobtitles → blade_post`，先岗位后人员；`post_code` 取 jobtitlecode→jobtitlemark→`JT+id` 回退、截断 12、租户内重复回退、重跑自豁免；`canceled='1'→status=0` 且不进入人员映射）与人员 `post_id` 回填（缺失/封存 → NULL+日志）。
+  **执行结果**（`VerifyMigration` 核对）：岗位插入 **57**（blade_post 总 77，含 20 条原生）；人员 506 行中 **`post_id` 已回填 180**、326 行无有效岗位映射保持 NULL（含 1 行 ecology id=123 账号 `zj` 与 blade 原生账号冲突被跳过，沿用首轮预检行为）；`id<>ecology_id`=0 无重复插入；使用人数 Top：客户经理 69、Default 12、总经理 12。
+  **过程中发现并修复两处重跑自碰撞缺陷**：① 账号/工号预检未豁免本行（已改为按 `ecology_id` 归属判断，否则已迁移行被误判「账号重复跳过」/「工号重复置NULL」）；② 组织同名去重未豁免本行（曾把 56 个组织名误加 " (2)" 后缀，修复重跑后自愈，核对 **(2) 后缀=0**、维森残留=0、ancestors 无 NULL）。另 JDBC 连接串补 `useAffectedRows=true` 修正 upsert 计数语义（默认 FOUND_ROWS 下「命中未变化」也返回 1，报告曾误计为插入）。备份：`blade_{user,dept,post}_bak_20261009`。`jobcall`/`locationid` 置 NULL 与公司名可选同步（`UPDATE blade_tenant SET tenant_name=<companyname>`）未执行，按需另行处理。
+- **集团树 regroup + 公司档案同步（已执行 2026-10-09，`doc/sql/regroup_group_tree.sql`）**：① `blade_tenant.tenant_name`：E9 `hrmcompany.companyname='维森集团'` → 按 §10.2 归一化写入 **`'鼎泰集团'`**（仅租户 000000，其他 9 个演示租户未动；companyweb 为空，domain 不改）；② 组织树：9 家根级分公司（ecology_id 6,7,8,9,10,11,12,13,17）挂到「鼎泰集团股份有限公司」(1000000005) 下，递归 CTE 重算集团子树全部 56 节点 ancestors（如滨江项目管理部 → `0,1000000005,1000000008`），核对 **orphan=0**、原生节点（P0测试分部）未动；③ 迁移工具同步新增 `--regroup-under-group` 开关（重跑迁移时须带此参，否则 parent_id 被 E9 源数据还原为平铺）。
+| 名称归一化 | 抽查 ≥5 个原含「维森」的分部/部门节点：`dept_name`/`full_name` 中**无「维森」、含「鼎泰」**；`pinyin` 字段按新名生成；人员姓名不受此替换影响 |
 
 ---
 
@@ -766,4 +819,160 @@ POST /api/blade-workflow/definition/{id}/deploy
 >
 > ⏳ **审批闭环端到端待验证**：需先启动 blade-workflow（当前未运行），并部署 §14.5 的 BPMN（`person_status_change`）；届时 `1->4` 这类「审批」流转会真实走 Flowable，经 `WfBizCallbackListener` 回调 blade-system 更新 `person_status`。本轮已验证「降级直改」路径与登录拦截，BPMN 审批路径待 workflow 服务上线后补验。
 > ⚠️ 已知限制：驳回在本流程中是退回发起节点重新提交，不会产生「驳回」终态记录；如需记录驳回需另接 `PROCESS_CANCELLED`。
+
+---
+
+# 15. 追加分析：组织架构四实体补全——公司/分部/部门/人员（对齐 ecology）
+
+> 缘起：§8 只还原了分部（hrmsubcompany）/部门（hrmdepartment）两张表，§9 只对齐了人员（hrmresource），**公司实体（hrmcompany）此前全文缺失**，四实体层级关系、组织管理前后端链路与配套表未成体系。本章基于前端部署版（`D:\Weaver2020\ecology`）与后端源码（`E:\project\ecology\ecology\src`）双向勘察补全，并汇总「缺失表/字段清单 + 行动项」。
+
+## 15.1 四实体定义与层级关系
+
+| 实体 | ecology 表 | 定位 | 树/引用结构 |
+|---|---|---|---|
+| 公司 | `hrmcompany` | **单行参数表**（id 恒=1），承载组织树的全局根 | 全库无 Insert/Delete 垫片；分部经 `companyid` 挂到它 |
+| 分部 | `hrmsubcompany` | 子公司/分支机构（§8.1 已还原） | `supsubcomid` 自引用树，≤10 级 |
+| 部门 | `hrmdepartment` | 部门（§8.2 已还原） | `supdepid` 自引用树 + `allsupdepid` 冗余链，≤10 级；冗余 `subcompanyid1` 挂分部 |
+| 人员 | `hrmresource` | 人员主表（§9 已还原 29 列） | `departmentid` + `subcompanyid1` 双冗余；`managerid` 自引用（直接上级） |
+
+```
+hrmcompany(id=1)
+   ↑ companyid（AddSubCompanyCmd.java:79、EditSubCompanyCmd.java:80 均硬编码 =1）
+hrmsubcompany ──supsubcomid 自树──（分部树，§8.1）
+   ↑ subcompanyid1（部门冗余外键；调整上级时级联刷新整棵子树，EditDepartmentCmd.java:189-204）
+hrmdepartment ──supdepid 自树 + allsupdepid──（部门树，§8.2）
+   ↑ departmentid（创建时由 DepartmentComInfo.getSubcompanyid1(部门) 反查同写 subcompanyid1，AddResourceBaseCmd.java:137）
+hrmresource（managerid 直接上级；assistantid 助理）
+```
+
+**四条关键语义**（决定改造口径）：
+1. **公司不是树节点**：`hrmcompany` 是单行表，仅 3 个业务列可编辑（§15.2）；「集团/多级公司」由**分部树自身层级**表达，分部级数据权限（`CheckSubCompanyRight`）依赖人员表上的 `subcompanyid1` 冗余。全库未发现 `iscompany` 之类「集团标记」列（推断：多公司场景靠分部层级 + 虚拟组织表达）。
+2. **双树 + 三处冗余**：分部、部门各自成树（互不为父子）；部门→分部靠冗余外键 `subcompanyid1`；人员→分部/部门双冗余。Blade 已按 §8.5 用「单树 + dept_type=1/2 + subcompany_id 冗余列」等价承载。
+3. **人员创建链路里分部不可选**：`HrmResourceAdd.jsp` 没有分部选择框，`subcompanyid1` 一律由所选部门反查（§15.3），与 §8.5 规则 2「用户分部 = 主部门 `subcompany_id`」完全互证。
+4. **虚拟组织是平行维度**（不改变行政树）：`hrmcompanyvirtual/hrmsubcompanyvirtual/hrmdepartmentvirtual/HrmresourceVirtual` 四表，虚拟节点 id 为负数（§15.4.3）。
+
+**与 SpringBlade 现状对应**：公司 → `blade_tenant`（租户记录）；分部+部门 → `blade_dept` 单树（`dept_type=1/2`，§8.5 字段已落库、`Dept.java` 实体已含）；人员 → `blade_user`（§9）。
+
+## 15.2 公司实体 hrmcompany（补 §8 缺失）
+
+| 字段 | 推断类型 | 语义 | 证据（ecology 源码） |
+|---|---|---|---|
+| id | int PK | 恒为 1（单行） | `weaver\hrm\company\CompanyComInfo.java:13,20`（TABLE_NAME="hrmcompany"、PK="id"）；`com\engine\hrm\cmd\organization\GetCompanyFormFieldCmd.java:51-54`（`HrmCompany_Select` 后一次 `rs.next()` 取完） |
+| companyname | varchar | 公司**全称**（唯一缓存列） | `CompanyComInfo.java:22-23`；`com\weaver\procedure\hrmcompany\Hrmcompany_update.java:18` |
+| companydesc | varchar | 公司**简称** | `Hrmcompany_update.java:18`；`GetCompanyFormFieldCmd.java:71-78` |
+| companyweb | varchar | 公司网站（选填） | `Hrmcompany_update.java:18`；`GetCompanyFormFieldCmd.java:81-87` |
+| lastinittime | datetime | 组织数据 REST 初始化时间 | `com\api\hrm\util\ServiceUtil.java:143-145,206-207` |
+
+**读写链路**：前端 `HrmCompanyEdit.jsp`（L61 `action="CompanyOperation.jsp"`，仅 companyname/companydesc/companyweb 三字段，**无新增页**）→ `EditCompanyCmd.java:60-67` 组装 `id|companyname|companydesc|companyweb` → 存储过程 `HrmCompany_Update`。**无新增/删除公司接口**（全库 0 命中 `HrmCompany_Insert/Delete`；`weaver\system\License.java:114` 的 `update HrmCompany set companyname=...` 不带 WHERE，佐证单行表）。**无公司级自定义字段 defined 表**（`GetCompanyFormFieldCmd` 仅 3 字段，无 defined_datatable 逻辑）。
+
+**映射建议（不新建表）**：公司 → **`blade_tenant` 租户记录**：`companyname`→`tenant_name`、`companydesc`→租户备注、`companyweb`→`domain`（Tenant 实体已有 `tenantName/domain/linkman/contactNumber/address`，语义对位）。第 10 章迁移**不迁 hrmcompany**；可选动作：迁移时 `UPDATE blade_tenant SET tenant_name = <ecology companyname>` 一次。**（已执行 2026-10-09：E9 现值 `维森集团` → 按 §10.2 归一化写入 `tenant_name='鼎泰集团'`，见 §10.6 与 `doc/sql/regroup_group_tree.sql`。）**
+
+**「公司 vs 总部」辨析（防实施误解）**：
+1. **公司 → `blade_tenant` 成立**：E9 的 `hrmcompany` 本质是单行公司档案（不入组织树、无增删），租户记录一行即一家公司，`hrmsubcompany.companyid=1` 的「挂靠公司」由 `tenant_id='000000'` 隐式承担，**不需要显式外键**。
+2. **总部 → 不用 `blade_tenant`，用 `blade_dept` 分部节点**（`dept_type=1`）：E9 里「总部」本就不是独立实体（现场若有名为"总部"的节点，实际是 `hrmsubcompany` 里的一个分部）。**2026-10-09 已执行集团树 regroup**：9 家根级分公司挂到真实的「鼎泰集团股份有限公司」节点（id=1000000005, ecology_id=5）下（非虚拟根），嵌套分部/部门 ancestors 随链递归重算，孤儿=0（SQL 见 `doc/sql/regroup_group_tree.sql`；重跑迁移工具须带 `--regroup-under-group`，否则还原平铺）。
+3. **禁止混用**：不得把 `blade_tenant.id`（雪花）当组织树 `parent_id` 使用——组织树外键只指向 `blade_dept`；租户隔离（`TenantGuard`/`tenant_id` 过滤）与组织树遍历是两套体系，混用会互相污染。
+4. **集团若考虑拆多租户**：统计代价与旁路方案见 §15.7（结论：统计优先则维持单租户 + 组织树）。
+
+## 15.3 组织管理前端交互链路（补 §2.1 组织侧空白）
+
+| 实体 | 前端页面 → 提交端点 | 后端命令链 | 关键交互 |
+|---|---|---|---|
+| 公司 | `hrm\company\HrmCompanyEdit.jsp` → `CompanyOperation.jsp` | `HrmCompany_Update` | 单条记录编辑；组织树根 |
+| 分部 | `hrm\company\HrmSubCompanyAdd.jsp`（L101 `action="SubCompanyOperation.jsp"`，隐藏 `companyid=1`）→ `SubCompanyOperation.jsp` | `AddSubCompanyCmd`（companyid=1 硬编码：79；`limitUsers` 由 license 控制：121-124；10 级校验） | 提交前两个 ajax 许可校验 `getSubcompanyLimitUsers`/`getLnScCount`（JSP:188,208）；动态字段由 `HrmDeptFieldManager(4)` 渲染（scope=4） |
+| 部门 | `hrm\company\HrmDepartmentAdd.jsp`（L100 `action="DepartmentOperation.jsp"`，隐藏 `subcompanyid1old`）→ `DepartmentOperation.jsp` | `AddDepartmentCmd` / `EditDepartmentCmd`（调整上级级联刷新子树与人员：189-204） | 动态字段 `HrmDeptFieldManager(5)`（scope=5）；上级部门用 `brow:browser`（JSP:166-171） |
+| 组织树/架构图 | `hrm\company\HrmCompany_left.jsp`（L143 → `/hrm/tree/HrmCompany_XML.jsp`）；`org\OrgChartHRM.jsp` + `hrm\company\HrmDepartLayoutAjax.jsp`（type=subcompany/dept 异步 JSON） | `OrgChartManager` 等 Bean | 树节点点击跳 `HrmTab.jsp?_fromURL=HrmSubCompanyDsp/HrmDepartmentDsp` |
+
+**人员创建页（`hrm\resource\HrmResourceAdd.jsp`）的组织选择器交互**：
+- **部门**：`brow:browser`（L310-316）弹 `DepartmentBrowser2.jsp?sqlwhere=<按 rightStr=HrmResourceAdd:Add 生成的权限 SQL>`，回填 `data.id → departmentid`；**换部门级联清空岗位**（L790-795、812-825）。另有输入联想 `completeUrl="/data.jsp?type=4..."`。
+- **岗位**：按部门过滤——`getCompleteUrl()` → `/data.jsp?type=hrmjobtitles&whereClause= jobdepartmentid=<部门id>`（L828-836）。即 **ecology 岗位挂部门（hrmjobtitles.jobdepartmentid）**；而 SpringBlade 的 `blade_post` 是全局表、无部门维度——记录为差异（§15.6-6）。
+- **分部**：**无独立选择框**，`subcompanyid1` 由 URL 带入或按所选部门反查 `DepartmentComInfo.getSubcompanyid1`（L135-139）。
+- 其他 browser 字段：`jobcall`（JobCallBrowser）、`locationid`（LocationBrowser）、`managerid`/`assistantid`（ResourceBrowser）、`costcenterid`（CostcenterBrowser）。
+- `CusFormSetting` 配置驱动路由在本模块 **0 命中**（组织/人员页均为传统 JSP 直写 + `brow:browser` 标签）——P2 的 schema 驱动设计只需覆盖人员表单，无需向组织页扩展。
+
+**Blade 侧对齐点**：① `dept/tree-scope` 权限裁剪（P1 已做）≡ `DepartmentBrowser` 的 `sqlwhere` 权限裁剪；② 部门树须过滤 `canceled=1`（§8.5 已定）；③ 「换部门清岗位/岗位按部门过滤」在 blade 中暂不可行（blade_post 无部门维度），列入 §15.6 可选项。
+
+## 15.4 配套表补全（此前未覆盖）
+
+### 15.4.1 分部/部门自定义字段（defined 宽表）
+
+- `hrmsubcompanydefined`（关联键 `subcomid`）、`hrmdepartmentdefined`（关联键 `deptid`）：**1:1 宽表**模型——自定义字段注册在 `hrm_formfield`（scope：分部=4、部门=5），实际列是**动态 ALTER TABLE 加列**（`weaver\hrm\definedfield\HrmDeptFieldManagerE9.java:302-305` 加列、353-355 删列），保存时先插 `(base_definedid)` 占位行再 update（L427,474）。
+- 与本项目 P2 的 `blade_user_ext_data`（EAV 行式）模式不同。若组织需要自定义字段，建议沿用 P2 模式新建 `blade_dept_ext_data(dept_id, field_id, field_value)`（UK(tenant_id,dept_id,field_id)），**不仿宽表加列**。列为可选项，暂不建设。
+
+### 15.4.2 三个字典/浏览器表（人员创建表单直接依赖）
+
+| 表 | 关键列（缓存类/写入垫片证据） | ecology 侧证据 | blade 对应 |
+|---|---|---|---|
+| `hrmjobtitles`（岗位） | id, jobtitlename, jobtitlemark, jobtitlecode, jobactivityid, **jobdepartmentid（挂部门）**, jobresponsibility, jobcompetency, jobtitleremark, jobdoc, canceled | `weaver\hrm\job\JobTitlesComInfo.java:19,26-45`；`com\weaver\procedure\hrmjobtitles\Hrmjobtitles_insert.java:28,35` | `blade_post`（已有；**无部门维度**，差异记录） |
+| `hrmjobcall`（职务类别） | id, name, description | `weaver\hrm\job\JobCallComInfo.java:16,22-26`；`Hrmjobcall_insert.java:18` | 建议 `blade_dict`（jobcall 字典类型），§9.3 `job_call` 可指向它 |
+| `hrmlocations`（办公地点） | id, locationname, locationdesc, address1, address2, locationcity, postcode, countryid, telephone, fax, showOrder | `weaver\hrm\location\LocationComInfo.java:15,22-31`；`Hrmlocations_insert.java:27,33` | 建议 `blade_dict`（location 字典类型）或独立表 |
+
+### 15.4.3 虚拟组织（平行维度，明确不迁移/暂不建设）
+
+- 四表：`hrmcompanyvirtual` / `hrmsubcompanyvirtual` / `hrmdepartmentvirtual` / `HrmresourceVirtual`（列：`id, resourceid, subcompanyid, departmentid, managerid, managerstr`，`weaver\hrm\companyvirtual\ResourceVirtualComInfo.java:19,62-69`）。**虚拟节点 id 为负数**（L370,396 `startsWith("-")`），行政维度 virtualtype=1。
+- 人员创建时的伴生写入即 `insert into HrmResourceVirtual(id,resourceid,subcompanyid,departmentid)`（§2.2 已列 `HrmResourceBaseService.java:2524-2526`）。
+- 决策：不迁移、暂不建设；如未来需要矩阵式/项目制组织，再设计 blade 侧维度表（对齐「行政树 + 虚拟维度」思想），记录差异即可。
+
+## 15.5 hrmresource 29 列全量比对（对 §9 的查漏）
+
+权威列清单（`Hrmresourcebasicinfo_insert.java:19` 逐字，29 列）：
+
+```
+id, workcode, lastname, sex, resourceimageid, departmentid, costcenterid, jobtitle,
+joblevel, jobactivitydesc, managerid, assistantid, status, locationid, workroom,
+telephone, mobile, mobilecall, fax, jobcall, seclevel, subcompanyid1, managerstr,
+dsporder, accounttype, belongto, systemlanguage, email, mobileshowtype
+```
+
+比对结论（§9.1 已对齐、§9.3/§9.4 已列处置的不重复）：
+
+| 此前缺失的列 | 语义 | 写入证据 | 处置建议 |
+|---|---|---|---|
+| `assistantid` | 助理 | `AddResourceBaseCmd.java:72`（创建）、`Hrmresourcebasicinfo_update.java:20`（编辑） | `blade_user.assistant_id` bigint（P2 按需） |
+| `costcenterid` | 成本中心 | 同上（INSERT 列 7） | `cost_center_id`（财务/费用分摊对接时再加） |
+| `jobactivitydesc` | 职务描述 | INSERT 列 10 | varchar，按需 |
+| `dsporder` | 列表显示顺序（缺省=人员 id，`AddResourceBaseCmd.java:83,129`） | INSERT 列 24（参数错位映射 params[26]） | `dsp_order` int（通讯录排序需要时） |
+| `mobilecall` | 备用手机 | INSERT 列 18 | varchar，按需 |
+| `account` | 独立于 loginid 的「系统账号」列 | `Hrmresourcesysteminfo_insert.java:39`（与 loginid 并列 UPDATE） | **不迁移**：blade_user.account 已承载 loginid 语义，避免同名混淆 |
+
+> 另两个实现细节：① `seclevel` 在创建 proc 的 VALUES 中是**字面量 0**（第 21 位非占位符），创建链路不传安全级别，仅系统信息 proc 可改（`Hrmresourcesysteminfo_insert.java:39,61,64`）；② 该 INSERT 存在参数错位映射（p22=accounttype、p26=dsporder 等，见 `executeUpdate` 实参序列）——若以后照抄该垫片做同步，注意参数顺序。
+
+## 15.6 缺失表/字段总清单与行动项
+
+| # | 对象 | 文档此前状态 | 本章补充 | 建议动作 | 优先级 |
+|---|---|---|---|---|---|
+| 1 | `hrmcompany` 公司表 | **整体缺失** | §15.2 全字段 + 单行语义 | 不建表，映射 `blade_tenant`；迁移时可选同步 `tenant_name` | 随第 10 章 |
+| 2 | `hrmsubcompanydefined` / `hrmdepartmentdefined` | 仅 §8.2 一句话提及 | §15.4.1 结构（1:1 宽表 + 动态加列） | 可选：`blade_dept_ext_data`（EAV），暂不建设 | 暂缓 |
+| 3 | `hrmjobtitles` / `hrmjobcall` / `hrmlocations` | §9.3 仅提「关联字典」，无表结构 | §15.4.2 三表列清单 | **迁移前置**：`hrmjobtitles → blade_post`（否则人员 `jobtitle` 无处落）；jobcall/location → `blade_dict` 预置类型 | 迁移前必做 |
+| 4 | hrmresource 29 列中 6 列未映射 | 缺失 | §15.5 | `assistant_id` 等按需加列；`account` 列明确不迁移 | 按需 |
+| 5 | **§10.2 人员迁移映射缺 `jobtitle → post_id` 行** | 缺失（迁移人员将丢岗位） | — | 在 §10.2 人员映射表补一行：`jobtitle → post_id`（若未迁岗位则 NULL + 迁移日志），并同步 §10.1 增加 `hrmjobtitles → blade_post` 范围行 | 迁移前必做 |
+| 6 | 虚拟组织 4 表 | 仅 §2.2 提及伴生写入 | §15.4.3 | 不迁移、不建设，记录差异 | 记录即可 |
+| 7 | `blade_post` 无部门维度 vs `hrmjobtitles.jobdepartmentid` | 未记录 | §15.3 | 记录差异；如需「岗位按部门过滤/换部门清岗位」再扩展 blade_post | 可选 |
+| 8 | 公司前端/命令链证据 | 未覆盖 | §15.2/§15.3 | 无需开发（租户页已有），仅文档对齐 | 无 |
+
+> ✅ **v1.5 补记（按序执行）**：#1/#3/#5/#6/#7 已补入第 10 章——§10.1 范围表新增岗位/公司两行（含字段映射与 `3e9` 命名空间）、§10.2 人员映射补 `jobtitle → post_id` 行、§10.3 迁移顺序改「分部 → 部门 → 岗位 → 人员」且幂等追溯列含 `blade_post`、§10.5 计数核对补岗位、§10.6 增补迁注意。#2（`blade_dept_ext_data`）维持暂缓；#4（`assistant_id` 等 6 列）维持按需，**未加列**，需启用时随 §9.3 一并实施；#8 无需开发。**岗位补迁（#3/#5）已执行并通过 `VerifyMigration` 核对（2026-10-09，见 §10.6）。**
+
+## 15.7 集团多租户与集团级统计的权衡（呼应 §4 差异点 13）
+
+> 场景：若集团未来希望「一家公司一个租户」（强隔离：独立管理员/独立流程/独立产品包），集团级统计是否受影响。
+
+**隔离是结构性的（本仓库实测证据）**：登录 token 自带 `tenantId`（`TokenUtil.java:67-79`）并贯穿所有业务 SQL；`UK(tenant_id, work_code/account/dept_code)` 均租户内唯一；**连工作流引擎都按租户部署**——`WfDefinitionServiceImpl.java:500` `processService.deployProcess(flowKey, def.getTenantId(), deployXml)`，`FlowDefBridge` 亦按 `tenant_id` 定位。任何租户上下文都查不到全集团数据。
+
+**多租户后的统计痛点**：
+
+| # | 痛点 | 说明 |
+|---|---|---|
+| 1 | 在线接口无法跨租户聚合 | 「集团人员总数/分公司分布」需逐租户查询后内存合并 |
+| 2 | 同一人多家公司 = 多条记录 | 两租户两个账号两份 blade_user，集团维度统计需先身份归一 |
+| 3 | 工号/账号租户内唯一 | `UK(tenant_id, work_code)` 允许跨租户重号，按工号对人会撞车 |
+| 4 | 配置每租户一套 | 岗位/字典/`blade_hrm_field_group` 字段配置/BPMN 流程定义全部 ×N，配置漂移 |
+| 5 | 人员调动 = 跨租户搬家 | E9 改 `subcompanyid` 一列的事，blade 要迁账号/角色/在途流程/消息 |
+
+对照组：E9 全部人员在一张 `HrmResource` 表、靠 `subcompanyid1` 做数据权限，集团统计天然免费——这正是 §4-13「多租户语义不可照搬」的根本差异。
+
+**若确需多租户，统计走旁路**：
+1. **数仓/报表库聚合（首选）**：ETL 把各租户 `blade_user/blade_dept/blade_post` 定时拉入独立统计库（T+1 覆盖绝大多数集团报表），在线隔离零破坏；
+2. **平台级只读聚合接口**：blade-system 提供超管专用跨租户统计端点（显式绕过租户拦截器），白名单 + 审计，只聚合不出明细；
+3. **统一编码规则**：`blade_code_rule` 各租户取码但集团前缀分段（如 `DT01-`/`DT02-`），避免工号重号。
+
+**本项目口径**：统计优先 → **维持单租户 + 组织树**（现状：租户 `000000` = 鼎泰，13 家公司 = `dept_type=1` 分部，集团统计天然全量，分部数据权限由 §8.5 tree-scope/canceled/limit_users 承担）；隔离优先才拆多租户并按上述旁路补统计。**顺带收益**：本次迁移三表均带 `ecology_id` + `1e9/2e9/3e9` 命名空间，将来真要拆租户时，`blade_dept.subcompany_id` 即现成的「分家地图」（按分部归属分拣部门/人员），无需重梳归属。
 
