@@ -60,11 +60,15 @@ public class MessageController extends BladeController {
 
 	/**
 	 * 会话消息分页
+	 *
+	 * @param desc true=按时间倒序（通知类列表取最新一页），默认正序（聊天流）
 	 */
 	@GetMapping("/session/{id}/messages")
-	@Operation(summary = "会话消息分页", description = "按时间正序返回会话内消息")
-	public R<IPage<MessageVO>> messages(@PathVariable("id") Long id, Query query, BladeUser user) {
-		return R.data(messageService.pageMessages(id, query, user));
+	@Operation(summary = "会话消息分页", description = "默认按时间正序返回会话内消息；desc=true 时倒序（取最新）")
+	public R<IPage<MessageVO>> messages(@PathVariable("id") Long id, Query query,
+										@RequestParam(required = false, defaultValue = "false") boolean desc,
+										BladeUser user) {
+		return R.data(messageService.pageMessages(id, query, user, desc));
 	}
 
 	/**

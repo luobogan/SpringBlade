@@ -19,6 +19,7 @@ import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.springblade.workflow.listener.WfEngineEventListener;
 import org.springblade.workflow.listener.WfBizCallbackListener;
 import org.springblade.workflow.listener.WfMiEmptyGuardListener;
+import org.springblade.workflow.listener.WfProcessNoticeListener;
 
 import javax.sql.DataSource;
 import java.io.File;
@@ -66,6 +67,7 @@ public class FlowableConfig {
     private final ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider;
     private final ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider;
     private final ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider;
+    private final ObjectProvider<WfProcessNoticeListener> wfProcessNoticeListenerProvider;
 
     /** 诊断用：装配阶段解析出的实际库名 / 库内 schema 版本 / history，统一打印自检结论 */
     private String resolvedCatalog;
@@ -77,13 +79,15 @@ public class FlowableConfig {
                           ResourcePatternResolver resourcePatternResolver,
                           ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider,
                           ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider,
-                          ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider) {
+                          ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider,
+                          ObjectProvider<WfProcessNoticeListener> wfProcessNoticeListenerProvider) {
         this.dataSource = dataSource;
         this.transactionManager = transactionManager;
         this.resourcePatternResolver = resourcePatternResolver;
         this.wfEngineEventListenerProvider = wfEngineEventListenerProvider;
         this.wfBizCallbackListenerProvider = wfBizCallbackListenerProvider;
         this.wfMiEmptyGuardListenerProvider = wfMiEmptyGuardListenerProvider;
+        this.wfProcessNoticeListenerProvider = wfProcessNoticeListenerProvider;
     }
 
     @Bean
@@ -161,6 +165,14 @@ public class FlowableConfig {
         if (miEmptyGuardListener != null) {
             globalListeners.add(miEmptyGuardListener);
             log.info("[FlowableConfig] 已注册 MI 空集合守卫监听 WfMiEmptyGuardListener（mi-empty-guard.enabled=true）");
+        }
+        // 流程消息通知监听（消息中心 §10）：TASK_CREATED→通知办理人、PROCESS_COMPLETED→通知发起人，
+        // 经 INoticeClient（/feign/client/notice，网关 InnerFilter 隔离）写入统一消息中心。
+        // 独立开关 blade.workflow.notice.enabled（默认 true），失败只记日志不回滚引擎事务。
+        WfProcessNoticeListener noticeListener = wfProcessNoticeListenerProvider.getIfAvailable();
+        if (noticeListener != null) {
+            globalListeners.add(noticeListener);
+            log.info("[FlowableConfig] 已注册流程消息通知监听 WfProcessNoticeListener（notice.enabled=true）");
         }
         if (!globalListeners.isEmpty()) {
             configuration.setEventListeners(globalListeners);

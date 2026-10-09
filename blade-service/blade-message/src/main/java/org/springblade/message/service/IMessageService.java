@@ -20,6 +20,7 @@ import org.springblade.core.mp.base.BaseService;
 import org.springblade.core.mp.support.Query;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.message.dto.MessageSendDTO;
+import org.springblade.message.dto.NoticeSendDTO;
 import org.springblade.message.entity.Message;
 import org.springblade.message.vo.MessageVO;
 import org.springblade.message.vo.UnreadCountVO;
@@ -32,7 +33,7 @@ import org.springblade.message.vo.UnreadCountVO;
 public interface IMessageService extends BaseService<Message> {
 
 	/**
-	 * 会话消息分页（按时间正序，含发送人/附件/已读）
+	 * 会话消息分页（默认按时间正序，含发送人/附件/已读）
 	 *
 	 * @param sessionId 会话ID
 	 * @param query     分页
@@ -42,6 +43,17 @@ public interface IMessageService extends BaseService<Message> {
 	IPage<MessageVO> pageMessages(Long sessionId, Query query, BladeUser user);
 
 	/**
+	 * 会话消息分页（可指定排序方向）
+	 *
+	 * @param sessionId 会话ID
+	 * @param query     分页
+	 * @param user      当前用户
+	 * @param desc      true=按 id 倒序（流程通知列表取最新一页）；false=正序（聊天流）
+	 * @return 消息分页
+	 */
+	IPage<MessageVO> pageMessages(Long sessionId, Query query, BladeUser user, boolean desc);
+
+	/**
 	 * 发送消息（落库 + 增量未读 + 实时推送）
 	 *
 	 * @param dto  发送参数
@@ -49,6 +61,17 @@ public interface IMessageService extends BaseService<Message> {
 	 * @return 是否成功
 	 */
 	Boolean send(MessageSendDTO dto, BladeUser user);
+
+	/**
+	 * 批量发送流程通知（系统代发，无登录态；每人一条 type=3 系统通知会话，自动建/复用）
+	 *
+	 * <p>供 {@code INoticeClient}（/feign/client/notice 前缀，网关 InnerFilter 隔离）调用，
+	 * 消息 {@code category=2}，发送者固定为系统（senderId=0），复用既有落库/未读/WS 推送链路。</p>
+	 *
+	 * @param dto 通知参数（tenantId/userIds 必传）
+	 * @return 是否全部发送成功
+	 */
+	Boolean sendNoticeToUsers(NoticeSendDTO dto);
 
 	/**
 	 * 标记会话已读（补回执 + 未读归零）

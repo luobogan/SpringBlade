@@ -28,6 +28,8 @@ import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.message.dto.MessageAttachmentDTO;
 import org.springblade.message.dto.MessageSendDTO;
+import org.springblade.message.dto.NoticeSendDTO;
+import org.springblade.message.constant.MessageConstant;
 import org.springblade.message.entity.Message;
 import org.springblade.message.entity.MessageAttachment;
 import org.springblade.message.entity.MessageReadLog;
@@ -73,8 +75,18 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 
 	@Override
 	public IPage<MessageVO> pageMessages(Long sessionId, Query query, BladeUser user) {
-		IPage<Message> page = page(Condition.getPage(query),
-			Wrappers.<Message>lambdaQuery().eq(Message::getSessionId, sessionId).orderByAsc(Message::getId));
+		return pageMessages(sessionId, query, user, false);
+	}
+
+	@Override
+	public IPage<MessageVO> pageMessages(Long sessionId, Query query, BladeUser user, boolean desc) {
+		var wrapper = Wrappers.<Message>lambdaQuery().eq(Message::getSessionId, sessionId);
+		if (desc) {
+			wrapper.orderByDesc(Message::getId);
+		} else {
+			wrapper.orderByAsc(Message::getId);
+		}
+		IPage<Message> page = page(Condition.getPage(query), wrapper);
 
 		List<Long> messageIds = page.getRecords().stream().map(Message::getId).collect(Collectors.toList());
 		List<Long> senderIds = page.getRecords().stream().map(Message::getSenderId).distinct().collect(Collectors.toList());
@@ -133,6 +145,7 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 		message.setSessionId(dto.getSessionId());
 		message.setSenderId(user.getUserId());
 		message.setContentType(dto.getContentType() == null ? 1 : dto.getContentType());
+		message.setCategory(dto.getCategory() == null ? MessageConstant.CATEGORY_CHAT : dto.getCategory());
 		message.setContent(dto.getContent());
 		message.setQuoteMessageId(dto.getQuoteMessageId());
 		message.setBizRefType(dto.getBizRefType());
@@ -192,6 +205,97 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 			.stream().map(a -> BeanUtil.copyProperties(a, MessageAttachmentVO.class)).collect(Collectors.toList()));
 		realtimePublisher.publishNewMessage(session.getId(), user.getTenantId(), pushVo, userIds);
 		return true;
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public Boolean sendNoticeToUsers(NoticeSendDTO dto) {
+		if (dto == null || Func.isEmpty(dto.getUserIds()) || Func.isBlank(dto.getTenantId())) {
+			return false;
+		}
+		for (Long userId : dto.getUserIds()) {
+			if (userId == null) {
+				continue;
+			}
+			// 系统 → 用户的「流程通知」走每人一条 type=3 通知会话，自动建/复用
+			Session session = findOrCreateNoticeSession(userId, dto.getTenantId());
+			Date now = new Date();
+			Message message = new Message();
+			message.setSessionId(session.getId());
+			// 系统代发：无登录态，senderId=0（不存在对应 blade_user，前端展示为「系统」）
+			message.setSenderId(MessageConstant.SENDER_SYSTEM);
+			message.setContentType(dto.getContentType() == null ? 4 : dto.getContentType());
+			message.setCategory(MessageConstant.CATEGORY_NOTICE);
+			message.setContent(dto.getContent());
+			message.setBizRefType(dto.getBizRefType());
+			message.setBizRefId(dto.getBizRefId());
+			message.setStatus(1);
+			message.setTenantId(dto.getTenantId());
+			message.setCreateUser(MessageConstant.SENDER_SYSTEM);
+			save(message);
+
+			// 会话摘要直接用通知文案（不经 buildSummary，保留完整标题）
+			session.setLastMessage(dto.getContent());
+			session.setLastTime(now);
+			sessionMapper.updateById(session);
+
+			// 通知会话成员=接收人本人（系统发送者不在成员内），全员未读 +1
+			List<SessionMember> members = sessionMemberMapper.selectList(
+				Wrappers.<SessionMember>lambdaQuery().eq(SessionMember::getSessionId, session.getId()));
+			List<Long> memberIds = new ArrayList<>();
+			for (SessionMember member : members) {
+				memberIds.add(member.getUserId());
+				member.setUnreadCount(member.getUnreadCount() == null ? 1 : member.getUnreadCount() + 1);
+				sessionMemberMapper.updateById(member);
+			}
+
+			// 实时推送：复用既有 NEW_MESSAGE/UNREAD Redis 链路，铃铛红点自动 +1
+			MessageVO pushVo = BeanUtil.copyProperties(message, MessageVO.class);
+			pushVo.setSenderName("系统");
+			pushVo.setRead(false);
+			pushVo.setReadCount(0);
+			pushVo.setReceiverCount(memberIds.size());
+			pushVo.setAttachments(new ArrayList<>());
+			realtimePublisher.publishNewMessage(session.getId(), dto.getTenantId(), pushVo, memberIds);
+		}
+		return true;
+	}
+
+	/**
+	 * 查找/创建用户的「系统通知会话」（type=3，每人每租户一条）
+	 */
+	private Session findOrCreateNoticeSession(Long userId, String tenantId) {
+		List<SessionMember> myMembers = sessionMemberMapper.selectList(
+			Wrappers.<SessionMember>lambdaQuery().eq(SessionMember::getUserId, userId));
+		for (SessionMember member : myMembers) {
+			Session session = sessionMapper.selectById(member.getSessionId());
+			if (session != null
+				&& MessageConstant.SESSION_TYPE_NOTICE.equals(session.getType())
+				&& tenantId.equals(session.getTenantId())) {
+				return session;
+			}
+		}
+		Session session = new Session();
+		session.setType(MessageConstant.SESSION_TYPE_NOTICE);
+		session.setName("流程通知");
+		session.setTenantId(tenantId);
+		session.setCreateUser(MessageConstant.SENDER_SYSTEM);
+		session.setStatus(1);
+		session.setIsDeleted(0);
+		sessionMapper.insert(session);
+
+		SessionMember member = new SessionMember();
+		member.setSessionId(session.getId());
+		member.setUserId(userId);
+		member.setUnreadCount(0);
+		member.setPinned(0);
+		member.setMute(0);
+		member.setTenantId(tenantId);
+		member.setCreateUser(MessageConstant.SENDER_SYSTEM);
+		member.setStatus(1);
+		member.setIsDeleted(0);
+		sessionMemberMapper.insert(member);
+		return session;
 	}
 
 	@Override

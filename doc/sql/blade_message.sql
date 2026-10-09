@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS `blade_message_session`
     `id`           BIGINT       NOT NULL COMMENT '主键',
     `tenant_id`    VARCHAR(50)  NOT NULL COMMENT '租户ID',
     `name`         VARCHAR(100) NULL     COMMENT '群名称（两人会话可为空）',
-    `type`         INT          NOT NULL DEFAULT 1 COMMENT '会话类型 1=两人 2=群',
+    `type`         INT          NOT NULL DEFAULT 1 COMMENT '会话类型 1=两人 2=群 3=系统通知（流程消息，每人一条）',
     `last_message` VARCHAR(500) NULL     COMMENT '最近一条消息摘要',
     `last_time`    DATETIME     NULL     COMMENT '最近消息时间',
     `create_time`  DATETIME     NULL     COMMENT '创建时间',
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS `blade_message`
     `session_id`      BIGINT       NOT NULL COMMENT '会话ID',
     `sender_id`       BIGINT       NOT NULL COMMENT '发送人（blade_user.id）',
     `content_type`    INT          NOT NULL DEFAULT 1 COMMENT '内容类型 1文本 2富文本 3附件 4流程引用',
+    `category`        INT          NOT NULL DEFAULT 1 COMMENT '消息分类 1=聊天 2=流程通知',
     `content`         VARCHAR(2000) NULL COMMENT '内容',
     `quote_message_id` BIGINT      NULL COMMENT '引用消息ID',
     `biz_ref_type`    VARCHAR(30)  NULL COMMENT '业务引用类型（WF_INSTANCE/WF_TASK）',
@@ -65,7 +66,8 @@ CREATE TABLE IF NOT EXISTS `blade_message`
     `is_deleted`      INT          NULL COMMENT '是否已删除',
     PRIMARY KEY (`id`),
     KEY `idx_blade_message_session` (`session_id`),
-    KEY `idx_blade_message_tenant` (`tenant_id`)
+    KEY `idx_blade_message_tenant` (`tenant_id`),
+    KEY `idx_blade_message_biz_ref` (`biz_ref_type`, `biz_ref_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '消息主体';
 
 DROP TABLE IF EXISTS `blade_message_attachment`;

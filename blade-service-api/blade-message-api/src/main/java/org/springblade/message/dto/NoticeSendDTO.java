@@ -15,58 +15,51 @@
  */
 package org.springblade.message.dto;
 
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
-import org.springblade.message.dto.MessageAttachmentDTO;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.List;
 
 /**
- * 消息发送请求 DTO
+ * 流程通知发送请求 DTO（系统代发，无登录态）
+ *
+ * <p>供 blade-workflow 等服务经内部 Feign（{@code /feign/client/notice/send-to-users}）调用：
+ * 服务端按 userId 自动建/复用「系统通知会话」（type=3，每人一条），消息
+ * {@code category=2}（流程通知），发送者固定为系统（senderId=0）。</p>
  *
  * @author Chill
  */
 @Data
-public class MessageSendDTO implements Serializable {
+public class NoticeSendDTO implements Serializable {
 
 	@Serial
 	private static final long serialVersionUID = 1L;
 
 	/**
-	 * 会话ID
+	 * 租户ID（内部调用无登录态，必须显式传入）
 	 */
-	@Schema(description = "会话ID")
-	@JsonSerialize(using = ToStringSerializer.class)
-	private Long sessionId;
+	@Schema(description = "租户ID（内部调用无登录态，必传）")
+	private String tenantId;
 
 	/**
-	 * 内容类型 1文本 2富文本 3附件 4流程引用
+	 * 接收人列表（blade_user.id）
 	 */
-	@Schema(description = "内容类型 1文本 2富文本 3附件 4流程引用")
-	private Integer contentType = 1;
+	@Schema(description = "接收人列表（blade_user.id）")
+	private List<Long> userIds;
 
 	/**
-	 * 消息分类 1=聊天 2=流程通知（默认聊天）
+	 * 通知文案（调用方拼好模板标题，如「您有一条流程待办需要处理：xxx」）
 	 */
-	@Schema(description = "消息分类 1=聊天 2=流程通知")
-	private Integer category = 1;
-
-	/**
-	 * 内容
-	 */
-	@Schema(description = "内容")
+	@Schema(description = "通知文案（调用方拼好模板标题）")
 	private String content;
 
 	/**
-	 * 引用消息ID
+	 * 内容类型，默认 4=流程引用
 	 */
-	@Schema(description = "引用消息ID")
-	@JsonSerialize(using = ToStringSerializer.class)
-	private Long quoteMessageId;
+	@Schema(description = "内容类型，默认 4=流程引用")
+	private Integer contentType = 4;
 
 	/**
 	 * 业务引用类型（WF_INSTANCE/WF_TASK）
@@ -79,11 +72,5 @@ public class MessageSendDTO implements Serializable {
 	 */
 	@Schema(description = "业务引用ID（字符串防精度丢失）")
 	private String bizRefId;
-
-	/**
-	 * 附件元数据列表（前端直传 blade-resource 后回传）
-	 */
-	@Schema(description = "附件元数据列表（前端直传 blade-resource 后回传）")
-	private List<MessageAttachmentDTO> attachments;
 
 }

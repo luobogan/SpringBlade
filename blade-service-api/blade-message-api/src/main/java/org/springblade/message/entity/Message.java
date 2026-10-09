@@ -69,6 +69,12 @@ public class Message extends TenantEntity {
 	private Integer contentType;
 
 	/**
+	 * 消息分类 1=聊天 2=流程通知
+	 */
+	@Schema(description = "消息分类 1=聊天 2=流程通知")
+	private Integer category;
+
+	/**
 	 * 内容
 	 */
 	@Schema(description = "内容")

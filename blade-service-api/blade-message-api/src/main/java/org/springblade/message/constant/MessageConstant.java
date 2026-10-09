@@ -32,4 +32,34 @@ public interface MessageConstant {
 	 */
 	String API_PREFIX = "/api/blade-message";
 
+	/**
+	 * 会话类型：两人
+	 */
+	Integer SESSION_TYPE_PAIR = 1;
+
+	/**
+	 * 会话类型：群
+	 */
+	Integer SESSION_TYPE_GROUP = 2;
+
+	/**
+	 * 会话类型：系统通知（流程消息等系统代发的通知会话，每人一条，不进聊天气泡流）
+	 */
+	Integer SESSION_TYPE_NOTICE = 3;
+
+	/**
+	 * 消息分类：聊天（人员间消息）
+	 */
+	Integer CATEGORY_CHAT = 1;
+
+	/**
+	 * 消息分类：流程通知（workflow 事件经内部 Feign 产生的通知）
+	 */
+	Integer CATEGORY_NOTICE = 2;
+
+	/**
+	 * 系统发送者（blade_message.sender_id=0，表示系统代发，无对应 blade_user）
+	 */
+	Long SENDER_SYSTEM = 0L;
+
 }
