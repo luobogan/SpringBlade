@@ -22,6 +22,7 @@ import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
@@ -70,7 +71,7 @@ public class WfMiEmptyGuardListener implements FlowableEventListener {
     private final WfWriteHelper writeHelper;
 
     public WfMiEmptyGuardListener(@Autowired(required = false) WfInstanceMapper instanceMapper,
-                                  @Autowired(required = false) WfWriteHelper writeHelper) {
+                                  @Lazy @Autowired(required = false) WfWriteHelper writeHelper) {
         this.instanceMapper = instanceMapper;
         this.writeHelper = writeHelper;
     }
