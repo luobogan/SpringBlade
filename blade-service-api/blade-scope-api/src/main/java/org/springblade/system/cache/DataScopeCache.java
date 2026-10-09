@@ -61,7 +61,9 @@ public class DataScopeCache {
 			dataScope = getDataScopeClient().getDataScopeByMapper(mapperId, roleId);
 			CacheUtil.put(SYS_CACHE, SCOPE_CACHE_CLASS, mapperId + StringPool.COLON + roleId, dataScope);
 		}
-		return StringUtil.isNotBlank(dataScope.getResourceCode()) ? dataScope : null;
+		// 远端或降级返回 null 时必须先判空：直接取 getResourceCode() 会 NPE，
+		// 让「没有数据权限配置」这种正常情况演变成整条查询 500。
+		return dataScope != null && StringUtil.isNotBlank(dataScope.getResourceCode()) ? dataScope : null;
 	}
 
 	/**
@@ -76,7 +78,7 @@ public class DataScopeCache {
 			dataScope = getDataScopeClient().getDataScopeByCode(code);
 			CacheUtil.put(SYS_CACHE, SCOPE_CACHE_CODE, code, dataScope);
 		}
-		return StringUtil.isNotBlank(dataScope.getResourceCode()) ? dataScope : null;
+		return dataScope != null && StringUtil.isNotBlank(dataScope.getResourceCode()) ? dataScope : null;
 	}
 
 	/**

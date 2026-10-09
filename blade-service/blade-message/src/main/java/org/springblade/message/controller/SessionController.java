@@ -31,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -51,9 +52,13 @@ public class SessionController extends BladeController {
 	 * 我的会话分页
 	 */
 	@GetMapping("/page")
-	@Operation(summary = "我的会话分页", description = "返回当前用户参与的会话，含未读数量与成员信息")
-	public R<IPage<SessionVO>> page(Query query, BladeUser user) {
-		return R.data(sessionService.pageSessions(query, user));
+	@Operation(summary = "我的会话分页",
+		description = "返回当前用户参与的会话，含未读数量与成员信息。"
+			+ "hasMessage=true 只返回「已有消息」的会话（首屏优先加载）；"
+			+ "false 只返回「还没有消息」的会话（滚动到可视区域时再按需加载）；不传则不过滤。")
+	public R<IPage<SessionVO>> page(Query query, BladeUser user,
+									@RequestParam(value = "hasMessage", required = false) Boolean hasMessage) {
+		return R.data(sessionService.pageSessions(query, user, hasMessage));
 	}
 
 	/**

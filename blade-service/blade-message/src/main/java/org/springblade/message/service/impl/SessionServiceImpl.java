@@ -17,6 +17,7 @@ package org.springblade.message.service.impl;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.AllArgsConstructor;
 import org.springblade.core.mp.base.BaseServiceImpl;
@@ -41,6 +42,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +61,7 @@ public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> 
 	private final IUserClient userClient;
 
 	@Override
-	public IPage<SessionVO> pageSessions(Query query, BladeUser user) {
+	public IPage<SessionVO> pageSessions(Query query, BladeUser user, Boolean hasMessage) {
 		List<SessionMember> myMembers = sessionMemberMapper.selectList(
 			Wrappers.<SessionMember>lambdaQuery().eq(SessionMember::getUserId, user.getUserId()));
 		if (Func.isEmpty(myMembers)) {
@@ -72,16 +74,38 @@ public class SessionServiceImpl extends BaseServiceImpl<SessionMapper, Session> 
 		Map<Long, Integer> unreadMap = myMembers.stream()
 			.collect(Collectors.toMap(SessionMember::getSessionId, SessionMember::getUnreadCount, (a, b) -> a));
 
-		IPage<Session> page = page(Condition.getPage(query),
-			Wrappers.<Session>lambdaQuery().in(Session::getId, sessionIds).orderByDesc(Session::getLastTime));
+		// 按需加载：首屏只取「已有消息」的会话，空会话等滚动到可视区域时再单独取，
+		// 避免一次性把全公司（绝大多数为空）的会话全部装配出来。
+		LambdaQueryWrapper<Session> wrapper = Wrappers.<Session>lambdaQuery().in(Session::getId, sessionIds);
+		if (hasMessage != null) {
+			if (hasMessage) {
+				wrapper.isNotNull(Session::getLastMessage);
+			} else {
+				wrapper.isNull(Session::getLastMessage);
+			}
+		}
+		wrapper.orderByDesc(Session::getLastTime);
+
+		IPage<Session> page = page(Condition.getPage(query), wrapper);
+
+		// 成员信息一次性批量取回：原先每页最多 50 个会话会触发 50 次 session_member 查询（N+1），
+		// 是首屏耗时的主要来源之一；改为按 sessionId 集合一次查全，再在内存归组复用。
+		List<Long> pageSessionIds = page.getRecords().stream().map(Session::getId).collect(Collectors.toList());
+		Map<Long, List<Long>> memberIdsMap = new HashMap<>();
+		if (Func.isNotEmpty(pageSessionIds)) {
+			List<SessionMember> pageMembers = sessionMemberMapper.selectList(
+				Wrappers.<SessionMember>lambdaQuery().in(SessionMember::getSessionId, pageSessionIds));
+			for (SessionMember member : pageMembers) {
+				memberIdsMap.computeIfAbsent(member.getSessionId(), k -> new ArrayList<>()).add(member.getUserId());
+			}
+		}
 
 		List<SessionVO> vos = page.getRecords().stream().map(session -> {
 			SessionVO vo = SessionWrapper.build().entityVO(session);
 			vo.setUnreadCount(unreadMap.getOrDefault(session.getId(), 0));
-			List<SessionMember> members = sessionMemberMapper.selectList(
-				Wrappers.<SessionMember>lambdaQuery().eq(SessionMember::getSessionId, session.getId()));
-			vo.setMemberCount(members.size());
-			vo.setMemberIds(members.stream().map(SessionMember::getUserId).collect(Collectors.toList()));
+			List<Long> ids = memberIdsMap.getOrDefault(session.getId(), Collections.emptyList());
+			vo.setMemberCount(ids.size());
+			vo.setMemberIds(ids);
 			return vo;
 		}).collect(Collectors.toList());
 

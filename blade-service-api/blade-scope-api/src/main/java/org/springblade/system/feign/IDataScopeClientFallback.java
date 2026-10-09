@@ -18,10 +18,17 @@ package org.springblade.system.feign;
 import org.springblade.core.datascope.model.DataScopeModel;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
  * IDataScopeClientFallback
+ *
+ * <p><b>为什么不能返回 null</b>：调用方 {@code DataScopeCache#getDataScopeByMapper} 拿到返回值后会
+ * 立即读取 {@code getResourceCode()} 判断是否配置了数据权限，null 会当场 NPE，
+ * 使整条业务查询以 500 失败（实测：服务发现解析不到实例 → 走降级 → 顶部菜单等接口全部 500）。
+ * 降级语义应当是「没有数据权限限制」，故返回与服务端 {@code DataScopeClient} 未命中时一致的
+ * 哨兵对象（searched=true、resourceCode 为空）／空集合，让调用方安全地按「无配置」处理。</p>
  *
  * @author Chill
  */
@@ -29,16 +36,16 @@ import java.util.List;
 public class IDataScopeClientFallback implements IDataScopeClient {
 	@Override
 	public DataScopeModel getDataScopeByMapper(String mapperId, String roleId) {
-		return null;
+		return new DataScopeModel(Boolean.TRUE);
 	}
 
 	@Override
 	public DataScopeModel getDataScopeByCode(String code) {
-		return null;
+		return new DataScopeModel(Boolean.TRUE);
 	}
 
 	@Override
 	public List<Long> getDeptAncestors(Long deptId) {
-		return null;
+		return Collections.emptyList();
 	}
 }

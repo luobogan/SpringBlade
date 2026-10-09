@@ -151,7 +151,16 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 		roleMenus.forEach(roleMenu -> recursion(allMenus, routes, roleMenu));
 		routes.sort(Comparator.comparing(Menu::getSort));
 		MenuWrapper menuWrapper = new MenuWrapper();
-		List<Menu> collect = routes.stream().filter(x -> Func.equals(x.getCategory(), 1)).collect(Collectors.toList());
+		// 除一级菜单（category=1）外，一并放行「组件型菜单」（category=2 且 is_component=1）：
+		// 它们是 /formmode/exceldesign/ExcelPreviewPage、/formmode/approval/ApprovalPage 这类
+		// 「独立页」的路由载体。此前只保留 category=1，导致 /menu/routes 从不下发它们，
+		// 前端只能靠 config/routes.ts 的静态声明兜底，违背「前端路由 100% 由 blade_menu 驱动」。
+		// 注意：category=2 且 is_component=0 的是纯权限码/按钮，不生成路由，仍需排除；
+		// 前端侧边栏会再过滤掉 category=2，故放开这里不会把独立页塞进左侧菜单。
+		List<Menu> collect = routes.stream()
+			.filter(x -> Func.equals(x.getCategory(), 1)
+				|| (Func.equals(x.getCategory(), 2) && Func.equals(x.getIsComponent(), 1)))
+			.collect(Collectors.toList());
 		return menuWrapper.listNodeVO(distinctMenuById(collect));
 	}
 

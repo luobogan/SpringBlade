@@ -26,7 +26,6 @@ import org.springblade.core.secure.utils.AuthUtil;
 import org.springblade.core.swagger.annotation.ApiOrder;
 import org.springblade.core.tool.api.R;
 import org.springblade.message.dto.MessageSendDTO;
-import org.springblade.message.feign.IMessageClient;
 import org.springblade.message.service.IMessageService;
 import org.springblade.message.vo.MessageVO;
 import org.springblade.message.vo.UnreadCountVO;
@@ -41,6 +40,13 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 消息控制器
  *
+ * <p><b>为什么不 {@code implements IMessageClient}</b>：该 Feign 契约把「消息」与「会话」两类
+ * 资源路径聚合在一起 —— {@code /message/message/send}、{@code /message/message/read}、
+ * {@code /message/message/unread-count} 由本类提供，而 {@code /message/session/create}
+ * 已由 {@link SessionController#create} 提供。强行 implements 会要求本类再声明
+ * {@code createSession}，从而与 SessionController 产生<b>同一路径的重复映射</b>，
+ * Spring 启动阶段即因 ambiguous mapping 失败。Feign 客户端按路径调用，不依赖服务端的 implements 关系。</p>
+ *
  * @author Chill
  */
 @RestController
@@ -48,7 +54,7 @@ import org.springframework.web.bind.annotation.RestController;
 @AllArgsConstructor
 @ApiOrder
 @Tag(name = "消息", description = "消息接口")
-public class MessageController extends BladeController implements IMessageClient {
+public class MessageController extends BladeController {
 
 	private final IMessageService messageService;
 
