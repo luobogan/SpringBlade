@@ -80,6 +80,21 @@
 
     <build>
         <plugins>
+            <!-- JDK 23+ 默认禁用 classpath 隐式注解处理器（-proc:none），不显式声明则
+     Lombok 静默失效（@Data/@AllArgsConstructor 全部报"找不到符号"），
+     与 blade-service/blade-workflow/pom.xml 的同款配置对齐。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>com.spotify</groupId>
                 <artifactId>docker-maven-plugin</artifactId>

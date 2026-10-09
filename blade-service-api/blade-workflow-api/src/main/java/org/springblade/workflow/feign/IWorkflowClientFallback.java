@@ -39,4 +39,10 @@ public class IWorkflowClientFallback implements IWorkflowClient {
         return R.fail("审批流程服务不可用，无法查询流程定义身份");
     }
 
+    @Override
+    public R<Boolean> isEnded(Long id) {
+        log.error("[blade-workflow] 查询实例是否结束失败，服务不可用. id={}", id);
+        return R.fail("审批流程服务不可用，无法查询实例状态");
+    }
+
 }

@@ -1761,7 +1761,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     continue;
                 }
                 Long instId = (inst == null) ? null : inst.getId();
-                Long starter = (inst == null) ? null : inst.getStarter();
+                // ⚠️ start() 在 inst.setStarter(...) 之前（甚至 inst=new WfInstance() 尚未赋字段时）
+                // 就调用本方法——因为集合变量必须先于引擎启动就绪。此时 inst.getStarter() 为 null，
+                // 若直接采用，opType=18/41（创建人上级/主管）会走 leaderId(null) 静默返回空集合，
+                // 引擎 MI 节点拿到空集合 → 0 个实例 → 节点被静默跳过
+                // （2026-10-09 实测：「部门上级审批」紧跟创建节点时被整体跳过即此根因）。
+                // 发起场景下 currentOperator 形参就是发起人，作为 starter 回退语义完全一致；
+                // doApprove 场景（WfTaskServiceImpl 同名方法）inst 来自库、starter 必非空，不受影响。
+                Long starter = (inst != null && inst.getStarter() != null) ? inst.getStarter() : currentOperator;
                 List<Long> assignees = operatorResolver.resolve(defId, nk, instId, starter, currentOperator);
                 if (assignees == null) {
                     assignees = List.of();
