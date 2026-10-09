@@ -29,11 +29,13 @@ import org.springblade.system.user.entity.UserOauth;
 import org.springblade.system.user.feign.IUserClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 用户服务Feign实现类
@@ -266,6 +268,12 @@ public class UserClient implements IUserClient {
 		boolean ok = user.getPassword().equals(org.springblade.core.tool.utils.DigestUtil.encrypt(password));
 		log.info("校验用户密码 - userId: {}, matched: {}", userId, ok);
 		return R.data(ok);
+	}
+
+	@Override
+	@PostMapping(API_PREFIX + "/active-status-map")
+	public R<Map<Long, Boolean>> activeStatusMap(@RequestBody List<Long> ids) {
+		return R.data(service.activeStatusMap(ids));
 	}
 
 }

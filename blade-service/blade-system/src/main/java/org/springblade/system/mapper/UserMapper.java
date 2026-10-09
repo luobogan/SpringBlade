@@ -23,6 +23,7 @@ import org.springblade.system.user.entity.User;
 import org.springblade.system.excel.UserExcel;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Mapper 接口
@@ -151,5 +152,16 @@ public interface UserMapper extends BaseMapper<User> {
 	 * @return 成员用户ID集合
 	 */
 	List<Long> selectUserIdsByDeptOfUser(@Param("userId") Long userId, @Param("containChild") Boolean containChild);
+
+	/**
+	 * 批量判定用户是否「在职有效」（供流程节点操作者解析后剔除离职/无效人员）
+	 *
+	 * <p>每行含 {@code id} 与 {@code active}(0/1)：未逻辑删除 且 人员状态非 解聘(4)/退休(5) 视为有效。
+	 * 不存在/已删除的用户不会出现在结果中（调用方据此判定为无效）。</p>
+	 *
+	 * @param ids 用户ID集合（调用方保证非空）
+	 * @return 行集合
+	 */
+	List<Map<String, Object>> selectActiveStatusMap(@Param("ids") List<Long> ids);
 
 }

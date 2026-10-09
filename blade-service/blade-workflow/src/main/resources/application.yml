@@ -108,6 +108,14 @@ blade:
       # ⚠️ 仅改本开关【不会】改写已部署定义，必须再调 POST /definition/admin/redeploy-mi 重新部署才对新建实例生效。
       # ⚠️ 在途实例不受影响（Flowable 绑定创建时的流程定义版本），回退改回 false 即可。
       enabled: true
+    mi-empty-guard:
+      # MI 空集合守卫（2026-10-09 产品拍板）：多实例节点进入时集合变量为空/未注入（操作者未配置、
+      # 人员离职、opType=18 依赖的 starter/manager_id 失效）→ 引擎按 0 实例展开 = 节点被静默跳过。
+      # 开启后 WfMiEmptyGuardListener 在 MULTI_INSTANCE_ACTIVITY_STARTED（集合求值前）拦截：
+      #   节点配置了「流程异常处理」兜底 → 放行自动跳过并留痕审批日志；
+      #   未配置兜底 → 抛 FlowableException 回滚本次流转，错误消息点名节点（用户当场可见）。
+      # false = 完全回到「空集合静默跳过」的历史行为（回退路径，无需改代码）。
+      enabled: true
     ledger-listener:
       # 方案C 总开关（《工作流双写漂移治理-方案C-事件驱动落地设计.md》§6/§7，进度见 §10）。
       # 当前阶段：阶段 3「切单写」已完成并回归通过（见文档 §10.6）。

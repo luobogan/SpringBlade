@@ -15,8 +15,10 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.springblade.workflow.listener.WfEngineEventListener;
 import org.springblade.workflow.listener.WfBizCallbackListener;
+import org.springblade.workflow.listener.WfMiEmptyGuardListener;
 
 import javax.sql.DataSource;
 import java.io.File;
@@ -63,6 +65,7 @@ public class FlowableConfig {
     private final ResourcePatternResolver resourcePatternResolver;
     private final ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider;
     private final ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider;
+    private final ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider;
 
     /** 诊断用：装配阶段解析出的实际库名 / 库内 schema 版本 / history，统一打印自检结论 */
     private String resolvedCatalog;
@@ -73,12 +76,14 @@ public class FlowableConfig {
                           PlatformTransactionManager transactionManager,
                           ResourcePatternResolver resourcePatternResolver,
                           ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider,
-                          ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider) {
+                          ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider,
+                          ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider) {
         this.dataSource = dataSource;
         this.transactionManager = transactionManager;
         this.resourcePatternResolver = resourcePatternResolver;
         this.wfEngineEventListenerProvider = wfEngineEventListenerProvider;
         this.wfBizCallbackListenerProvider = wfBizCallbackListenerProvider;
+        this.wfMiEmptyGuardListenerProvider = wfMiEmptyGuardListenerProvider;
     }
 
     @Bean
@@ -132,18 +137,33 @@ public class FlowableConfig {
         // 方案C 事件驱动台账投影：仅当开关 blade.workflow.ledger-listener.enabled=true 时注册全局监听（默认关）。
         // 监听仅依赖 wf_* Mapper（无引擎 Service 依赖），故走 setEventListeners 直接装配（方案C §2.2 方式一），
         // 避免与 processEngineConfiguration 形成构造期循环依赖。关闭开关时 bean 不存在，不注册、完全回到方案A 双写。
+        // 全局事件监听统一聚合后一次注册。
+        // ⚠️ 修复（2026-10-09）：此前各监听分别 setEventListeners(List.of(自身))，后注册的会【覆盖】
+        // 先注册的 —— ledger-listener=true + biz-callback=true 时台账监听被静默顶掉，实际只挂了业务回调。
         WfEngineEventListener ledgerListener = wfEngineEventListenerProvider.getIfAvailable();
+        WfBizCallbackListener bizListener = wfBizCallbackListenerProvider.getIfAvailable();
+        WfMiEmptyGuardListener miEmptyGuardListener = wfMiEmptyGuardListenerProvider.getIfAvailable();
+        List<FlowableEventListener> globalListeners = new java.util.ArrayList<>();
         if (ledgerListener != null) {
-            configuration.setEventListeners(List.of(ledgerListener));
+            globalListeners.add(ledgerListener);
             log.info("[FlowableConfig] 已注册方案C 台账事件监听 WfEngineEventListener（ledger-listener.enabled=true）");
         }
         // P3-2 业务回调监听：人员状态流转流程审批完成后回调 blade-system 落库 person_status。
         // 与台账监听同构（只依赖 wf_* Mapper，无引擎 Service），故同样走 setEventListeners 直接装配。
         // 独立开关 blade.workflow.biz-callback.enabled（默认 true），关闭即完全回到「只有台账、无业务回调」。
-        WfBizCallbackListener bizListener = wfBizCallbackListenerProvider.getIfAvailable();
         if (bizListener != null) {
-            configuration.setEventListeners(List.of(bizListener));
+            globalListeners.add(bizListener);
             log.info("[FlowableConfig] 已注册 P3 业务回调监听 WfBizCallbackListener（biz-callback.enabled=true）");
+        }
+        // MI 空集合守卫（2026-10-09）：MULTI_INSTANCE_ACTIVITY_STARTED 时拦截「空集合 → 节点被引擎
+        // 0 实例静默跳过」，未配「流程异常处理」兜底则阻断流转并点名节点。默认开启，
+        // 开关 blade.workflow.mi-empty-guard.enabled。
+        if (miEmptyGuardListener != null) {
+            globalListeners.add(miEmptyGuardListener);
+            log.info("[FlowableConfig] 已注册 MI 空集合守卫监听 WfMiEmptyGuardListener（mi-empty-guard.enabled=true）");
+        }
+        if (!globalListeners.isEmpty()) {
+            configuration.setEventListeners(globalListeners);
         }
         // 自动部署流程定义
         configuration.setDeploymentResources(

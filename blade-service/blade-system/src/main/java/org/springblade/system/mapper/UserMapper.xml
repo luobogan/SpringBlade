@@ -196,4 +196,19 @@
         </if>
     </select>
 
+    <!--
+        批量判定用户在职有效性（剔除 离职/无效 人员，对齐 ecology isEmptyOrAllDimissionPerson）：
+        逻辑删除(is_deleted≠0) 或 人员状态为 解聘(4)/退休(5) 视为无效(active=0)。
+        不写 tenant_id，由多租户拦截器自动注入（与 selectUserIdsByDeptOfUser 一致）。
+    -->
+    <select id="selectActiveStatusMap" resultType="java.util.HashMap">
+        SELECT id,
+               (CASE WHEN is_deleted = 0 AND person_status NOT IN (4, 5) THEN 1 ELSE 0 END) AS active
+        FROM blade_user
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+    </select>
+
 </mapper>

@@ -68,9 +68,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import static org.springblade.core.tenant.TenantGuard.EntityType.ROLE;
 import static org.springblade.core.tenant.TenantGuard.EntityType.USER;
@@ -636,6 +638,34 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	@Override
 	public Map<String, Integer> getCompleteStatus(Long userId) {
 		return userCompleteStatusService.getByUserId(userId);
+	}
+
+	@Override
+	public Map<Long, Boolean> activeStatusMap(List<Long> ids) {
+		Map<Long, Boolean> result = new LinkedHashMap<>();
+		if (ids == null || ids.isEmpty()) {
+			return result;
+		}
+		// 去重、剔除 null，避免 IN 列表出现脏数据
+		List<Long> distinct = ids.stream()
+			.filter(Objects::nonNull)
+			.distinct()
+			.collect(Collectors.toList());
+		if (distinct.isEmpty()) {
+			return result;
+		}
+		List<Map<String, Object>> rows = baseMapper.selectActiveStatusMap(distinct);
+		for (Map<String, Object> row : rows) {
+			Object idObj = row.get("id");
+			Object activeObj = row.get("active");
+			if (idObj == null) {
+				continue;
+			}
+			Long id = ((Number) idObj).longValue();
+			boolean active = activeObj != null && ((Number) activeObj).intValue() == 1;
+			result.put(id, active);
+		}
+		return result;
 	}
 
 }

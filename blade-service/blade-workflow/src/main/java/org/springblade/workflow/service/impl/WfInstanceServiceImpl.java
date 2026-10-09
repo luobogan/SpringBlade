@@ -1631,18 +1631,41 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             boolean engineHasAssignee = engineAssignee != null && engineAssignee != 0L;
             // ①.5 解析不到操作者、且引擎也没给办理人 → 按「流程异常处理」兜底（仅提交链路）
             if (assignees.isEmpty() && !engineHasAssignee
-                && applyExceptionFallback(inst, tk, src, fallbackVisited)) {
+                && applyExceptionFallback(inst, tk, src, fallbackVisited, currentOperator)) {
                 // 兜底已把引擎 token 移到别处 → 重新读引擎活动任务并同步（visited 防环，深度有限）
                 advanceInternal(instId, currentOperator, null, null, null, AdvanceSrc.SUBMIT, fallbackVisited);
                 return;
             }
             if (assignees.isEmpty()) {
-                // ② 未配置操作者或类型无法解析 → 回退原有行为（沿用引擎 assignee 单条待办）
-                if (existsTask(instId, t.getTaskId(), null)) {
+                WfProcessNode emptyNode = loadNode(inst.getDefId(), tk);
+                String nodeLabel = (emptyNode != null && emptyNode.getNodeName() != null && !emptyNode.getNodeName().isBlank())
+                    ? emptyNode.getNodeName() + "(" + tk + ")" : tk;
+                Integer emptyType = emptyNode == null ? null : emptyNode.getNodeType();
+                // 终端/非办理节点（创建0 / 归档3 / 网关7）：解析不到操作者是常态，保持历史「卡住+占位待办」语义，不阻断。
+                if (emptyType != null && (emptyType == 0 || emptyType == 3 || emptyType == 7)) {
+                    if (!existsTask(instId, t.getTaskId(), null)) {
+                        log.error("[blade-workflow] 终端/网关节点未解析到操作者，已生成占位待办（无人可办，需人工介入）: "
+                                + "instId={}, nodeKey={}, engineAssignee={}", instId, tk, engineAssignee);
+                        insertTask(inst, t, engineAssignee, tk);
+                    }
                     continue;
                 }
-                insertTask(inst, t, engineAssignee, tk);
-                continue;
+                // ② 可办理节点（审批/会签/或签/依次等）解析不到操作者且未配兜底 → 2026-10-09 拍板：
+                // 阻断当前提交并抛错点名下个节点，绝不允许「静默生成无人待办」或「无声推进」。
+                // 事务回滚，当前节点保持原状（卡在当前节点），用户完善配置或配「流程异常处理」后可重试。
+                log.error("[blade-workflow] 可办理节点未解析到操作者且未配置「流程异常处理」兜底，阻断提交: "
+                        + "instId={}, nodeKey={}, engineAssignee={}", instId, tk, engineAssignee);
+                try {
+                    appendLog(inst.getId(), null, tk, WfAuthUtil.systemId(), WfApprovalLog.LOG_SUPERVISE,
+                        "节点「" + nodeLabel + "」未解析到操作者（操作者可能已离职/未配置），且未配置「流程异常处理」，"
+                            + "流程已阻断在当前节点");
+                } catch (Exception logEx) {
+                    log.warn("[blade-workflow] 写「未解析到操作者」留痕失败: instId={}, nodeKey={}, {}", instId, tk, logEx.getMessage());
+                }
+                throw new org.springblade.core.log.exception.ServiceException(
+                    "流程流转被阻止：下一节点「" + nodeLabel + "」未解析到任何办理人"
+                        + "（操作者可能已离职/未配置），且未配置「流程异常处理」。"
+                        + "当前节点提交未推进，请完善该节点办理人设置或为其配置「流程异常处理」后再提交。");
             }
             for (Long uid : assignees) {
                 // 幂等键改为 (engineTaskId, assignee)，否则同节点第二人会被 engineTaskId 去重掉
@@ -1843,7 +1866,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      *
      * @return true 表示兜底成功且已移动引擎 token（调用方需重新读取活动任务并同步）
      */
-    private boolean applyExceptionFallback(WfInstance inst, String nodeKey, AdvanceSrc src, Set<String> visited) {
+    private boolean applyExceptionFallback(WfInstance inst, String nodeKey, AdvanceSrc src, Set<String> visited, Long currentOperator) {
         if (src.isReject()) {
             // 退回链路：目标节点由退回逻辑决定，异常兜底不参与（对齐 ecology）
             return false;
@@ -1874,7 +1897,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             return false;
         }
 
-        processService.moveActivity(inst.getEngineInstId(), nodeKey, target, new HashMap<>(4));
+        // 目标节点可能是 MI：moveActivity 前必须注入集合变量，否则守卫（或引擎 0 实例）会拦截/跳过目标节点
+        Map<String, Object> fallbackVars = new HashMap<>(4);
+        injectMiCollectionVars(inst.getDefId(), inst, fallbackVars, currentOperator);
+        processService.moveActivity(inst.getEngineInstId(), nodeKey, target, fallbackVars);
         appendLog(inst.getId(), null, nodeKey, WfAuthUtil.systemId(), WfApprovalLog.LOG_SUPERVISE,
             "节点未解析到操作者，按「流程异常处理」自动流转至节点 " + target);
         log.warn("[blade-workflow] 异常兜底触发: instId={}, from={}, to={}, way={}", inst.getId(), nodeKey, target, way);

@@ -253,4 +253,15 @@ public interface IUserService extends BaseService<User> {
 	 * @return 分组 + 字段元数据；无配置时返回空集合
 	 */
 	List<UserFormSchemaVO> formSchema(String tenantId);
+
+	/**
+	 * 批量判定用户是否「在职有效」（剔除离职/无效人员，供流程节点操作者解析）
+	 *
+	 * <p>对齐 ecology isEmptyOrAllDimissionPerson：逻辑删除 或 人员状态为 解聘(4)/退休(5) 视为无效。
+	 * 返回 id -&gt; 是否有效；不存在/已删除的用户不会出现在 map 中（调用方据此判定为无效）。</p>
+	 *
+	 * @param ids 用户ID集合
+	 * @return id -> 是否有效（未删除 且 非 解聘/退休）
+	 */
+	Map<Long, Boolean> activeStatusMap(List<Long> ids);
 }

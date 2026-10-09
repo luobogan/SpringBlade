@@ -21,6 +21,7 @@ import org.springblade.system.user.entity.UserOauth;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Feign失败配置
@@ -100,5 +101,11 @@ public class IUserClientFallback implements IUserClient {
 	@Override
 	public R<Boolean> verifyPassword(Long userId, String password) {
 		return R.fail("校验用户密码失败");
+	}
+
+	@Override
+	public R<Map<Long, Boolean>> activeStatusMap(List<Long> ids) {
+		// 降级：拿不到人员状态时不过滤（调用方据此保留原集合，不阻塞流转）
+		return R.data(java.util.Collections.emptyMap());
 	}
 }

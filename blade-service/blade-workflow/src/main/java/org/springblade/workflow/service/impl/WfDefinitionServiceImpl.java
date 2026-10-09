@@ -2485,6 +2485,24 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 + "引擎会按 BPMN 跑，但这些节点没有办理人/出口配置，发起后会卡住或无人可办。"
                 + "请在画布「保存」以写入节点配置，再发布。");
         }
+        // ④ 办理人配置门禁（2026-10-09 拍板）：审批节点必须至少配置一个操作者。
+        // 「没设置操作者」在运行期只会静默降级（非 MI 卡住等"无人"审 / MI 空集合整节点被跳过），
+        // 属最早、最便宜的提示点 —— 在发布期直接拦截，而不是等发起/流转时才暴露。
+        List<String> noOperatorNodes = new ArrayList<>();
+        for (UserTask ut : process.findFlowElementsOfType(UserTask.class, true)) {
+            BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(ut);
+            if (ext == null || !ext.operators.isEmpty()) {
+                continue;
+            }
+            String label = (ut.getName() == null || ut.getName().isBlank())
+                ? ut.getId() : (ut.getName() + "(" + ut.getId() + ")");
+            noOperatorNodes.add(label);
+        }
+        if (!noOperatorNodes.isEmpty()) {
+            throw new ServiceException("发布被拒绝：以下节点未设置任何操作者（wf:operator）→ "
+                + String.join("、", noOperatorNodes)
+                + "。运行期会静默降级（无人可办/节点被整级跳过），请为节点配置操作者后重新保存并发布。");
+        }
         log.info("[blade-workflow] 发布门禁通过(结构级). defId={}, bpmnNodes={}", def.getId(), bpmnNodeKeys.size());
     }
 

@@ -168,7 +168,10 @@ public class WfOperatorResolver {
         for (WfNodeOperator op : operators) {
             ids.addAll(resolveByType(op, starter, currentOperator, formData));
         }
-        return new ArrayList<>(ids);
+        // 显式剔除「离职/无效」人员（对齐 ecology isEmptyOrAllDimissionPerson）：
+        // 解析到的操作者中，逻辑删除 或 人员状态为 解聘(4)/退休(5) 的视为无效并予以剔除。
+        // 若某节点解析到的操作者全部无效 → 集合变空 → 上游守卫阻断提交并点名下个节点。
+        return new ArrayList<>(filterActive(ids));
     }
 
     /**
@@ -453,6 +456,42 @@ public class WfOperatorResolver {
         } catch (Exception e) {
             log.warn("[blade-workflow] {} 远端调用异常，已降级为空集合: {}", desc, e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * 显式剔除「离职/无效」人员（对齐 ecology isEmptyOrAllDimissionPerson）：
+     * 解析出的办理人里，逻辑删除 或 人员状态为 解聘(4)/退休(5) 的视为无效，从集合中移除。
+     *
+     * <p>调用用户中心批量判定在职有效性；<b>降级策略</b>：用户中心不可用 / 返回空 map 时，
+     * 一律「不过滤、保留原集合」，绝不因人员状态查询失败而误阻塞流转主链路。
+     * 不存在于 map 中的 id（已删除/非用户）同样视为无效被剔除。</p>
+     *
+     * @param ids 解析出的候选办理人（去重后）
+     * @return 去掉无效人员后的办理人集合（降级时原样返回）
+     */
+    private List<Long> filterActive(Set<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        List<Long> idList = new ArrayList<>(ids);
+        try {
+            R<Map<Long, Boolean>> r = userClient.activeStatusMap(idList);
+            if (r == null || !r.isSuccess() || r.getData() == null || r.getData().isEmpty()) {
+                // 降级：拿不到有效性判定时不过滤，避免误阻塞流转
+                return idList;
+            }
+            Map<Long, Boolean> statusMap = r.getData();
+            List<Long> active = new ArrayList<>();
+            for (Long id : idList) {
+                if (Boolean.TRUE.equals(statusMap.get(id))) {
+                    active.add(id);
+                }
+            }
+            return active;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 批量判定人员在职状态异常，已降级为「不过滤」（不阻塞流转）: {}", e.getMessage());
+            return idList;
         }
     }
 

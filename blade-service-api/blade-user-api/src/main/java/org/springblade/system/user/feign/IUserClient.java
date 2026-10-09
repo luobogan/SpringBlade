@@ -26,7 +26,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
+
 import java.util.List;
+import java.util.Map;
 
 /**
  * User Feign接口类
@@ -181,5 +183,17 @@ public interface IUserClient {
 	 */
 	@GetMapping(API_PREFIX + "/verify-password")
 	R<Boolean> verifyPassword(@RequestParam("userId") Long userId, @RequestParam("password") String password);
+
+	/**
+	 * 批量判定用户是否「在职有效」（供流程节点操作者解析后剔除离职/无效人员）。
+	 *
+	 * <p>对齐 ecology isEmptyOrAllDimissionPerson：逻辑删除 或 人员状态为 解聘(4)/退休(5) 视为无效。
+	 * 返回 id -&gt; 是否有效；不存在/已删除的用户不会出现在 map 中（调用方据此判定为无效）。</p>
+	 *
+	 * @param ids 用户ID集合
+	 * @return id -> 是否有效
+	 */
+	@PostMapping(API_PREFIX + "/active-status-map")
+	R<Map<Long, Boolean>> activeStatusMap(@RequestBody List<Long> ids);
 
 }

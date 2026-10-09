@@ -311,6 +311,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 3. 推进引擎并同步后续任务
         // 节点信息 → 运行时消费：「指定流转」。开启后由处理人手动指定下一节点（模式1 可指定操作者）；
         // 模式3（多目标）：以节点上配置的 targets 为准，提交时并行扇出到多个目标节点（仅提交时生效，退回不适用）。
+        // 3.x MI 空集合守卫：引擎进入 MI 节点时若集合为空会抛 FlowableException，
+        // 这里转成 ServiceException，保证前端按原文案收到「下个节点未解析到办理人」的提示。
+        try {
         int appointMode = WfNodeSettingsUtil.appointFlowMode(node);
         if (!system && appointMode != 0) {
             if (appointMode == 3) {
@@ -374,9 +377,14 @@ public class WfTaskServiceImpl implements IWfTaskService {
             if (!jumpDirectIfMarked(inst, operator)) {
                 instanceService.advance(inst.getId(), operator);
             }
-        }
+            }
+            } catch (org.flowable.common.engine.api.FlowableException fe) {
+            // MI 空集合守卫异常（非 MI 节点解析为空已在 advanceInternal 内转 ServiceException 阻断）。
+            // 保留原文案，改抛 ServiceException 让前端收到干净中文错误信息。
+            throw new org.springblade.core.log.exception.ServiceException(fe.getMessage());
+            }
 
-        // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（异常策略由 NodeActionExecutor 吸收）
+            // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（异常策略由 NodeActionExecutor 吸收）
         // 测试态：跳过附加操作/子流程副作用（对齐 ecology istest，避免污染真实业务数据）
         boolean testInst = inst.getIsTest() != null && inst.getIsTest() == 1;
         if (!testInst) {
