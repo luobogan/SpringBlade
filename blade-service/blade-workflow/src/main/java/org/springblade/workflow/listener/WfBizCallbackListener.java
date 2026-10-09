@@ -70,7 +70,9 @@ public class WfBizCallbackListener implements FlowableEventListener {
         }
         try {
             // 回调 blade-system：按 instanceId 反查流转记录并落库 person_status（服务端幂等）
-            R<Boolean> result = statusFlowClient.statusFlowCallback(String.valueOf(instance.getId()), Boolean.TRUE, null);
+            // 注意：opinion 在 Feign 契约里是必填 @RequestParam，OpenFeign 会跳过 null 参数，
+            // 传 null 会导致对端 400（缺少必要参数）而整调用降级；无意见时传空串。
+            R<Boolean> result = statusFlowClient.statusFlowCallback(String.valueOf(instance.getId()), Boolean.TRUE, "");
             if (result == null || !result.isSuccess()) {
                 log.warn("[WfBizCallback] 状态流转回调失败. instanceId={}, msg={}",
                     instance.getId(), result == null ? "null" : result.getMsg());

@@ -67,7 +67,7 @@
     <exclusiveGateway id="Gateway_1" name="审批结果" default="Flow_Approve"/>
     <sequenceFlow id="Flow_Approve" name="通过" sourceRef="Gateway_1" targetRef="EndEvent_Approved"/>
     <sequenceFlow id="Flow_Reject" name="驳回" sourceRef="Gateway_1" targetRef="Task_Apply">
-      <conditionExpression xsi:type="tFormalExpression">${wfOutcome == 'reject'}</conditionExpression>
+      <conditionExpression xsi:type="tFormalExpression">${wfOutcome != null &amp;&amp; wfOutcome == 'reject'}</conditionExpression>
     </sequenceFlow>
 
     <endEvent id="EndEvent_Approved" name="审批通过"/>

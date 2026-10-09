@@ -22,7 +22,9 @@ import org.springframework.web.bind.annotation.RequestBody;
  * 前端经网关以 {@code /api/blade-workflow/...} 访问（Umi dev proxy 会剥离 {@code /api}）。
  * Feign 经服务发现直连服务、<b>不经网关</b>，故此处同样使用资源路径，不带 {@code /api} 前缀。</p>
  *
- * <p><b>契约收敛</b>：仅保留跨服务必需的 {@code startProcess}，对齐 {@code POST /instance/start}；
+ * <p><b>契约收敛</b>：仅保留跨服务必需的 {@code startProcess}，对齐内部端点
+ * {@code POST /feign/client/instance/start}（无鉴权，服务间直连；对外带鉴权的仍是 {@code POST /instance/start}）；
+ * 路径采用 {@code /feign/client} 前缀，以便网关 {@code InnerFilter} 拒绝一切经网关的外部访问；
  * 待办/已办/审批等接口由前端经网关直连，不再经 Feign。</p>
  */
 @FeignClient(
@@ -40,7 +42,7 @@ public interface IWorkflowClient {
      * @param dto 发起参数（formId + dataId + 流程定义 + 表单字段值）
      * @return 流程实例ID（wf_instance.id，字符串）
      */
-    @PostMapping("/instance/start")
+    @PostMapping("/feign/client/instance/start")
     R<String> startProcess(@RequestBody StartProcessDTO dto);
 
     /**
@@ -65,5 +67,19 @@ public interface IWorkflowClient {
      */
     @GetMapping("/definition/key-tenant/{defId}")
     R<DefinitionKeyTenantVO> getDefinitionKeyAndTenant(@PathVariable("defId") Long defId);
+
+    /**
+     * 查询流程实例是否已结束（内部端点，无鉴权）
+     *
+     * <p><b>用途</b>：发起侧竞态兜底。某些场景（无表单 / 节点被自动推进）流程会在
+     * {@code startProcess} <b>内部就同步走完</b>，{@code PROCESS_COMPLETED} 回调随之在调用方
+     * 回填业务关联（如把实例ID写回流转记录）之前发生，导致回调按实例ID查不到记录而空跑。
+     * 调用方回填后再用本接口确认一次，若已结束则就地补办回调（服务端幂等）。</p>
+     *
+     * @param id 流程实例ID（wf_instance.id）
+     * @return 是否已结束（endTime 非空）
+     */
+    @GetMapping("/feign/client/instance/ended/{id}")
+    R<Boolean> isEnded(@PathVariable("id") Long id);
 
 }

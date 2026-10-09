@@ -128,6 +128,10 @@ public class PersonStatusFlowServiceImpl
 		variables.put("toStatus", dto.getToStatus());
 		variables.put("approver", resolveApprover(user));
 		variables.put("reason", Func.toStr(dto.getOpinion(), ""));
+		// BPMN 排他网关的条件 ${wfOutcome == 'reject'} 会在流程推进到网关时求值；
+		// 若该变量不存在，Flowable 直接抛 Unknown property（实测 500）。审批动作会覆盖它，
+		// 这里按默认出口（审批通过）预置，保证发起人未产生审批动作时网关也能安全求值。
+		variables.put("wfOutcome", "approve");
 		startDto.setVariables(variables);
 
 		R<String> startResult = workflowClient.startProcess(startDto);
@@ -139,6 +143,23 @@ public class PersonStatusFlowServiceImpl
 		}
 		record.setInstanceId(startResult.getData());
 		recordMapper.updateById(record);
+
+		// 竞态兜底：无表单 / 节点被自动推进时，流程可能在 startProcess 内部就同步走完，
+		// PROCESS_COMPLETED 回调随之在「上面回填 instanceId」之前发生 —— 回调按 instanceId
+		// 查不到流转记录会按幂等忽略（不视为失败），导致状态永远不生效。
+		// 故回填后再确认一次：若实例已结束，就地补办一次回调（服务端按记录幂等）。
+		try {
+			R<Boolean> endedResult = workflowClient.isEnded(Long.valueOf(startResult.getData()));
+			if (endedResult != null && endedResult.isSuccess() && Boolean.TRUE.equals(endedResult.getData())) {
+				log.info("[PersonStatusFlow] 流程已同步走完，补办回调. instanceId={}", startResult.getData());
+				this.callback(startResult.getData(), Boolean.TRUE, dto.getOpinion());
+			}
+		} catch (Exception e) {
+			// 兜底失败不影响发起结果：仍有正常回调路径可补偿
+			log.warn("[PersonStatusFlow] 校验流程是否已结束失败，忽略. instanceId={}, msg={}",
+				startResult.getData(), e.getMessage());
+		}
+
 		return R.data(startResult.getData(), "已发起审批，通过后生效");
 	}
 
