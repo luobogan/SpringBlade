@@ -340,6 +340,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		// 组织树过滤（v1.5）：deptId 为组织树节点（公司/分部/部门），需先从通用参数中摘除——
 		// 否则 Condition 会生成 dept_id 等值匹配（dept_id 为 CSV 多部门，公司/分部节点不在其中，必然失配）
 		Object deptIdParam = user.remove("deptId");
+		// 分页/排序信封参数（current/size/pageSize/ascs/descs）由 blade-tool Condition.getQueryWrapper 统一排除，
+		// Query.getSize() 优先取 pageSize（ProTable 原生参数），无需在此手动摘除。
 		QueryWrapper<User> queryWrapper = Condition.getQueryWrapper(user, User.class);
 		if (!SecureUtil.isAdministrator()) {
 			queryWrapper.lambda().eq(User::getTenantId, SecureUtil.getTenantId());
@@ -518,6 +520,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 
 	@Override
 	public List<UserExcel> exportUser(Map<String, Object> user) {
+		user.remove("deptId");
 		QueryWrapper<User> queryWrapper = Condition.getQueryWrapper(user, User.class);
 		if (!SecureUtil.isAdministrator()) {
 			queryWrapper.lambda().eq(User::getTenantId, SecureUtil.getTenantId());
