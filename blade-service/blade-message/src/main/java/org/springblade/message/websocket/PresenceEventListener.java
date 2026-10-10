@@ -52,33 +52,49 @@ public class PresenceEventListener {
 	@EventListener
 	public void onConnected(SessionConnectedEvent event) {
 		StompHeaderAccessor accessor = StompHeaderAccessor.wrap(event.getMessage());
-		apply(accessor, accessor.getSessionId(), Action.REGISTER);
+		register(accessor, accessor.getSessionId());
 	}
 
 	/**
-	 * 连接断开 → 按会话ID注销，幂等
+	 * 连接断开 → 按会话ID注销。
+	 * <p>
+	 * <b>关键</b>：{@code SessionDisconnectEvent} 只带 sessionId，<b>不携带会话属性</b>，
+	 * 因此不能像 onConnected/onSubscribe 那样从 {@code getSessionAttributes()} 取 tenantId
+	 * （那样会直接早退，注销永不执行，用户只能等活跃窗口过期才下线）。
+	 * 注册时已写入 {@code sessionId -> tenantId:userId} 索引，这里反查后精确注销。
 	 */
 	@EventListener
 	public void onDisconnect(SessionDisconnectEvent event) {
 		StompHeaderAccessor accessor = StompHeaderAccessor.wrap(event.getMessage());
-		// SessionDisconnectEvent 自带 sessionId，优先使用，兜底取消息头
 		String sessionId = event.getSessionId() != null ? event.getSessionId() : accessor.getSessionId();
-		apply(accessor, sessionId, Action.UNREGISTER);
+		if (sessionId == null) {
+			return;
+		}
+		presenceService.unregisterSessionById(sessionId);
+		log.debug("[PRESENCE] disconnect session={}", sessionId);
 	}
 
 	/**
 	 * 订阅动作视为活跃信号 → 注册/续期。
 	 * 首帧订阅时原生会话属性已就绪，在此完成在线注册（onConnected 因时序可能读不到属性）。
-	 * registerSession 基于 SET 幂等，重复调用仅刷新。
+	 * registerSession 幂等（ZADD 同成员覆盖分数），重复调用仅刷新。
 	 */
 	@EventListener
 	public void onSubscribe(SessionSubscribeEvent event) {
 		StompHeaderAccessor accessor = StompHeaderAccessor.wrap(event.getMessage());
 		log.debug("[WS-SUBSCRIBE] dest={} principal={} session={}", accessor.getDestination(), accessor.getUser(), accessor.getSessionId());
-		apply(accessor, accessor.getSessionId(), Action.REGISTER);
+		register(accessor, accessor.getSessionId());
 	}
 
-	private boolean apply(StompHeaderAccessor accessor, String sessionId, Action action) {
+	/**
+	 * 从会话头解析出 tenantId/userId 后注册在线会话。
+	 * <p>
+	 * 仅用于「会话属性可读」的两个时机（首帧订阅、连接建立兜底）；断开事件无属性，
+	 * 走 {@link #unregisterSessionById(String)} 的索引反查路径。
+	 *
+	 * @return 是否成功注册（false 表示会话属性/主体缺失，已跳过）
+	 */
+	private boolean register(StompHeaderAccessor accessor, String sessionId) {
 		Principal principal = accessor.getUser();
 		if (principal == null) {
 			return false;
@@ -97,23 +113,8 @@ public class PresenceEventListener {
 		} catch (NumberFormatException e) {
 			return false;
 		}
-		String tenant = tenantId.toString();
-		switch (action) {
-			case REGISTER:
-				presenceService.registerSession(tenant, userId, sessionId);
-				break;
-			case UNREGISTER:
-				presenceService.unregisterSession(tenant, userId, sessionId);
-				break;
-			default:
-				presenceService.refresh(tenant, userId);
-				break;
-		}
+		presenceService.registerSession(tenantId.toString(), userId, sessionId);
 		return true;
-	}
-
-	private enum Action {
-		REGISTER, UNREGISTER, REFRESH
 	}
 
 }

@@ -41,6 +41,20 @@ public interface IPresenceService {
 	void unregisterSession(String tenantId, Long userId, String sessionId);
 
 	/**
+	 * 仅凭会话ID注销（WS 断开事件专用）。
+	 * <p>
+	 * {@code SessionDisconnectEvent} 只携带 sessionId，<b>不携带会话属性</b>，
+	 * 因此拿不到 tenantId/userId，无法调用 {@link #unregisterSession}。
+	 * 注册时已把 {@code sessionId -> tenantId:userId} 写入索引，这里反查后精确注销，
+	 * 使「断开即下线」不再退化为等活跃窗口过期。
+	 * <p>
+	 * 幂等：索引不存在（未注册 / 已注销）时直接返回。
+	 *
+	 * @param sessionId STOMP 会话ID
+	 */
+	void unregisterSessionById(String sessionId);
+
+	/**
 	 * 续期在线状态（心跳/订阅等活跃信号，仅刷新时间戳，不改变会话计数）
 	 */
 	void refresh(String tenantId, Long userId);
