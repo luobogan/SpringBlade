@@ -123,6 +123,7 @@ public class WfTaskActWriter {
             task.getSignOrder(),
             task.getViewTime(),
             task.getTimeoutHandled(),
+            task.getDueTime(),
             // blade 业务任务ID：翻源后待办/已办列表仍吐此 ID，操作接口（approve/转办/退回）链路不变
             task.getId(),
             // blade 办理人：未开多实例时引擎 ASSIGNEE_ 常为 NULL（办理人只在 wf_task），读源须以此为准
@@ -134,7 +135,7 @@ public class WfTaskActWriter {
         try {
             jdbcTemplate.update(
                 "UPDATE ACT_HI_TASKINST SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
-                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=?, "
+                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, DUE_DATE_=?, BIZ_TASK_ID_=?, "
                     + "BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?",
                 args);
         } catch (Exception e) {
@@ -145,7 +146,7 @@ public class WfTaskActWriter {
         try {
             jdbcTemplate.update(
                 "UPDATE ACT_RU_TASK SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
-                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, BIZ_TASK_ID_=?, "
+                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, DUE_DATE_=?, BIZ_TASK_ID_=?, "
                     + "BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?",
                 args);
         } catch (Exception e) {

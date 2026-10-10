@@ -15,5 +15,9 @@ blade:
   workflow:
     timeout-from-bpmn:
       enabled: true
-    timeout-scan-ms: 60000
+    timeout-scan-ms: 10000
+    # P3-6 超时扫描源已切 ACT_RU_TASK.DUE_DATE_，而该列由任务双写收口器(WfTaskActWriter)填充；
+    # 双写默认关会导致真实待办永远不被超时扫描命中。联调/运行必须开启（与扫描源强耦合）。
+    task-act-write:
+      enabled: true
 

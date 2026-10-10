@@ -69,28 +69,29 @@ public class NoticeConfigController extends BladeController {
 	}
 
 	/**
-	 * 恢复接收（删行 = 回到默认接收）
+	 * 恢复接收（物理删行 = 回到默认接收）
 	 */
 	@PostMapping("/reset")
-	@Operation(summary = "恢复接收", description = "删除当前用户对该 flowKey 的配置行（回到默认接收）")
+	@Operation(summary = "恢复接收", description = "物理删除当前用户对该 flowKey 的配置行（回到默认接收）")
 	public R<Boolean> reset(@RequestParam String flowKey, BladeUser user) {
-		noticeConfigMapper.delete(Wrappers.<NoticeConfig>lambdaQuery()
-			.eq(NoticeConfig::getUserId, user.getUserId())
-			.eq(NoticeConfig::getFlowKey, flowKey));
+		noticeConfigMapper.physicalDelete(user.getUserId(), flowKey);
 		return R.success("已恢复接收");
 	}
 
+	/**
+	 * upsert：把 (user_id, flow_key) 收敛到同一行，避免逻辑删除残留行与唯一索引冲突。
+	 * <ul>
+	 *   <li>存在任意行（含 is_deleted=1 的幽灵行）→ 重新激活（置 enabled、清 is_deleted）；</li>
+	 *   <li>不存在 → 插入新行（enabled=0 表示屏蔽）。</li>
+	 * </ul>
+	 */
 	private boolean upsert(BladeUser user, String flowKey, int enabled) {
 		if (flowKey == null || flowKey.isBlank()) {
 			return false;
 		}
-		NoticeConfig exist = noticeConfigMapper.selectOne(Wrappers.<NoticeConfig>lambdaQuery()
-			.eq(NoticeConfig::getUserId, user.getUserId())
-			.eq(NoticeConfig::getFlowKey, flowKey)
-			.last("LIMIT 1"));
+		NoticeConfig exist = noticeConfigMapper.selectByUserAndFlow(user.getUserId(), flowKey);
 		if (exist != null) {
-			exist.setEnabled(enabled);
-			return noticeConfigMapper.updateById(exist) > 0;
+			return noticeConfigMapper.reactivate(exist.getId(), enabled, user.getUserId()) > 0;
 		}
 		NoticeConfig config = new NoticeConfig();
 		config.setUserId(user.getUserId());
