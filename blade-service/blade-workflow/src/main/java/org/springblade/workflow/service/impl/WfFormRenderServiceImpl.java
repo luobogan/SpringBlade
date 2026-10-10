@@ -446,14 +446,25 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         // 1. 节点必填字段校验
         List<String> missing = new ArrayList<>();
         List<FieldPermVO> perms = permService.getFieldPerm(defId, nodeKey);
+        // 幽灵必填过滤：表单改版（删除/改名/未铺某字段）后，流程定义的字段权限矩阵可能残留旧字段。
+        // 这类字段用户在表单里永远填不了，按缺失拦截会造成死锁（测试页与正式提交都过不去）。
+        // → 必填校验只对「布局中真实存在的字段」生效；权限矩阵里的幽灵字段跳过并记 warn。
+        // 布局读取失败/为空时不过滤（保持原行为，fail-safe）。
+        Set<String> layoutFields = layoutFieldNames(resolveFormIdQuiet(defId), nodeKey);
         for (FieldPermVO perm : perms) {
             // 必填判定：优先用三维度的 required（权威值）；仅当它缺省时才回退到 perm 兼容列
             boolean required = perm.getRequired() != null
                 ? perm.getRequired()
                 : (perm.getPerm() != null && perm.getPerm() == PERM_REQUIRED);
             if (required) {
-                if (isEmpty(dto.getFormData().get(perm.getFieldName()))) {
-                    missing.add(perm.getFieldName());
+                String fieldName = perm.getFieldName();
+                if (!layoutFields.isEmpty() && !layoutFields.contains(fieldName)) {
+                    log.warn("[blade-workflow] 字段权限要求必填，但表单布局无此字段，跳过校验. defId={}, nodeKey={}, field={}",
+                        defId, nodeKey, fieldName);
+                    continue;
+                }
+                if (isEmpty(dto.getFormData().get(fieldName))) {
+                    missing.add(fieldName);
                 }
             }
         }
@@ -475,6 +486,84 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             throw new ServiceException("以下字段为必填： " + String.join("、", missing));
         }
         return true;
+    }
+
+    /** 解析定义关联的表单ID（读不到返回 null，不抛异常） */
+    private Long resolveFormIdQuiet(Long defId) {
+        if (defId == null) {
+            return null;
+        }
+        WfProcessDefinition def = defMapper.selectById(defId);
+        return def == null ? null : def.getFormId();
+    }
+
+    /**
+     * 节点布局中真实存在的字段名集合（主表字段 + {@code dt{i}__} 前缀的明细字段）。
+     *
+     * <p>供必填校验做「幽灵字段」过滤：权限矩阵里残留、布局中已不存在的字段不可能被填写。
+     * 布局读取失败/为空时返回空集合，调用方据此跳过过滤（保持原行为，fail-safe）。</p>
+     */
+    private Set<String> layoutFieldNames(Long formId, String nodeKey) {
+        Set<String> names = new HashSet<>();
+        if (formId == null || nodeKey == null || nodeKey.isEmpty()) {
+            return names;
+        }
+        try {
+            R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
+                formmodeClient.getFormLayout(formId, 0, nodeKey);
+            if (layoutResult == null || !layoutResult.isSuccess() || layoutResult.getData() == null) {
+                return names;
+            }
+            String layoutJson = layoutResult.getData().getLayoutJson();
+            if (layoutJson == null || layoutJson.isEmpty()) {
+                return names;
+            }
+            JsonNode root = OBJECT_MAPPER.readTree(layoutJson);
+            collectLayoutFieldNames(root.get("sheets"), "", names);
+            JsonNode dts = root.get("detailTables");
+            if (dts != null && dts.isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> it = dts.fields();
+                while (it.hasNext()) {
+                    Map.Entry<String, JsonNode> en = it.next();
+                    collectLayoutFieldNames(en.getValue().get("sheets"), "dt" + en.getKey() + "__", names);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 读取表单布局字段失败，必填校验按权限矩阵全量执行. formId={}, nodeKey={}", formId, nodeKey, e);
+            names.clear();
+        }
+        return names;
+    }
+
+    /** 遍历布局 sheets.cellData，收集 fieldMeta.fieldName（带明细表前缀） */
+    private void collectLayoutFieldNames(JsonNode sheetsNode, String prefix, Set<String> out) {
+        if (sheetsNode == null || !sheetsNode.isObject()) {
+            return;
+        }
+        Iterator<Map.Entry<String, JsonNode>> it = sheetsNode.fields();
+        while (it.hasNext()) {
+            JsonNode cellData = it.next().getValue().get("cellData");
+            if (cellData == null || !cellData.isObject()) {
+                continue;
+            }
+            Iterator<Map.Entry<String, JsonNode>> rows = cellData.fields();
+            while (rows.hasNext()) {
+                JsonNode row = rows.next().getValue();
+                if (row == null || !row.isObject()) {
+                    continue;
+                }
+                Iterator<Map.Entry<String, JsonNode>> cells = row.fields();
+                while (cells.hasNext()) {
+                    JsonNode meta = cells.next().getValue().get("fieldMeta");
+                    if (meta != null && meta.isObject()) {
+                        JsonNode fn = meta.get("fieldName");
+                        if (fn != null && fn.isTextual() && !fn.asText().isEmpty()) {
+                            out.add(prefix + fn.asText());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**

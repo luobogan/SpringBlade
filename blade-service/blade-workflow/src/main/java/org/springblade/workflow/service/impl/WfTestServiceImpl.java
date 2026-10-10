@@ -446,6 +446,15 @@ public class WfTestServiceImpl implements IWfTestService {
         List<Scenario> list = new ArrayList<>();
         Map<String, Object> base = dto.getFormData() == null
             ? new LinkedHashMap<>() : new LinkedHashMap<>(dto.getFormData());
+        // 主场景兜底：网关条件变量用户未填写时，用「条件反推样本值」自动补齐（putIfAbsent 不覆盖已填值）。
+        // 否则引擎在排他网关求值时报 Unknown property（如 ${eeramt <= 5000} 缺 eeramt），一键测试被中断。
+        for (WfNodeLink l : links) {
+            String expr = l.getConditionExpr();
+            if (expr == null || expr.isBlank()) {
+                continue;
+            }
+            deriveValues(expr).forEach(base::putIfAbsent);
+        }
         list.add(new Scenario("主场景（表单填写值）", base));
         if (!Boolean.TRUE.equals(dto.getCoverBranches())) {
             return list;
@@ -1609,6 +1618,19 @@ public class WfTestServiceImpl implements IWfTestService {
             variables.putAll(submitted);
             saveSnapshot(instId, inst.getCurrentNodeKey(), variables);
         }
+        // 网关条件变量兜底（与 run() 分支场景同源反推）：交互式/自动测试未填的条件变量自动补样本值
+        // （putIfAbsent 不覆盖已填值）。否则引擎在排他网关求值时报 Unknown property（如 ${eeramt <= 5000}），
+        // 自动测试被中断；且该异常不含「必填」字样，前端的「必填阻塞提示+继续」流程无法触发。
+        WfProcessDefinition stepDef = defMapper.selectById(inst.getDefId());
+        if (stepDef != null) {
+            for (WfNodeLink l : loadTestLinks(stepDef)) {
+                String expr = l.getConditionExpr();
+                if (expr == null || expr.isBlank()) {
+                    continue;
+                }
+                deriveValues(expr).forEach(variables::putIfAbsent);
+            }
+        }
 
         List<WfTask> todos = pendingTestTasks(instId);
         if (todos.isEmpty()) {
@@ -1727,17 +1749,17 @@ public class WfTestServiceImpl implements IWfTestService {
             // complete、且不建 wf_task 行 → 其表单只在本实例「首次提交」时才有机会校验，
             // 否则创建节点必填未填会被静默放过（假通过）。
             // 判据：该实例尚无「已办」任务（即当前是首次提交）；校验值用本次提交的表单值（含快照兜底）。
-            // 注：firstNode 已在外层取好（同一提交内复用）。
+            // 双口径与 run() 的 startNodeRequiredError 同源（①字段权限矩阵 ②布局必填）：
+            // 此前只查布局必填，漏掉权限矩阵（perm=必填）标记的列（如 flowno/reqdate）→
+            // 自动测试首步假通过、直到网关求值才崩，前端「必填阻塞提示+继续」因此失效。
             if (firstNode != null && !firstNode.getNodeKey().equals(t.getNodeKey())) {
                 Long doneCount = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
                     .eq(WfTask::getInstId, instId)
                     .eq(WfTask::getStatus, WfTask.STATUS_DONE));
                 if (doneCount == null || doneCount == 0) {
-                    List<String> firstMissing = new ArrayList<>();
-                    collectLayoutRequired(inst.getFormId(), firstNode.getNodeKey(), variables, firstMissing);
-                    if (!firstMissing.isEmpty()) {
-                        throw new ServiceException("开始节点【" + firstNode.getNodeName()
-                            + "】表单必填未填： " + String.join("、", firstMissing));
+                    String startErr = startNodeRequiredError(stepDef, variables);
+                    if (startErr != null) {
+                        throw new ServiceException(startErr);
                     }
                 }
             }
