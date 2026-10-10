@@ -216,7 +216,7 @@ public class WfTestServiceImpl implements IWfTestService {
             int idx = 0;
             for (Scenario sc : scenarios) {
                 idx++;
-                SingleRun sr = runSingle(def, deploymentId, testUserId, sc, fmt, logLines, idx, nodeList, links);
+                SingleRun sr = runSingle(def, deploymentId, testUserId, sc, fmt, logLines, idx, nodeList, links, dto.getFormData());
                 sr.nodeTimes.forEach((k, v) -> nodeTimesUnion.merge(k, v, Integer::sum));
                 visitedUnion.addAll(sr.visitedNodes);
                 sr.linkTimes.forEach((k, v) -> linkTimesUnion.merge(k, v, Integer::sum));
@@ -267,7 +267,7 @@ public class WfTestServiceImpl implements IWfTestService {
     /** 单个场景：真实发起一个测试态实例并自动驱动到结束，返回该场景的覆盖数据 */
     private SingleRun runSingle(WfProcessDefinition def, String deploymentId, Long testUserId,
             Scenario sc, SimpleDateFormat fmt, List<String> logLines, int idx,
-            List<WfProcessNode> nodeList, List<WfNodeLink> links) {
+            List<WfProcessNode> nodeList, List<WfNodeLink> links, Map<String, Object> userFormData) {
         SingleRun sr = new SingleRun();
         Long defId = def.getId();
         try {
@@ -291,8 +291,11 @@ public class WfTestServiceImpl implements IWfTestService {
             }
             // 创建节点（nodeType=0）必填校验（发起前）：创建节点已是 UserTask 真实等待态，但方案B 下
             // instanceService.start 内部由 completeStarterCreateTask **程序立即 complete** 该任务、
-            // 不建 wf_task 待办行 → 它不会进入待办循环，必须在此用场景表单值校验，否则必填未填被放过（假通过）。
-            String startErr = startNodeRequiredError(def, sc.formData);
+            // 不建 wf_task 待办行 → 它不会进入待办循环，必须在此校验，否则必填未填被放过（假通过）。
+            // ⚠️ 主场景用「用户原始填值」(userFormData) 而非 sc.formData：sc.formData 已被 deriveValues
+            // 注入网关条件变量样本值（如 eeramt=5000），若直接用会被误判为「已填写」，绕过金额等必填拦截。
+            // 分支场景(isMain=false)仍用 sc.formData（其注入值是故意填的分支条件，应算已填）。
+            String startErr = startNodeRequiredError(def, sc.isMain ? userFormData : sc.formData);
             if (startErr != null) {
                 WfProcessNode sn = firstNodeOf(defId);
                 String snKey = sn == null ? "start" : sn.getNodeKey();
@@ -455,7 +458,7 @@ public class WfTestServiceImpl implements IWfTestService {
             }
             deriveValues(expr).forEach(base::putIfAbsent);
         }
-        list.add(new Scenario("主场景（表单填写值）", base));
+        list.add(new Scenario("主场景（表单填写值）", base, true));
         if (!Boolean.TRUE.equals(dto.getCoverBranches())) {
             return list;
         }
@@ -473,7 +476,7 @@ public class WfTestServiceImpl implements IWfTestService {
             Map<String, Object> merged = new LinkedHashMap<>(base);
             merged.putAll(derived);
             if (seen.add(JsonUtil.toJson(merged))) {
-                list.add(new Scenario("分支覆盖：" + abbreviate(expr), merged));
+                list.add(new Scenario("分支覆盖：" + abbreviate(expr), merged, false));
             }
         }
         return list;
@@ -628,9 +631,13 @@ public class WfTestServiceImpl implements IWfTestService {
     private static class Scenario {
         final String label;
         final Map<String, Object> formData;
-        Scenario(String label, Map<String, Object> formData) {
+        /** 是否主场景：主场景的「网关条件变量兜底」只是防引擎崩溃的占位值，不应算用户已填写，
+         *  故主场景必填校验基于用户原始填值（dto.formData）；分支场景的注入值是故意填的分支条件，算已填。 */
+        final boolean isMain;
+        Scenario(String label, Map<String, Object> formData, boolean isMain) {
             this.label = label;
             this.formData = formData;
+            this.isMain = isMain;
         }
     }
 
@@ -1618,19 +1625,10 @@ public class WfTestServiceImpl implements IWfTestService {
             variables.putAll(submitted);
             saveSnapshot(instId, inst.getCurrentNodeKey(), variables);
         }
-        // 网关条件变量兜底（与 run() 分支场景同源反推）：交互式/自动测试未填的条件变量自动补样本值
-        // （putIfAbsent 不覆盖已填值）。否则引擎在排他网关求值时报 Unknown property（如 ${eeramt <= 5000}），
-        // 自动测试被中断；且该异常不含「必填」字样，前端的「必填阻塞提示+继续」流程无法触发。
+        // 网关条件变量兜底（deriveValues 反推样本值）仅用于「引擎推进时」驱动排他网关求值，
+        // 避免 Unknown property；它**不参与**必填校验（见下方 autoApprove 前注入），
+        // 否则会被误判为「用户已填写」，绕过金额等字段的必填拦截。
         WfProcessDefinition stepDef = defMapper.selectById(inst.getDefId());
-        if (stepDef != null) {
-            for (WfNodeLink l : loadTestLinks(stepDef)) {
-                String expr = l.getConditionExpr();
-                if (expr == null || expr.isBlank()) {
-                    continue;
-                }
-                deriveValues(expr).forEach(variables::putIfAbsent);
-            }
-        }
 
         List<WfTask> todos = pendingTestTasks(instId);
         if (todos.isEmpty()) {
@@ -1761,6 +1759,19 @@ public class WfTestServiceImpl implements IWfTestService {
                     if (startErr != null) {
                         throw new ServiceException(startErr);
                     }
+                }
+            }
+            // 引擎推进前才注入网关条件变量兜底（仅给 autoApprove 的引擎变量用）：
+            // 未填的条件变量（如 eeramt）补样本值，避免排他网关求值报 Unknown property。
+            // 必须放在所有必填校验之后——否则样本值会被 startNodeRequiredError/validate 当成
+            // 「用户已填写」，绕过金额等字段的必填拦截（本轮 bug）。
+            if (stepDef != null) {
+                for (WfNodeLink l : loadTestLinks(stepDef)) {
+                    String expr = l.getConditionExpr();
+                    if (expr == null || expr.isBlank()) {
+                        continue;
+                    }
+                    deriveValues(expr).forEach(variables::putIfAbsent);
                 }
             }
             // 以节点「接收人」身份审批（skip 操作菜单），但保留「意见必填」「字段校验」等业务规则
