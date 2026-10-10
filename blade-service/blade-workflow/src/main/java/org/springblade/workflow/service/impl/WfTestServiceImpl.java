@@ -371,7 +371,12 @@ public class WfTestServiceImpl implements IWfTestService {
                 appendArrival(logLines, fmt, new Date(), nodeName(nodeList, curNodeKey), ops, started);
                 appendNodeSubmit(logLines, fmt, new Date(), nodeName(nodeList, curNodeKey), approvedOps);
                 lastNodeKey = curNodeKey;
-                for (WfTask t : todos) {
+                // 每轮只推进 todos 的第一个待办（对齐上方「只 approve 掉 todos 的第一人」的设计意图）。
+                // 原因：或签/单人节点在首人提交后节点即完成、实例可能直接结束；此时同批其余任务已被
+                // 引擎关闭，继续提交会命中 requireTodoTask 的「任务已办结」校验，抛出
+                // 「本页已过期：该流程已归档结束」并中断整个测试。会签场景由 while 下一轮继续推进。
+                {
+                    WfTask t = todos.get(0);
                     try {
                         // 模拟真实审批提交：节点必填矩阵校验（与 ExcelPreviewPage 提交前 validateForm 同款口径）。
                         // 否则表单必填项未填写也能被系统自动通过推进，测试会「假通过」。
