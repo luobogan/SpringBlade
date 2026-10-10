@@ -75,6 +75,13 @@ public class Message extends TenantEntity {
 	private Integer category;
 
 	/**
+	 * 通知业务状态（仅 category=2 流程通知）：NULL=待处理/进行中，
+	 * 1=已处理（待办已被办理，审批同意时回写），2=已办结（流程结束通知自带）
+	 */
+	@Schema(description = "通知业务状态 NULL=待处理 1=已处理 2=已办结")
+	private Integer bizState;
+
+	/**
 	 * 内容
 	 */
 	@Schema(description = "内容")

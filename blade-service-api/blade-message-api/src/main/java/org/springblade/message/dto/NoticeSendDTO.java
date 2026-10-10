@@ -73,4 +73,18 @@ public class NoticeSendDTO implements Serializable {
 	@Schema(description = "业务引用ID（字符串防精度丢失）")
 	private String bizRefId;
 
+	/**
+	 * 通知业务状态（可选）：NULL=待处理 1=已处理 2=已办结（办结通知自带 2）。
+	 * 常量取值见 {@link org.springblade.message.constant.MessageConstant}。
+	 */
+	@Schema(description = "通知业务状态 NULL=待处理 1=已处理 2=已办结")
+	private Integer bizState;
+
+	/**
+	 * 流程定义 key（proc_key，三期 T11.1）：发送侧按用户级提醒配置过滤的依据，
+	 * 缺省视为不过滤（全部送达）
+	 */
+	@Schema(description = "流程定义key（proc_key，用户级提醒过滤依据）")
+	private String flowKey;
+
 }

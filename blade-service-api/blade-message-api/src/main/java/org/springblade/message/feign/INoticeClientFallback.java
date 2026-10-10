@@ -16,6 +16,7 @@
 package org.springblade.message.feign;
 
 import org.springblade.core.tool.api.R;
+import org.springblade.message.dto.NoticeBizStateDTO;
 import org.springblade.message.dto.NoticeSendDTO;
 import org.springframework.stereotype.Component;
 
@@ -32,6 +33,11 @@ public class INoticeClientFallback implements INoticeClient {
 
 	@Override
 	public R<Boolean> sendToUsers(NoticeSendDTO dto) {
+		return R.fail("消息中心服务暂不可用");
+	}
+
+	@Override
+	public R<Boolean> markBizState(NoticeBizStateDTO dto) {
 		return R.fail("消息中心服务暂不可用");
 	}
 

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS `blade_message`
     `sender_id`       BIGINT       NOT NULL COMMENT '发送人（blade_user.id）',
     `content_type`    INT          NOT NULL DEFAULT 1 COMMENT '内容类型 1文本 2富文本 3附件 4流程引用',
     `category`        INT          NOT NULL DEFAULT 1 COMMENT '消息分类 1=聊天 2=流程通知',
+    `biz_state`       INT          NULL COMMENT '通知业务状态 NULL=待处理 1=已处理 2=已办结',
     `content`         VARCHAR(2000) NULL COMMENT '内容',
     `quote_message_id` BIGINT      NULL COMMENT '引用消息ID',
     `biz_ref_type`    VARCHAR(30)  NULL COMMENT '业务引用类型（WF_INSTANCE/WF_TASK）',

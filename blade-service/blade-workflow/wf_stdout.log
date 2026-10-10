@@ -1,0 +1,344 @@
+----�����У���ȡ���Ļ�������:[dev]��jar��ַ:[nested:/D:/project/springbladeandreact/SpringBlade/blade-service/blade-workflow/target/blade-workflow.jar/]----
+00:55:46.385 [main] INFO com.alibaba.nacos.client.utils.ClientBasicParamUtil -- [settings] [req-serv] nacos-server port:8848
+00:55:46.391 [main] INFO com.alibaba.nacos.client.config.NacosConfigService -- Nacos client key init properties: 
+	serverAddr=127.0.0.1:8848
+	username=nacos
+	password=n***s
+
+00:55:46.403 [main] INFO com.alibaba.nacos.client.address.AbstractServerListManager -- Load and match ServerListProvider com.alibaba.nacos.client.address.EndpointServerListProvider, match result: false
+00:55:46.403 [main] INFO com.alibaba.nacos.client.address.AbstractServerListManager -- Load and match ServerListProvider com.alibaba.nacos.client.address.PropertiesListProvider, match result: true
+00:55:46.403 [main] INFO com.alibaba.nacos.client.address.AbstractServerListManager -- Will use com.alibaba.nacos.client.address.PropertiesListProvider as ServerListProvider
+00:55:46.408 [main] INFO com.alibaba.nacos.client.utils.ParamUtil -- [settings] [http-client] connect timeout:1000
+00:55:46.408 [main] INFO com.alibaba.nacos.client.utils.ParamUtil -- [settings] [http-client] read timeout:3000
+00:55:46.408 [main] INFO com.alibaba.nacos.client.utils.ParamUtil -- PER_TASK_CONFIG_SIZE: 3000.0
+00:55:46.447 [main] INFO com.alibaba.nacos.common.labels -- DefaultLabelsCollectorManager get labels.....
+00:55:46.447 [main] INFO com.alibaba.nacos.common.labels -- Process LabelsCollector with [name:defaultNacosLabelsCollector]
+00:55:46.447 [main] INFO com.alibaba.nacos.common.labels -- default nacos collect properties raw labels: null
+00:55:46.447 [main] INFO com.alibaba.nacos.common.labels -- default nacos collect properties labels: {}
+00:55:46.447 [main] INFO com.alibaba.nacos.common.labels -- default nacos collect jvm raw labels: null
+00:55:46.447 [main] INFO com.alibaba.nacos.common.labels -- default nacos collect jvm labels: {}
+00:55:46.448 [main] INFO com.alibaba.nacos.common.labels -- default nacos collect env raw labels: null
+00:55:46.448 [main] INFO com.alibaba.nacos.common.labels -- default nacos collect env labels: {}
+00:55:46.448 [main] INFO com.alibaba.nacos.common.labels -- DefaultLabelsCollectorManager get labels finished,labels :{}
+00:55:46.459 [main] INFO com.alibaba.nacos.plugin.auth.spi.client.ClientAuthPluginManager -- [ClientAuthPluginManager] Load ClientAuthService com.alibaba.nacos.client.auth.impl.NacosClientAuthServiceImpl success.
+00:55:46.459 [main] INFO com.alibaba.nacos.plugin.auth.spi.client.ClientAuthPluginManager -- [ClientAuthPluginManager] Load ClientAuthService com.alibaba.nacos.client.auth.ram.RamClientAuthServiceImpl success.
+00:55:46.459 [main] INFO com.alibaba.nacos.plugin.auth.spi.client.ClientAuthPluginManager -- [ClientAuthPluginManager] Load ClientAuthService com.alibaba.nacos.client.auth.oidc.OidcClientAuthServiceImpl success.
+00:55:46.595 [Thread-2] INFO com.alibaba.nacos.client.auth.ram.identify.CredentialWatcher -- null No credential found
+00:55:46.626 [main] INFO com.alibaba.nacos.client.config.impl.Limiter -- limitTime:5.0
+00:55:46.775 [main] INFO com.alibaba.nacos.client.config.impl.LocalConfigInfoProcessor -- LOCAL_SNAPSHOT_PATH:C:\Users\Administrator\nacos\config
+00:55:46.783 [main] INFO com.alibaba.nacos.common.remote.client -- [RpcClientFactory] create a new rpc client of 69bcc593-62ce-4894-af49-677d772c3b4a_config-0
+00:55:46.815 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Register server push request handler:com.alibaba.nacos.client.config.impl.ClientWorker$ConfigRpcTransportClient$$Lambda/0x000001e582240ad8
+00:55:46.815 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Register server push request handler:com.alibaba.nacos.client.config.impl.ClientWorker$ConfigRpcTransportClient$$Lambda/0x000001e582240ee8
+00:55:46.815 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Register server push request handler:com.alibaba.nacos.client.config.impl.ClientFuzzyWatchNotifyRequestHandler
+00:55:46.815 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Registry connection listener to current client:com.alibaba.nacos.client.config.impl.ClientWorker$ConfigRpcTransportClient$1
+00:55:46.816 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] RpcClient init, ServerListFactory = com.alibaba.nacos.client.config.impl.ClientWorker$ConfigRpcTransportClient$2
+00:55:46.817 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Try to connect to server on start up, server: {serverIp = '127.0.0.1', server main port = 8848}
+00:55:46.850 [main] INFO com.alibaba.nacos.common.remote.client.grpc.GrpcClient -- grpc client connection server: 127.0.0.1 ip, serverPort: 9848, grpcTslConfig: {"enableTls":false,"mutualAuthEnable":false,"trustAll":true}
+00:55:47.371 [main] INFO com.alibaba.nacos.common.ability.AbstractAbilityControlManager -- Ready to get current node abilities...
+00:55:47.373 [main] INFO com.alibaba.nacos.common.ability.AbstractAbilityControlManager -- Ready to initialize current node abilities, support modes: [SDK_CLIENT]
+00:55:47.374 [main] INFO com.alibaba.nacos.common.ability.AbstractAbilityControlManager -- Initialize current abilities finish...
+00:55:47.375 [main] INFO com.alibaba.nacos.common.ability.discover.NacosAbilityManagerHolder -- [AbilityControlManager] Successfully initialize AbilityControlManager
+00:55:47.399 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Success to connect to server [127.0.0.1:8848] on start up, connectionId = 1791564947294_127.0.0.1_55178
+00:55:47.399 [com.alibaba.nacos.client.remote.worker.0] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Notify connected event to listeners.
+00:55:47.399 [com.alibaba.nacos.client.remote.worker.0] INFO com.alibaba.nacos.client.config.impl.ClientWorker -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Connected,notify listen context...
+00:55:47.400 [com.alibaba.nacos.client.remote.worker.0] INFO com.alibaba.nacos.client.config.impl.ClientWorker -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Connected,notify fuzzy listen context...
+00:55:47.400 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Register server push request handler:com.alibaba.nacos.common.remote.client.RpcClient$ConnectResetRequestHandler
+00:55:47.400 [main] INFO com.alibaba.nacos.common.remote.client -- [69bcc593-62ce-4894-af49-677d772c3b4a_config-0] Register server push request handler:com.alibaba.nacos.common.remote.client.RpcClient$$Lambda/0x000001e58238b4b0
+00:55:47.466 [main] INFO com.alibaba.nacos.client.config.utils.JvmUtil -- isMultiInstance:false
+INFO: Sentinel log output type is: file
+INFO: Sentinel log charset is: utf-8
+INFO: Sentinel log base directory is: C:\Users\Administrator\logs\csp\
+INFO: Sentinel log name use pid is: false
+INFO: Sentinel log level is: INFO
+2026-10-10 00:55:47.985  WARN 21180 --- [           main] c.a.c.n.c.NacosConfigDataLoader          : [Nacos Config] config[dataId=blade-workflow-dev.yaml, group=DEFAULT_GROUP] is empty
+2026-10-10 00:55:47.986  INFO 21180 --- [           main] c.a.c.n.c.NacosConfigDataLoader          : [Nacos Config] Load config[dataId=blade-dev.yaml, group=DEFAULT_GROUP] success
+2026-10-10 00:55:47.986  INFO 21180 --- [           main] c.a.c.n.c.NacosConfigDataLoader          : [Nacos Config] Load config[dataId=blade.yaml, group=DEFAULT_GROUP] success
+2026-10-10 00:55:48.094  INFO 21180 --- [kground-preinit] o.h.validator.internal.util.Version      : HV000001: Hibernate Validator 9.1.3.Final
+ _____               _                 ______  _             _
+/  ___|             (_)                | ___ \| |           | |
+\ `--.  _ __   _ __  _  _ __    __ _   | |_/ /| |  __ _   __| |  ___
+ `--. \| '_ \ | '__|| || '_ \  / _` |  | ___ \| | / _` | / _` | / _ \
+/\__/ /| |_) || |   | || | | || (_| |  | |_/ /| || (_| || (_| ||  __/
+\____/ | .__/ |_|   |_||_| |_| \__, |  \____/ |_| \__,_| \__,_| \___|
+       | |                      __/ |
+       |_|                     |___/
+
+:: SpringBlade :: blade-workflow:dev :: Running SpringBoot 4.1.1 :: 
+
+2026-10-10 00:55:48.525  INFO 21180 --- [           main] o.s.workflow.WorkflowApplication         : The following 1 profile is active: "dev"
+2026-10-10 00:55:48.548  WARN 21180 --- [           main] c.a.c.n.c.NacosConfigDataLoader          : [Nacos Config] config[dataId=blade-workflow-dev.yaml, group=DEFAULT_GROUP] is empty
+2026-10-10 00:55:48.548  INFO 21180 --- [           main] c.a.c.n.c.NacosConfigDataLoader          : [Nacos Config] Load config[dataId=blade-dev.yaml, group=DEFAULT_GROUP] success
+2026-10-10 00:55:48.548  INFO 21180 --- [           main] c.a.c.n.c.NacosConfigDataLoader          : [Nacos Config] Load config[dataId=blade.yaml, group=DEFAULT_GROUP] success
+2026-10-10 00:55:50.203  INFO 21180 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Multiple Spring Data modules found, entering strict repository configuration mode
+2026-10-10 00:55:50.207  INFO 21180 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data Redis repositories in DEFAULT mode.
+2026-10-10 00:55:50.239  INFO 21180 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 11 ms. Found 0 Redis repository interfaces.
+2026-10-10 00:55:50.687  INFO 21180 --- [           main] o.s.cloud.context.scope.GenericScope     : BeanFactory id=d765d22b-6eaa-3d30-8837-f24e43da477c
+2026-10-10 00:55:50.689  INFO 21180 --- [           main] s.c.l.p.BladePropertySourcePostProcessor : BladePropertySourcePostProcessor init.
+2026-10-10 00:55:50.746  INFO 21180 --- [           main] s.c.l.p.BladePropertySourcePostProcessor : BladePropertySourcePostProcessor process @BladePropertySource bean.
+2026-10-10 00:55:51.806  INFO 21180 --- [           main] o.s.boot.tomcat.TomcatWebServer          : Tomcat initialized with port 8111 (http)
+2026-10-10 00:55:51.828  INFO 21180 --- [           main] o.a.coyote.http11.Http11NioProtocol      : Initializing ProtocolHandler ["http-nio-8111"]
+2026-10-10 00:55:51.830  INFO 21180 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-10-10 00:55:51.830  INFO 21180 --- [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/11.0.24]
+2026-10-10 00:55:51.877  INFO 21180 --- [           main] b.w.c.s.WebApplicationContextInitializer : Root WebApplicationContext: initialization completed in 3329 ms
+2026-10-10 00:55:52.357  INFO 21180 --- [           main] c.a.d.s.b.a.DruidDataSourceAutoConfigure : Init DruidDataSource
+2026-10-10 00:55:52.848  INFO 21180 --- [           main] com.alibaba.druid.pool.DruidDataSource   : {dataSource-1} inited
+2026-10-10 00:55:54.240  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] [映射自检] catalog=blade | databaseSchemaUpdate=true | 引擎期望版本=null | 库实际版本=8.1.0.1 | 结论: 引擎版本未知，无法比对（请检查 flowable-engine 依赖）
+2026-10-10 00:55:54.241  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] [映射自检] schema.history=create(7.1.0.2)
+2026-10-10 00:55:54.721  INFO 21180 --- [           main] o.s.c.openfeign.FeignClientFactoryBean   : For 'blade-system' URL not provided. Will try picking an instance via load-balancing.
+2026-10-10 00:55:54.820  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] 已注册方案C 台账事件监听 WfEngineEventListener（ledger-listener.enabled=true）
+2026-10-10 00:55:54.820  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] 已注册 P3 业务回调监听 WfBizCallbackListener（biz-callback.enabled=true）
+2026-10-10 00:55:54.820  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] 已注册 MI 空集合守卫监听 WfMiEmptyGuardListener（mi-empty-guard.enabled=true）
+2026-10-10 00:55:54.842  INFO 21180 --- [           main] o.s.c.openfeign.FeignClientFactoryBean   : For 'blade-message' URL not provided. Will try picking an instance via load-balancing.
+2026-10-10 00:55:54.853  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] 已注册流程消息通知监听 WfProcessNoticeListener（notice.enabled=true）
+2026-10-10 00:55:55.064  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : Found 2 Engine Configurators in total:
+2026-10-10 00:55:55.064  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : class org.flowable.eventregistry.spring.configurator.SpringEventRegistryConfigurator (priority:100000)
+2026-10-10 00:55:55.064  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : class org.flowable.idm.engine.configurator.IdmEngineConfigurator (priority:150000)
+2026-10-10 00:55:55.064  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : Executing beforeInit() of class org.flowable.eventregistry.spring.configurator.SpringEventRegistryConfigurator (priority:100000)
+2026-10-10 00:55:55.072  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : Executing beforeInit() of class org.flowable.idm.engine.configurator.IdmEngineConfigurator (priority:150000)
+2026-10-10 00:55:56.195  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Creating thread pool queue of size 100
+2026-10-10 00:55:56.195  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Creating thread factory with naming pattern flowable-async-task-invoker-thread-%d
+2026-10-10 00:55:56.197  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Creating executor service with corePoolSize 8, maxPoolSize 8 and keepAliveTime 5000
+2026-10-10 00:55:56.197  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Using rejectedExecutionHandler java.util.concurrent.ThreadPoolExecutor$CallerRunsPolicy@5c10216f
+2026-10-10 00:55:56.197  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Creating thread pool queue of size 2048
+2026-10-10 00:55:56.197  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Creating thread factory with naming pattern flowable-async-job-executor-thread-%d
+2026-10-10 00:55:56.198  INFO 21180 --- [           main] o.f.c.e.i.a.DefaultAsyncTaskExecutor     : Creating executor service with corePoolSize 8, maxPoolSize 8 and keepAliveTime 5000
+2026-10-10 00:55:56.200  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : Executing configure() of class org.flowable.eventregistry.spring.configurator.SpringEventRegistryConfigurator (priority:100000)
+2026-10-10 00:55:56.249  INFO 21180 --- [           main] o.f.e.impl.EventRegistryEngineImpl       : EventRegistryEngine default created
+2026-10-10 00:55:56.250  INFO 21180 --- [           main] o.f.s.SpringProcessEngineConfiguration   : Executing configure() of class org.flowable.idm.engine.configurator.IdmEngineConfigurator (priority:150000)
+2026-10-10 00:55:56.269  INFO 21180 --- [           main] o.f.idm.engine.impl.IdmEngineImpl        : IdmEngine default created
+2026-10-10 00:55:56.647  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select VALUE_ from ACT_GE_PROPERTY where NAME_ = 'common.schema.version'
+============ Sql Execute Time: 0.356ms ===========
+
+2026-10-10 00:55:56.677  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select * from ACT_GE_PROPERTY where NAME_ = 'schema.version'
+============ Sql Execute Time: 2.191ms ===========
+
+2026-10-10 00:55:56.686  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select VALUE_ from ACT_ID_PROPERTY where NAME_ = 'schema.version'
+============ Sql Execute Time: 0.433ms ===========
+
+2026-10-10 00:55:56.690  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select VALUE_ from ACT_GE_PROPERTY where NAME_ = 'eventregistry.schema.version'
+============ Sql Execute Time: 0.359ms ===========
+
+2026-10-10 00:55:56.702  INFO 21180 --- [           main] o.f.engine.impl.ProcessEngineImpl        : ProcessEngine default created
+2026-10-10 00:55:56.746  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select count(RES.ID_) from ACT_RE_DEPLOYMENT RES where RES.ENGINE_VERSION_ = 'v5'
+============ Sql Execute Time: 0.576ms ===========
+
+2026-10-10 00:55:56.746  INFO 21180 --- [           main] o.f.e.impl.cmd.ValidateV5EntitiesCmd     : Total of v5 deployments found: 0
+2026-10-10 00:55:56.749  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select * from ACT_GE_PROPERTY where NAME_ = 'cfg.execution-related-entities-count'
+============ Sql Execute Time: 0.368ms ===========
+
+2026-10-10 00:55:56.751  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select * from ACT_GE_PROPERTY where NAME_ = 'cfg.task-related-entities-count'
+============ Sql Execute Time: 0.332ms ===========
+
+2026-10-10 00:55:56.754  INFO 21180 --- [           main] o.s.workflow.config.FlowableConfig       : [FlowableConfig] [引擎就绪] ProcessEngine 已成功构建 ✓ name=default | 引擎版本=未知
+2026-10-10 00:55:56.849  INFO 21180 --- [           main] o.s.c.openfeign.FeignClientFactoryBean   : For 'blade-system' URL not provided. Will try picking an instance via load-balancing.
+2026-10-10 00:55:56.884  INFO 21180 --- [           main] o.s.c.openfeign.FeignClientFactoryBean   : For 'blade-formmode' URL not provided. Will try picking an instance via load-balancing.
+2026-10-10 00:55:57.515  INFO 21180 --- [           main] o.s.c.openfeign.FeignClientFactoryBean   : For 'blade-log' URL not provided. Will try picking an instance via load-balancing.
+2026-10-10 00:55:57.582  INFO 21180 --- [           main] o.s.core.boot.config.RetryConfiguration  : configServerRetryInterceptor: Changing backOffOptions to initial: 1000, multiplier: 1.2, maxInterval: 5000
+2026-10-10 00:55:58.157  INFO 21180 --- [           main] o.s.core.log.logger.BladeLogger          : blade-workflow: BladeLogger init success!
+2026-10-10 00:55:58.215  INFO 21180 --- [           main] o.s.c.redis.pubsub.RedisPubSubPublisher  : RPubSubPublisher init success.
+2026-10-10 00:55:58.309  INFO 21180 --- [           main] c.a.c.sentinel.SentinelWebMvcConfigurer  : [Sentinel Starter] register SentinelWebInterceptor with urlPatterns: [/**].
+2026-10-10 00:55:58.484  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{DELETE [/definition/{id}/link/{linkId}]}" onto org.springblade.workflow.controller.WfDefinitionController#deleteLink(Long, Long)
+2026-10-10 00:55:58.484  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/form/render]}" onto org.springblade.workflow.controller.WfFormRenderController#render(Long, Long, String, boolean)
+2026-10-10 00:55:58.484  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/feign/client/instance/start]}" onto org.springblade.workflow.feign.WfInstanceClient#startProcess(StartProcessDTO)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/version/activate]}" onto org.springblade.workflow.controller.WfDefinitionController#activateVersion(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/form/validate]}" onto org.springblade.workflow.controller.WfFormRenderController#validate(ValidateDTO)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/test/{id}]}" onto org.springblade.workflow.controller.WfTestController#detail(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/test/state]}" onto org.springblade.workflow.controller.WfTestController#state(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/node/{nodeKey}/operator]}" onto org.springblade.workflow.controller.WfDefinitionController#configOperator(Long, String, NodeOperatorSaveDTO)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/instance/{id}/stop]}" onto org.springblade.workflow.controller.WfInstanceController#stop(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{DELETE [/definition/{id}]}" onto org.springblade.workflow.controller.WfDefinitionController#remove(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{DELETE [/instance/{id}/draft]}" onto org.springblade.workflow.controller.WfInstanceController#deleteDraft(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/migration/backfill]}" onto org.springblade.workflow.controller.WfMigrationController#backfill(boolean, Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{ [/error]}" onto org.springblade.core.log.error.BladeErrorController#error(HttpServletRequest)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/{id}/logs]}" onto org.springblade.workflow.controller.WfInstanceController#logs(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/custom-operation/default-sign/save]}" onto org.springblade.workflow.controller.WfCustomOperationController#saveDefaultSigns(Long, String, List)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/node/{nodeKey}/operator/sync]}" onto org.springblade.workflow.controller.WfDefinitionController#syncOperator(Long, String, List)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/browser/{type}]}" onto org.springblade.workflow.controller.WfDefinitionController#browserOptions(String, String)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/v3/api-docs/{group}], produces [application/json]}" onto org.springdoc.webmvc.api.MultipleOpenApiWebMvcResource#openapiJson(HttpServletRequest, String, String, Locale)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/simulate]}" onto org.springblade.workflow.controller.WfDefinitionController#simulate(Long, Map)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/view]}" onto org.springblade.workflow.controller.WfTaskController#view(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/add-sign]}" onto org.springblade.workflow.controller.WfTaskController#addSign(Long, AddSignDTO)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/monitor/count]}" onto org.springblade.workflow.controller.WfMonitorController#count(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/urge]}" onto org.springblade.workflow.controller.WfTaskController#urge(Long, UrgeDTO)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/custom-action/{id}]}" onto org.springblade.workflow.controller.WfCustomActionController#detail(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/node/{nodeKey}/detail-filter]}" onto org.springblade.workflow.controller.WfPermController#getDetailFilter(Long, String, Integer)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/links]}" onto org.springblade.workflow.controller.WfDefinitionController#links(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/node/{nodeKey}/detail-perm]}" onto org.springblade.workflow.controller.WfPermController#getDetailPerm(Long, String)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/{id}]}" onto org.springblade.workflow.controller.WfInstanceController#detail(Long)
+2026-10-10 00:55:58.485  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/{id}/progress]}" onto org.springblade.workflow.controller.WfInstanceController#progress(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/swagger-ui.html]}" onto org.springdoc.webmvc.ui.SwaggerWelcomeWebMvc#redirectToUi(HttpServletRequest)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/custom-operation/full]}" onto org.springblade.workflow.controller.WfCustomOperationController#full(Long, String)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/step]}" onto org.springblade.workflow.controller.WfTestController#step(WfTestStepDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/node/{nodeKey}/field-perm]}" onto org.springblade.workflow.controller.WfPermController#getFieldPerm(Long, String)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/instance/{id}/cancel]}" onto org.springblade.workflow.controller.WfInstanceController#cancel(Long, String)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/v3/api-docs.yaml], produces [application/vnd.oai.openapi]}" onto org.springdoc.webmvc.api.OpenApiWebMvcResource#openapiYaml(HttpServletRequest, String, Locale)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/instance/save-draft]}" onto org.springblade.workflow.controller.WfInstanceController#saveDraft(FormSaveDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/{id}/fresh]}" onto org.springblade.workflow.controller.WfInstanceController#fresh(Long, String, Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/bpmn]}" onto org.springblade.workflow.controller.WfDefinitionController#getBpmn(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/node/{nodeKey}/detail-filter]}" onto org.springblade.workflow.controller.WfPermController#saveDetailFilter(Long, String, DetailFilterSaveDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/deploy]}" onto org.springblade.workflow.controller.WfDefinitionController#deploy(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/node/{nodeKey}/detail-perm]}" onto org.springblade.workflow.controller.WfPermController#saveDetailPerm(Long, String, DetailPermSaveDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/reject]}" onto org.springblade.workflow.controller.WfTaskController#reject(Long, RejectDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/admin/redeploy-mi]}" onto org.springblade.workflow.controller.WfDefinitionController#redeployForMultiInstance(boolean, boolean)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/task/done]}" onto org.springblade.workflow.controller.WfTaskController#done(Long, String, Long, Long, Date, Date)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}]}" onto org.springblade.workflow.controller.WfDefinitionController#detail(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/version/diff]}" onto org.springblade.workflow.controller.WfDefinitionController#versionDiff(Long, Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/instance/{id}/resume]}" onto org.springblade.workflow.controller.WfInstanceController#resume(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/test/list]}" onto org.springblade.workflow.controller.WfTestController#list(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/node/{nodeKey}/field-perm]}" onto org.springblade.workflow.controller.WfPermController#saveFieldPerm(Long, String, FieldPermSaveDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/deploy-test]}" onto org.springblade.workflow.controller.WfDefinitionController#deployTest(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/custom-operation/list]}" onto org.springblade.workflow.controller.WfCustomOperationController#list(Long, String)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/instance/start]}" onto org.springblade.workflow.controller.WfInstanceController#start(StartProcessDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{DELETE [/test]}" onto org.springblade.workflow.controller.WfTestController#remove(List)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/nodes]}" onto org.springblade.workflow.controller.WfDefinitionController#nodes(Long)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/bpmn]}" onto org.springblade.workflow.controller.WfDefinitionController#saveBpmn(Long, BpmnSaveDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/{id}/snapshot/{nodeKey}]}" onto org.springblade.workflow.controller.WfInstanceController#snapshot(Long, String)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/monitor/ledger-shadow]}" onto org.springblade.workflow.controller.WfMonitorController#ledgerShadow()
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/v3/api-docs], produces [application/json]}" onto org.springdoc.webmvc.api.OpenApiWebMvcResource#openapiJson(HttpServletRequest, String, Locale)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}]}" onto org.springblade.workflow.controller.WfDefinitionController#update(Long, DefinitionSaveDTO)
+2026-10-10 00:55:58.486  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/node/{nodeKey}]}" onto org.springblade.workflow.controller.WfDefinitionController#updateNode(Long, String, WfProcessNode)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/import]}" onto org.springblade.workflow.controller.WfDefinitionController#importNew(DefinitionImportDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/forward]}" onto org.springblade.workflow.controller.WfTaskController#forward(Long, ForwardDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/{id}/node-operators]}" onto org.springblade.workflow.controller.WfInstanceController#nodeOperators(Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/task/todo]}" onto org.springblade.workflow.controller.WfTaskController#todo(Long, String, Long, Long, Date, Date)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/mi-scenario]}" onto org.springblade.workflow.controller.WfTestController#miScenario(Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/instance/{id}/withdraw]}" onto org.springblade.workflow.controller.WfInstanceController#withdraw(Long, String)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/import-bpmn]}" onto org.springblade.workflow.controller.WfDefinitionController#importBpmn(Long, BpmnSaveDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/form-condition]}" onto org.springblade.workflow.controller.WfDefinitionController#formCondition(String, Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/key-tenant/{defId}]}" onto org.springblade.workflow.controller.WfDefinitionController#getDefinitionKeyAndTenant(Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/v3/api-docs/swagger-config], produces [application/json]}" onto org.springdoc.webmvc.ui.SwaggerConfigResource#openapiJson(HttpServletRequest)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition]}" onto org.springblade.workflow.controller.WfDefinitionController#create(DefinitionSaveDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/node-timeout/list]}" onto org.springblade.workflow.controller.WfTimeoutController#list(Long, String)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/v3/api-docs.yaml/{group}], produces [application/vnd.oai.openapi]}" onto org.springdoc.webmvc.api.MultipleOpenApiWebMvcResource#openapiYaml(HttpServletRequest, String, String, Locale)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/custom-action/list]}" onto org.springblade.workflow.controller.WfCustomActionController#list()
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{DELETE [/definition/{id}/node/{nodeKey}]}" onto org.springblade.workflow.controller.WfDefinitionController#deleteNode(Long, String)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/migration/reconcile]}" onto org.springblade.workflow.controller.WfMigrationController#reconcile()
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/approve]}" onto org.springblade.workflow.controller.WfTestController#approve(WfTestStepDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/browser/wftype]}" onto org.springblade.workflow.controller.WfDefinitionController#addWorkflowType(WfWorkflowType)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/form/preview]}" onto org.springblade.workflow.controller.WfFormRenderController#preview(Long, Long, String)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/custom-operation/save]}" onto org.springblade.workflow.controller.WfCustomOperationController#save(Long, String, List)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/form-binding/{formId}]}" onto org.springblade.workflow.controller.WfDefinitionController#formBinding(Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/run]}" onto org.springblade.workflow.controller.WfTestController#run(WfTestRunDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/test/my-todo]}" onto org.springblade.workflow.controller.WfTestController#myTodo()
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/form/save]}" onto org.springblade.workflow.controller.WfFormRenderController#save(FormSaveDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/monitor/health/ready]}" onto org.springblade.workflow.controller.WfMonitorController#ready()
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/cleanup]}" onto org.springblade.workflow.controller.WfTestController#cleanup(Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/by-biz]}" onto org.springblade.workflow.controller.WfInstanceController#byBiz(Long, Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/browser/{type}/{id}]}" onto org.springblade.workflow.controller.WfDefinitionController#browserOption(String, Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{ [/error], produces [text/html]}" onto org.springblade.core.log.error.BladeErrorController#errorHtml(HttpServletRequest, HttpServletResponse)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/versions]}" onto org.springblade.workflow.controller.WfDefinitionController#versions(Long)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/start]}" onto org.springblade.workflow.controller.WfTestController#start(WfTestRunDTO)
+2026-10-10 00:55:58.487  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/list]}" onto org.springblade.workflow.controller.WfDefinitionController#list(Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/test/shadow]}" onto org.springblade.workflow.controller.WfTestController#shadow(Long, Long, Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/test/todo]}" onto org.springblade.workflow.controller.WfTestController#todo(Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/feign/client/instance/ended/{id}]}" onto org.springblade.workflow.feign.WfInstanceClient#isEnded(Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/task/{id}/reject-nodes]}" onto org.springblade.workflow.controller.WfTaskController#rejectNodes(Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/instance/mine]}" onto org.springblade.workflow.controller.WfInstanceController#mine(Long, Long, String, Integer, Date, Date)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/circulate]}" onto org.springblade.workflow.controller.WfTaskController#circulate(Long, CirculateDTO)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/monitor/health/live]}" onto org.springblade.workflow.controller.WfMonitorController#live()
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/link]}" onto org.springblade.workflow.controller.WfDefinitionController#createLink(Long, WfNodeLink)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/node-timeout/save]}" onto org.springblade.workflow.controller.WfTimeoutController#save(Long, String, List)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{PUT [/definition/{id}/link/{linkId}]}" onto org.springblade.workflow.controller.WfDefinitionController#updateLink(Long, Long, WfNodeLink)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/custom-action/save]}" onto org.springblade.workflow.controller.WfCustomActionController#save(WfCustomAction)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/custom-operation/default-sign]}" onto org.springblade.workflow.controller.WfCustomOperationController#defaultSign(Long, String, String)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/node/{nodeKey}/test-status]}" onto org.springblade.workflow.controller.WfDefinitionController#saveNodeTestStatus(Long, String, int)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/withdraw]}" onto org.springblade.workflow.controller.WfDefinitionController#withdraw(Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{DELETE [/custom-action/{id}]}" onto org.springblade.workflow.controller.WfCustomActionController#remove(Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{GET [/definition/{id}/node/{nodeKey}/operator]}" onto org.springblade.workflow.controller.WfDefinitionController#nodeOperators(Long, String)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/task/{id}/approve]}" onto org.springblade.workflow.controller.WfTaskController#approve(Long, ApproveDTO)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/custom-operation/execute]}" onto org.springblade.workflow.controller.WfCustomOperationController#execute(Long, Long, Long)
+2026-10-10 00:55:58.488  INFO 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : Mapped "{POST [/definition/{id}/version]}" onto org.springblade.workflow.controller.WfDefinitionController#saveAsNewVersion(Long)
+2026-10-10 00:55:58.488 DEBUG 21180 --- [           main] .c.c.v.BladeRequestMappingHandlerMapping : 111 mappings in 'requestMappingHandlerMapping'
+2026-10-10 00:55:58.801  INFO 21180 --- [           main] b.m.s.MybatisPlusApplicationContextAware : Register ApplicationContext instances org.springframework.boot.web.server.servlet.context.AnnotationConfigServletWebServerApplicationContext@18ffca6c
+2026-10-10 00:55:59.669  WARN 21180 --- [           main] iguration$LoadBalancerCaffeineWarnLogger : Spring Cloud LoadBalancer is currently working with the default cache. While this cache implementation is useful for development and tests, it's recommended to use Caffeine cache in production.You can switch to using Caffeine cache, by adding it and org.springframework.cache.caffeine.CaffeineCacheManager to the classpath.
+2026-10-10 00:55:59.691  INFO 21180 --- [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 19 endpoints beneath base path '/actuator'
+2026-10-10 00:55:59.888  INFO 21180 --- [           main] o.f.s.c.DefaultAutoDeploymentStrategy    : Deploying resources [URL [jar:nested:/D:/project/springbladeandreact/SpringBlade/blade-service/blade-workflow/target/blade-workflow.jar/!BOOT-INF/classes/!/processes/customApprovalWorkflow.bpmn20.xml], URL [jar:nested:/D:/project/springbladeandreact/SpringBlade/blade-service/blade-workflow/target/blade-workflow.jar/!BOOT-INF/classes/!/processes/simple-approval.bpmn20.xml]] for engine org.flowable.engine.impl.ProcessEngineImpl@5c6eb961 deployment name hint SpringAutoDeployment
+2026-10-10 00:55:59.904  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select RES.* from ACT_RE_DEPLOYMENT RES where RES.NAME_ = 'SpringAutoDeployment' order by RES.DEPLOY_TIME_ desc limit 1 offset 0
+============ Sql Execute Time: 1.943ms ===========
+
+2026-10-10 00:55:59.908  INFO 21180 --- [           main] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select * from ACT_GE_BYTEARRAY where DEPLOYMENT_ID_ = '275001' order by NAME_ asc
+============ Sql Execute Time: 1.372ms ===========
+
+2026-10-10 00:55:59.909  INFO 21180 --- [           main] o.a.coyote.http11.Http11NioProtocol      : Starting ProtocolHandler ["http-nio-8111"]
+2026-10-10 00:55:59.922  INFO 21180 --- [           main] o.s.boot.tomcat.TomcatWebServer          : Tomcat started on port 8111 (http) with context path '/'
+2026-10-10 00:56:00.045  INFO 21180 --- [           main] c.a.c.n.registry.NacosServiceRegistry    : nacos registry, DEFAULT_GROUP blade-workflow 192.168.1.4:8111 register finished
+2026-10-10 00:56:00.049  INFO 21180 --- [           main] o.s.core.launch.StartEventListener       : ---[BLADE-WORKFLOW]---启动完成，当前使用的端口:[8111]，环境变量:[dev]---
+2026-10-10 00:56:00.072  INFO 21180 --- [           main] o.s.workflow.WorkflowApplication         : Started WorkflowApplication in 14.256 seconds (process running for 15.035)
+2026-10-10 00:56:00.085  INFO 21180 --- [           main] c.a.c.n.refresh.NacosContextRefresher    : [Nacos Config] Listening config: dataId=blade-workflow-dev.yaml, group=DEFAULT_GROUP
+2026-10-10 00:56:00.086  INFO 21180 --- [           main] c.a.c.n.refresh.NacosContextRefresher    : [Nacos Config] Listening config: dataId=blade-dev.yaml, group=DEFAULT_GROUP
+2026-10-10 00:56:00.087  INFO 21180 --- [           main] c.a.c.n.refresh.NacosContextRefresher    : [Nacos Config] Listening config: dataId=blade.yaml, group=DEFAULT_GROUP
+2026-10-10 00:57:00.093  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select GET_LOCK('blade_wf_timeout_scan', 0)
+============ Sql Execute Time: 0.517ms ===========
+
+2026-10-10 00:57:00.112  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select r.ID_ as engine_task_id, r.BIZ_TASK_ID_, r.DUE_DATE_ from ACT_RU_TASK r where r.SUSPENSION_STATE_ = 1 and r.DUE_DATE_ is not null and r.DUE_DATE_ <= TIMESTAMP '2026-10-10 00:57:00.093' and (r.TIMEOUT_HANDLED_ is null or r.TIMEOUT_HANDLED_ = 0) and COALESCE(r.IS_TEST_, 0) = 0 order by r.DUE_DATE_ limit 200
+============ Sql Execute Time: 2.288ms ===========
+
+2026-10-10 00:57:00.253  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select id, inst_id, engine_task_id, node_key, assignee , original_user, sign_order, is_test, receive_time, operate_time , view_time, due_time, timeout_handled, tenant_id, create_user , create_dept, create_time, update_user, update_time, status , is_deleted from wf_task where id = 2108594496058335234 and is_deleted = 0
+============ Sql Execute Time: 0.674ms ===========
+
+2026-10-10 00:57:00.254  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select RELEASE_LOCK('blade_wf_timeout_scan')
+============ Sql Execute Time: 0.420ms ===========
+
+2026-10-10 00:58:00.263  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select GET_LOCK('blade_wf_timeout_scan', 0)
+============ Sql Execute Time: 0.513ms ===========
+
+2026-10-10 00:58:00.274  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select r.ID_ as engine_task_id, r.BIZ_TASK_ID_, r.DUE_DATE_ from ACT_RU_TASK r where r.SUSPENSION_STATE_ = 1 and r.DUE_DATE_ is not null and r.DUE_DATE_ <= TIMESTAMP '2026-10-10 00:58:00.263' and (r.TIMEOUT_HANDLED_ is null or r.TIMEOUT_HANDLED_ = 0) and COALESCE(r.IS_TEST_, 0) = 0 order by r.DUE_DATE_ limit 200
+============ Sql Execute Time: 9.789ms ===========
+
+2026-10-10 00:58:00.287  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select id, inst_id, engine_task_id, node_key, assignee , original_user, sign_order, is_test, receive_time, operate_time , view_time, due_time, timeout_handled, tenant_id, create_user , create_dept, create_time, update_user, update_time, status , is_deleted from wf_task where id = 2108594496058335234 and is_deleted = 0
+============ Sql Execute Time: 0.618ms ===========
+
+2026-10-10 00:58:00.287  INFO 21180 --- [   scheduling-1] o.s.core.mp.plugins.SqlLogInterceptor    : 
+
+=================== Sql Logger ===================
+select RELEASE_LOCK('blade_wf_timeout_scan')
+============ Sql Execute Time: 0.332ms ===========
+

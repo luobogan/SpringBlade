@@ -91,6 +91,15 @@ public class MessageController extends BladeController {
 	}
 
 	/**
+	 * 单条消息已读（二期 T8：流程通知卡片点击即已读，幂等并同步未读红点）
+	 */
+	@PostMapping("/message/read-one")
+	@Operation(summary = "单条消息已读", description = "写单条回执，会话未读 -1，并推送最新全局未读数")
+	public R<Boolean> readOne(@RequestParam Long messageId, BladeUser user) {
+		return R.status(messageService.markOneRead(messageId, user));
+	}
+
+	/**
 	 * 未读红点聚合
 	 */
 	@GetMapping("/message/unread-count")

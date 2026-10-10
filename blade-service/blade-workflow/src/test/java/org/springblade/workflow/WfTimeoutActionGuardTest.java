@@ -7,7 +7,9 @@ import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeTimeout;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.message.feign.INoticeClient;
 import org.springblade.workflow.mapper.WfNodeTimeoutMapper;
+import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.formmode.feign.IFormmodeClient;
@@ -43,7 +45,9 @@ class WfTimeoutActionGuardTest {
 	private WfNodeTimeoutMapper timeoutMapper;
 	private WfProcessNodeMapper nodeMapper;
 	private WfTaskMapper taskMapper;
+	private WfProcessDefinitionMapper definitionMapper;
 	private IWfTaskService taskService;
+	private INoticeClient noticeClient;
 	private WfTaskActWriter taskActWriter;
 	private IWfInstanceService instanceService;
 	private IFormmodeClient formmodeClient;
@@ -56,13 +60,15 @@ class WfTimeoutActionGuardTest {
 		timeoutMapper = mock(WfNodeTimeoutMapper.class);
 		nodeMapper = mock(WfProcessNodeMapper.class);
 		taskMapper = mock(WfTaskMapper.class);
+		definitionMapper = mock(WfProcessDefinitionMapper.class);
 		taskService = mock(IWfTaskService.class);
+		noticeClient = mock(INoticeClient.class);
 		taskActWriter = mock(WfTaskActWriter.class);
 		instanceService = mock(IWfInstanceService.class);
 		formmodeClient = mock(IFormmodeClient.class);
 		bpmnReader = mock(WfBpmnExtensionReader.class);
-		service = new WfTimeoutServiceImpl(timeoutMapper, nodeMapper, taskMapper, taskService,
-			taskActWriter, instanceService, formmodeClient, bpmnReader);
+		service = new WfTimeoutServiceImpl(timeoutMapper, nodeMapper, taskMapper, definitionMapper,
+			taskService, noticeClient, taskActWriter, instanceService, formmodeClient, bpmnReader);
 	}
 
 	private WfTask task() {

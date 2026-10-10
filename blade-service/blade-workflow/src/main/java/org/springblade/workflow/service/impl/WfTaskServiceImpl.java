@@ -37,6 +37,9 @@ import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.workflow.service.helper.WfWriteHelper;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.message.constant.MessageConstant;
+import org.springblade.message.dto.NoticeBizStateDTO;
+import org.springblade.message.feign.INoticeClient;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.entity.WfFormSnapshot;
@@ -111,6 +114,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
     private final WfTaskMapper taskMapper;
     private final WfInstanceMapper instanceMapper;
+    /** 二期 T9：审批完成后把该待办的流程通知回写「已处理」（失败仅记日志，不影响审批事务） */
+    private final INoticeClient noticeClient;
     private final WfProcessNodeMapper nodeMapper;
     private final WfNodeOperatorMapper operatorMapper;
     private final WfApprovalLogMapper logMapper;
@@ -390,6 +395,23 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (!testInst) {
             nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, operator);
             nodeActionExecutor.triggerSubflow(inst, node, NodeActionExecutor.TRIGGER_AFTER_SUBMIT, operator);
+        }
+
+        // 二期 T9（对齐 ecology updateBizState）：待办已办理 → 把 TASK_CREATED 时发的
+        // 流程通知（bizRefType=WF_TASK, bizRefId=引擎任务ID）回写为「已处理」，
+        // 通知列表不再是永久"待办"。失败仅记日志（尽力而为语义，可补偿），不影响审批事务。
+        try {
+            if (task.getEngineTaskId() != null) {
+                NoticeBizStateDTO biz = new NoticeBizStateDTO();
+                biz.setTenantId(inst.getTenantId());
+                biz.setBizRefType("WF_TASK");
+                biz.setBizRefId(task.getEngineTaskId());
+                biz.setBizState(MessageConstant.BIZ_STATE_HANDLED);
+                noticeClient.markBizState(biz);
+            }
+        } catch (Exception e) {
+            log.warn("[WfTaskServiceImpl] 待办通知状态回写失败（忽略）. engineTaskId={}, {}",
+                task.getEngineTaskId(), e.getMessage());
         }
         return true;
     }

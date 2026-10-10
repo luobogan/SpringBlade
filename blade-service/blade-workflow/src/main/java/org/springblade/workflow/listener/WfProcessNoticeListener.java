@@ -10,10 +10,13 @@ import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.flowable.task.api.Task;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.Func;
+import org.springblade.message.constant.MessageConstant;
 import org.springblade.message.dto.NoticeSendDTO;
 import org.springblade.message.feign.INoticeClient;
 import org.springblade.workflow.entity.WfInstance;
+import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -48,10 +51,14 @@ import java.util.Collections;
 public class WfProcessNoticeListener implements FlowableEventListener {
 
 	private final WfInstanceMapper instanceMapper;
+	private final WfProcessDefinitionMapper definitionMapper;
 	private final INoticeClient noticeClient;
 
-	public WfProcessNoticeListener(WfInstanceMapper instanceMapper, INoticeClient noticeClient) {
+	public WfProcessNoticeListener(WfInstanceMapper instanceMapper,
+								   WfProcessDefinitionMapper definitionMapper,
+								   INoticeClient noticeClient) {
 		this.instanceMapper = instanceMapper;
+		this.definitionMapper = definitionMapper;
 		this.noticeClient = noticeClient;
 	}
 
@@ -101,6 +108,8 @@ public class WfProcessNoticeListener implements FlowableEventListener {
 				Func.toStr(instance.getTitle(), "未命名流程"), Func.toStr(task.getName(), "审批")));
 			dto.setBizRefType("WF_TASK");
 			dto.setBizRefId(task.getId());
+			// T11.1：携带流程 key，供消息中心按用户级提醒配置过滤
+			dto.setFlowKey(procKeyOf(instance));
 			push(dto, instance, "待办通知");
 		} catch (Exception e) {
 			log.error("[WfNotice] 待办通知异常. procInstId={}, {}", event, e.getMessage(), e);
@@ -128,6 +137,10 @@ public class WfProcessNoticeListener implements FlowableEventListener {
 			dto.setContent(String.format("您的流程已办结：%s", Func.toStr(instance.getTitle(), "未命名流程")));
 			dto.setBizRefType("WF_INSTANCE");
 			dto.setBizRefId(String.valueOf(instance.getId()));
+			// 办结通知自带终态（对齐 ecology 消息状态字典「已办结」），前端直接渲染标签
+			dto.setBizState(MessageConstant.BIZ_STATE_FINISHED);
+			// T11.1：携带流程 key，供消息中心按用户级提醒配置过滤
+			dto.setFlowKey(procKeyOf(instance));
 			push(dto, instance, "办结通知");
 		} catch (Exception e) {
 			log.error("[WfNotice] 办结通知异常. procInstId={}, {}", procInstId, e.getMessage(), e);
@@ -157,6 +170,17 @@ public class WfProcessNoticeListener implements FlowableEventListener {
 		return instanceMapper.selectOne(Wrappers.<WfInstance>lambdaQuery()
 			.eq(WfInstance::getEngineInstId, procInstId)
 			.last("LIMIT 1"));
+	}
+
+	/**
+	 * 实例 → 流程定义 key（proc_key）；查不到返回 null（消息中心视为不过滤）
+	 */
+	private String procKeyOf(WfInstance instance) {
+		if (instance.getDefId() == null) {
+			return null;
+		}
+		WfProcessDefinition def = definitionMapper.selectById(instance.getDefId());
+		return def == null ? null : def.getProcKey();
 	}
 
 	/**

@@ -7,12 +7,16 @@ import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.utils.DateUtil;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.formmode.vo.FormDataVO;
+import org.springblade.message.dto.NoticeSendDTO;
+import org.springblade.message.feign.INoticeClient;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfNodeTimeout;
+import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfNodeTimeoutMapper;
+import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
@@ -48,7 +52,10 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
     private final WfNodeTimeoutMapper timeoutMapper;
     private final WfProcessNodeMapper nodeMapper;
     private final WfTaskMapper taskMapper;
+    private final WfProcessDefinitionMapper definitionMapper;
     private final IWfTaskService taskService;
+    /** T11.2：超时提醒同步推送统一消息中心（失败仅记日志，不影响超时动作） */
+    private final INoticeClient noticeClient;
     /** 任务业务列双写收口器（方案 A1） */
     private final org.springblade.workflow.service.helper.WfTaskActWriter taskActWriter;
     private final IWfInstanceService instanceService;
@@ -311,7 +318,61 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
             instanceService.recordLog(inst.getId(), task.getNodeKey(), who,
                 WfApprovalLog.LOG_COMMENT, msg);
         }
+        // T11.2：超时提醒同步推送统一消息中心（铃铛红点 + 流程通知卡片）。
+        // fire() 以 timeout_handled=1 保证单次触发，此处天然幂等；失败仅记日志。
+        pushNotice(inst, task, msg, recipients);
         return true;
+    }
+
+    /** 超时提醒推送消息中心：接收人剔除系统占位（0），尽力而为、失败不影响超时动作 */
+    private void pushNotice(WfInstance inst, WfTask task, String msg, List<Long> recipients) {
+        List<Long> receivers = recipients.stream()
+            .filter(id -> id != null && id > 0)
+            .toList();
+        if (receivers.isEmpty()) {
+            return;
+        }
+        try {
+            NoticeSendDTO dto = new NoticeSendDTO();
+            dto.setTenantId(inst.getTenantId());
+            dto.setUserIds(receivers);
+            dto.setContentType(4);
+            dto.setContent(buildNoticeContent(inst, task) + "：" + msg);
+            dto.setBizRefType("WF_TASK");
+            dto.setBizRefId(task.getEngineTaskId());
+            dto.setFlowKey(procKeyOf(inst));
+            noticeClient.sendToUsers(dto);
+        } catch (Exception e) {
+            log.warn("[WfTimeoutServiceImpl] 超时提醒推送消息中心失败（忽略）. taskId={}, {}",
+                task.getId(), e.getMessage());
+        }
+    }
+
+    /** 通知文案：流程《标题》的「节点名」已超时 */
+    private String buildNoticeContent(WfInstance inst, WfTask task) {
+        String nodeName = task.getNodeKey();
+        if (inst.getDefId() != null && task.getNodeKey() != null) {
+            WfProcessNode node = nodeMapper.selectOne(
+                com.baomidou.mybatisplus.core.toolkit.Wrappers.<WfProcessNode>lambdaQuery()
+                    .eq(WfProcessNode::getDefId, inst.getDefId())
+                    .eq(WfProcessNode::getNodeKey, task.getNodeKey())
+                    .last("LIMIT 1"));
+            if (node != null && node.getNodeName() != null && !node.getNodeName().isBlank()) {
+                nodeName = node.getNodeName();
+            }
+        }
+        return String.format("流程《%s》的「%s」已超时",
+            inst.getTitle() == null || inst.getTitle().isBlank() ? "未命名流程" : inst.getTitle(),
+            nodeName);
+    }
+
+    /** 实例 → 流程定义 key（proc_key），供用户级提醒配置过滤；查不到返回 null（不过滤） */
+    private String procKeyOf(WfInstance inst) {
+        if (inst.getDefId() == null) {
+            return null;
+        }
+        WfProcessDefinition def = definitionMapper.selectById(inst.getDefId());
+        return def == null ? null : def.getProcKey();
     }
 
     private String buildRemindMsg(WfNodeTimeout rule, String way) {

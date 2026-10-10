@@ -8,3 +8,12 @@ spring:
     url: ${blade.datasource.dev.url}
     username: ${blade.datasource.dev.username}
     password: ${blade.datasource.dev.password}
+
+# 节点超时规则读源：BPMN wf:timeout 扩展（与 operator-from-bpmn 同向收敛，避免
+# retirement 禁 wf_node_timeout 表读后规则双源都不可达）。扫描周期 dev 调快便于联调。
+blade:
+  workflow:
+    timeout-from-bpmn:
+      enabled: true
+    timeout-scan-ms: 60000
+

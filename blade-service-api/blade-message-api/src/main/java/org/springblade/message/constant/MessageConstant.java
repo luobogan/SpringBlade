@@ -62,4 +62,19 @@ public interface MessageConstant {
 	 */
 	Long SENDER_SYSTEM = 0L;
 
+	/**
+	 * 通知业务状态：已处理（待办被办理，审批同意时由 blade-workflow 回写）
+	 */
+	Integer BIZ_STATE_HANDLED = 1;
+
+	/**
+	 * 通知业务状态：已办结（流程结束通知自带终态）
+	 */
+	Integer BIZ_STATE_FINISHED = 2;
+
+	/**
+	 * 用户级提醒配置的通配流程 key（表示全部流程；精确配置优先于通配）
+	 */
+	String FLOW_KEY_WILDCARD = "*";
+
 }

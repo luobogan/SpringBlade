@@ -28,15 +28,18 @@ import org.springblade.core.tool.utils.BeanUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.message.dto.MessageAttachmentDTO;
 import org.springblade.message.dto.MessageSendDTO;
+import org.springblade.message.dto.NoticeBizStateDTO;
 import org.springblade.message.dto.NoticeSendDTO;
 import org.springblade.message.constant.MessageConstant;
 import org.springblade.message.entity.Message;
 import org.springblade.message.entity.MessageAttachment;
 import org.springblade.message.entity.MessageReadLog;
+import org.springblade.message.entity.NoticeConfig;
 import org.springblade.message.entity.Session;
 import org.springblade.message.entity.SessionMember;
 import org.springblade.message.mapper.MessageAttachmentMapper;
 import org.springblade.message.mapper.MessageReadLogMapper;
+import org.springblade.message.mapper.NoticeConfigMapper;
 import org.springblade.message.mapper.SessionMapper;
 import org.springblade.message.mapper.SessionMemberMapper;
 import org.springblade.message.service.IMessageService;
@@ -70,6 +73,7 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 	private final MessageReadLogMapper messageReadLogMapper;
 	private final SessionMemberMapper sessionMemberMapper;
 	private final SessionMapper sessionMapper;
+	private final NoticeConfigMapper noticeConfigMapper;
 	private final IUserClient userClient;
 	private final MessageRealtimePublisher realtimePublisher;
 
@@ -213,10 +217,43 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 		if (dto == null || Func.isEmpty(dto.getUserIds()) || Func.isBlank(dto.getTenantId())) {
 			return false;
 		}
-		for (Long userId : dto.getUserIds()) {
-			if (userId == null) {
-				continue;
+		// T11.1 用户级提醒配置过滤（对齐 ecology MESSAGE_CONFIG）：
+		// 精确配置（flow_key=具体流程）优先于通配（'*'）；无任何配置默认接收。
+		// 表里只存"偏离默认值"的记录，故一次 IN 查询即可完成整批接收人判定。
+		List<Long> receivers = new ArrayList<>();
+		if (Func.isBlank(dto.getFlowKey())) {
+			dto.getUserIds().stream().filter(java.util.Objects::nonNull).forEach(receivers::add);
+		} else {
+			Map<Long, List<NoticeConfig>> cfgMap = noticeConfigMapper.selectList(
+					Wrappers.<NoticeConfig>lambdaQuery()
+						.in(NoticeConfig::getUserId, dto.getUserIds())
+						.and(w -> w.eq(NoticeConfig::getFlowKey, dto.getFlowKey())
+							.or().eq(NoticeConfig::getFlowKey, MessageConstant.FLOW_KEY_WILDCARD)))
+				.stream()
+				.collect(Collectors.groupingBy(NoticeConfig::getUserId));
+			for (Long userId : dto.getUserIds()) {
+				if (userId == null) {
+					continue;
+				}
+				List<NoticeConfig> cfgs = cfgMap.get(userId);
+				if (cfgs != null) {
+					NoticeConfig exact = cfgs.stream()
+						.filter(c -> dto.getFlowKey().equals(c.getFlowKey()))
+						.findFirst().orElse(null);
+					NoticeConfig wildcard = cfgs.stream()
+						.filter(c -> MessageConstant.FLOW_KEY_WILDCARD.equals(c.getFlowKey()))
+						.findFirst().orElse(null);
+					boolean receive = exact != null
+						? Integer.valueOf(1).equals(exact.getEnabled())
+						: wildcard != null && Integer.valueOf(1).equals(wildcard.getEnabled());
+					if (!receive) {
+						continue;
+					}
+				}
+				receivers.add(userId);
 			}
+		}
+		for (Long userId : receivers) {
 			// 系统 → 用户的「流程通知」走每人一条 type=3 通知会话，自动建/复用
 			Session session = findOrCreateNoticeSession(userId, dto.getTenantId());
 			Date now = new Date();
@@ -229,6 +266,7 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 			message.setContent(dto.getContent());
 			message.setBizRefType(dto.getBizRefType());
 			message.setBizRefId(dto.getBizRefId());
+			message.setBizState(dto.getBizState());
 			message.setStatus(1);
 			message.setTenantId(dto.getTenantId());
 			message.setCreateUser(MessageConstant.SENDER_SYSTEM);
@@ -259,6 +297,57 @@ public class MessageServiceImpl extends BaseServiceImpl<org.springblade.message.
 			realtimePublisher.publishNewMessage(session.getId(), dto.getTenantId(), pushVo, memberIds);
 		}
 		return true;
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public Boolean markOneRead(Long messageId, BladeUser user) {
+		Message message = getById(messageId);
+		if (message == null) {
+			return false;
+		}
+		Long userId = user.getUserId();
+		// 已读判定 → 写 read_log（INSERT IGNORE 幂等，同 markRead）→ 未读才 -1
+		boolean alreadyRead = messageReadLogMapper.selectCount(Wrappers.<MessageReadLog>lambdaQuery()
+			.eq(MessageReadLog::getMessageId, messageId)
+			.eq(MessageReadLog::getUserId, userId)) > 0;
+		if (!alreadyRead) {
+			MessageReadLog log = new MessageReadLog();
+			log.setMessageId(messageId);
+			log.setUserId(userId);
+			log.setReadTime(new Date());
+			log.setTenantId(user.getTenantId());
+			log.setCreateUser(userId);
+			log.setCreateDept(Func.toLong(user.getDeptId()));
+			log.setStatus(1);
+			log.setIsDeleted(0);
+			messageReadLogMapper.insertIgnore(log);
+			SessionMember member = sessionMemberMapper.selectOne(Wrappers.<SessionMember>lambdaQuery()
+				.eq(SessionMember::getSessionId, message.getSessionId())
+				.eq(SessionMember::getUserId, userId));
+			if (member != null && member.getUnreadCount() != null && member.getUnreadCount() > 0) {
+				member.setUnreadCount(member.getUnreadCount() - 1);
+				sessionMemberMapper.updateById(member);
+			}
+		}
+		realtimePublisher.publishUnread(userId, unreadCount(userId));
+		return true;
+	}
+
+	@Override
+	public Boolean markBizState(NoticeBizStateDTO dto) {
+		if (dto == null || Func.isBlank(dto.getTenantId()) || Func.isBlank(dto.getBizRefType())
+			|| Func.isBlank(dto.getBizRefId()) || dto.getBizState() == null) {
+			return false;
+		}
+		// 同业务引用的历史通知批量标记目标状态（幂等；仅限流程通知，聊天消息不受影响）。
+		// 无匹配行（如通知从未产生/已被清理）也返回 true：回写是尽力而为语义。
+		return update(Wrappers.<Message>lambdaUpdate()
+			.set(Message::getBizState, dto.getBizState())
+			.eq(Message::getTenantId, dto.getTenantId())
+			.eq(Message::getCategory, MessageConstant.CATEGORY_NOTICE)
+			.eq(Message::getBizRefType, dto.getBizRefType())
+			.eq(Message::getBizRefId, dto.getBizRefId()));
 	}
 
 	/**

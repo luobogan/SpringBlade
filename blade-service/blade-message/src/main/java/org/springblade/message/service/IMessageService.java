@@ -20,6 +20,7 @@ import org.springblade.core.mp.base.BaseService;
 import org.springblade.core.mp.support.Query;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.message.dto.MessageSendDTO;
+import org.springblade.message.dto.NoticeBizStateDTO;
 import org.springblade.message.dto.NoticeSendDTO;
 import org.springblade.message.entity.Message;
 import org.springblade.message.vo.MessageVO;
@@ -52,6 +53,26 @@ public interface IMessageService extends BaseService<Message> {
 	 * @return 消息分页
 	 */
 	IPage<MessageVO> pageMessages(Long sessionId, Query query, BladeUser user, boolean desc);
+
+	/**
+	 * 单条消息已读（二期 T8）：写 read_log（幂等）+ 该会话未读 -1 + 推送最新未读数
+	 *
+	 * <p>供流程通知卡片「点击即单条已读」使用（对齐 ecology 点击消息置已读）。</p>
+	 *
+	 * @param messageId 消息ID
+	 * @param user      当前用户
+	 * @return 是否成功（消息不存在返回 false）
+	 */
+	Boolean markOneRead(Long messageId, BladeUser user);
+
+	/**
+	 * 回写通知业务状态（二期 T9，对齐 ecology updateBizState）：把同业务引用的
+	 * 流程通知（category=2）批量标记目标状态，幂等
+	 *
+	 * @param dto 回写参数（tenantId/bizRefType/bizRefId/bizState 必传）
+	 * @return 是否更新成功（无匹配行视为成功）
+	 */
+	Boolean markBizState(NoticeBizStateDTO dto);
 
 	/**
 	 * 发送消息（落库 + 增量未读 + 实时推送）

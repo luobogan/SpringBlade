@@ -17,6 +17,7 @@ package org.springblade.message.feign;
 
 import org.springblade.core.tool.api.R;
 import org.springblade.message.constant.MessageConstant;
+import org.springblade.message.dto.NoticeBizStateDTO;
 import org.springblade.message.dto.NoticeSendDTO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -54,5 +55,15 @@ public interface INoticeClient {
 	 */
 	@PostMapping(API_PREFIX + "/send-to-users")
 	R<Boolean> sendToUsers(@RequestBody NoticeSendDTO dto);
+
+	/**
+	 * 回写通知业务状态（对齐 ecology updateBizState）：把同业务引用的历史通知
+	 * 批量标记目标状态，幂等可重复调用
+	 *
+	 * @param dto 回写参数（tenantId/bizRefType/bizRefId/bizState 必传）
+	 * @return 是否更新成功（无匹配行视为成功 true）
+	 */
+	@PostMapping(API_PREFIX + "/biz-state")
+	R<Boolean> markBizState(@RequestBody NoticeBizStateDTO dto);
 
 }

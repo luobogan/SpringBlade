@@ -18,6 +18,7 @@ package org.springblade.message.feign;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
+import org.springblade.message.dto.NoticeBizStateDTO;
 import org.springblade.message.dto.NoticeSendDTO;
 import org.springblade.message.service.IMessageService;
 import org.springframework.web.bind.annotation.RestController;
@@ -45,6 +46,11 @@ public class NoticeClient implements INoticeClient {
 	@Override
 	public R<Boolean> sendToUsers(NoticeSendDTO dto) {
 		return R.data(messageService.sendNoticeToUsers(dto));
+	}
+
+	@Override
+	public R<Boolean> markBizState(NoticeBizStateDTO dto) {
+		return R.data(messageService.markBizState(dto));
 	}
 
 }
