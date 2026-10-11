@@ -388,6 +388,7 @@ public class WfTestServiceImpl implements IWfTestService {
                         vdto.setDefId(defId);
                         vdto.setNodeKey(t.getNodeKey());
                         vdto.setFormData(sc.formData);
+                        vdto.setDraftRead(true); // 测试域：按草稿 BPMN 判必填（改完即测，无需先发布）
                         try {
                             formRenderService.validate(vdto);
                             // 布局级必填校验（表单设计器里配置的「必填」）：权限矩阵校验(formRenderService.validate)
@@ -1662,6 +1663,7 @@ public class WfTestServiceImpl implements IWfTestService {
             startVdto.setDefId(inst.getDefId());
             startVdto.setNodeKey(firstNode.getNodeKey());
             startVdto.setFormData(variables);
+            startVdto.setDraftRead(true); // 测试域：按草稿 BPMN 判必填（改完即测，无需先发布）
             formRenderService.validate(startVdto);
             List<String> startMissing = new ArrayList<>();
             collectLayoutRequired(inst.getFormId(), firstNode.getNodeKey(), variables, startMissing);
@@ -1717,6 +1719,7 @@ public class WfTestServiceImpl implements IWfTestService {
             vdto.setDefId(inst.getDefId());
             vdto.setNodeKey(t.getNodeKey());
             vdto.setFormData(variables);
+            vdto.setDraftRead(true); // 测试域：按草稿 BPMN 判必填（改完即测，无需先发布）
             formRenderService.validate(vdto);
             // 布局级必填（权限矩阵为空时，必填定义在布局 fieldMeta；与前端 ExcelPreview 红标一致）。
             // ① 开始节点（创建/申请人，nodeType=0）：无论自动还是手动都必须校验——否则「开始自动测试」
@@ -1925,6 +1928,7 @@ public class WfTestServiceImpl implements IWfTestService {
             vdto.setDefId(def.getId());
             vdto.setNodeKey(startNode.getNodeKey());
             vdto.setFormData(fd);
+            vdto.setDraftRead(true); // 测试域：按草稿 BPMN 判必填（改完即测，无需先发布）
             formRenderService.validate(vdto);
         } catch (ServiceException ve) {
             return "开始节点【" + startNode.getNodeName() + "】必填校验未通过（字段权限）：" + ve.getMessage();

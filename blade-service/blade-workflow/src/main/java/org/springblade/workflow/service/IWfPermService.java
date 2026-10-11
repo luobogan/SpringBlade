@@ -24,6 +24,15 @@ public interface IWfPermService {
     List<FieldPermVO> getFieldPerm(Long defId, String nodeKey);
 
     /**
+     * 读取节点字段权限矩阵 —— <b>草稿读源</b>（测试域专用）。
+     *
+     * <p>直接解析 {@code wf_process_definition.bpmn_xml}，不经过 {@code proc_def_id} 部署。
+     * 用于一键测试 / 测试页提交：设计器改动落在草稿上，测试按草稿判定才能「改完即测」，
+     * 不必每次先「发布」。</p>
+     */
+    List<FieldPermVO> getFieldPermFromDraft(Long defId, String nodeKey);
+
+    /**
      * 保存节点字段权限矩阵（整体覆盖）
      */
     boolean saveFieldPerm(Long defId, FieldPermSaveDTO dto);

@@ -445,7 +445,11 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
 
         // 1. 节点必填字段校验
         List<String> missing = new ArrayList<>();
-        List<FieldPermVO> perms = permService.getFieldPerm(defId, nodeKey);
+        // 测试域（dto.draftRead=true）按草稿 BPMN 判定：设计器改动落在草稿上，
+        // 按 proc_def_id 部署读会「改了必填仍报必填」，逼用户每次先发布。
+        List<FieldPermVO> perms = Boolean.TRUE.equals(dto.getDraftRead())
+            ? permService.getFieldPermFromDraft(defId, nodeKey)
+            : permService.getFieldPerm(defId, nodeKey);
         // 幽灵必填过滤：表单改版（删除/改名/未铺某字段）后，流程定义的字段权限矩阵可能残留旧字段。
         // 这类字段用户在表单里永远填不了，按缺失拦截会造成死锁（测试页与正式提交都过不去）。
         // → 必填校验只对「布局中真实存在的字段」生效；权限矩阵里的幽灵字段跳过并记 warn。

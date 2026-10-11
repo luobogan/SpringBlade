@@ -108,6 +108,26 @@ public class WfPermServiceImpl implements IWfPermService {
     }
 
     /**
+     * 测试域：按<b>草稿</b> BPMN 读字段权限（不经过 proc_def_id 部署）。
+     *
+     * <p>设计器保存（含布局→字段权限联动）只写草稿；若测试仍按部署读，
+     * 就会出现「布局里改成可编辑、测试仍报必填」，逼用户每次先「发布」。
+     * 测试域走草稿 => 改完保存即可测试。</p>
+     */
+    @Override
+    public List<FieldPermVO> getFieldPermFromDraft(Long defId, String nodeKey) {
+        List<FieldPermVO> result = new ArrayList<>();
+        // 草稿解析失败时 bpmnReader 返回空列表 → 调用方按「无必填」处理，不会误报必填
+        for (BpmnExtensionUtil.WfFieldPermExt f : bpmnReader.fieldPermsFromDraft(defId, nodeKey)) {
+            result.add(toFieldPermVO(normScope(f.scope), f.field, f.perm, f.visible, f.editable, f.required));
+        }
+        for (BpmnExtensionUtil.WfDetailPermExt d : bpmnReader.detailPermsFromDraft(defId, nodeKey)) {
+            result.add(toFieldPermVO(d.dtKey, d.field, d.perm, d.visible, d.editable, d.required));
+        }
+        return result;
+    }
+
+    /**
      * P3-5：从 BPMN {@code wf:} 扩展读取字段权限（含 main 作用域 {@code fieldPerm} 与 dt 作用域 {@code detailPerm}，
      * 统一为带 scope 的 {@link FieldPermVO}）。三维度缺省时按 perm 反推，保证与历史 BPMN（仅 field+perm）兼容。
      */

@@ -160,10 +160,11 @@ public class WfBpmnExtensionReader {
      * 后，{@code proc_def_id} 仍指向上一次正式部署，面板读到旧模型（extJson 为空），
      * 表现为「我明明配了，操作菜单却没了」——这是真实的用户困惑来源。</p>
      *
-     * <p><b>边界（重要）</b>：仅 {@code nodes()} / {@code links()}（纯配置展示）走本方法；
-     * {@code node()} / {@code operators()} 与运行期共用、继续读正式部署（{@link #resolveOwnProcDefId}），
-     * 以免真实实例在测试态下读到被 {@code neutralizeForTest} 降级过的元素
-     * （businessRuleTask/ThrowEvent/带定时器事件 → manualTask）。</p>
+     * <p><b>2026-10-11 变更（用户拍板 A）</b>：原边界是「仅 {@code nodes()}/{@code links()} 走本方法、
+     * {@code node()}/{@code operators()} 继续读正式部署」。现改为 <b>测试态下全部读测试部署</b>
+     * （{@link #findFlowNode} 也改用 {@link #resolveConfigProcDefId}），理由是测试实例本就跑在
+     * {@code __test} 部署上，配置读源却读正式部署会导致两边不同版本。
+     * 正式态（status≠3）仍读 {@code proc_def_id}，零行为变化。</p>
      */
     private BpmnModel loadConfigModel(Long defId) {
         String procDefId = resolveConfigProcDefId(defId);
@@ -402,6 +403,67 @@ public class WfBpmnExtensionReader {
         return node == null ? List.of() : node.fieldPerms;
     }
 
+    // ───────────────────────── 草稿读源（测试域专用） ─────────────────────────
+    // 设计器（画布/布局联动）保存只写 wf_process_definition.bpmn_xml（草稿），
+    // 而 readNode/findFlowNode 锚定 proc_def_id 指向的**已部署**版本 →
+    // 「改完必填还得先发布才测得到」。测试域改走草稿，实现「改完即测」。
+
+    /** 节点字段权限列表（草稿 BPMN 读源；测试域用，不要求先发布） */
+    public List<BpmnExtensionUtil.WfFieldPermExt> fieldPermsFromDraft(Long defId, String nodeKey) {
+        BpmnExtensionUtil.WfNodeExt node = readNodeFromDraft(defId, nodeKey);
+        return node == null ? List.of() : node.fieldPerms;
+    }
+
+    /** 节点明细表字段级权限（草稿 BPMN 读源） */
+    public List<BpmnExtensionUtil.WfDetailPermExt> detailPermsFromDraft(Long defId, String nodeKey) {
+        BpmnExtensionUtil.WfNodeExt node = readNodeFromDraft(defId, nodeKey);
+        return node == null ? List.of() : node.detailPerms;
+    }
+
+    /** 按草稿 BPMN 读节点扩展（operator/fieldPerm/...）；找不到返回 null */
+    public BpmnExtensionUtil.WfNodeExt readNodeFromDraft(Long defId, String nodeKey) {
+        FlowNode node = findFlowNodeInDraft(defId, nodeKey);
+        return node == null ? null : BpmnExtensionUtil.readNode(node);
+    }
+
+    /**
+     * 在<b>草稿</b> XML（{@code wf_process_definition.bpmn_xml}）里按 nodeKey 定位节点。
+     * 与 {@link #findFlowNode}（按 proc_def_id 部署）唯一区别就是模型来源；解析失败返回 null，
+     * 由调用方按「无配置」处理（测试域会继续走布局必填校验，不会误报）。
+     */
+    private FlowNode findFlowNodeInDraft(Long defId, String nodeKey) {
+        if (defId == null || nodeKey == null || nodeKey.isBlank()) {
+            return null;
+        }
+        WfProcessDefinition def = defMapper.selectById(defId);
+        if (def == null || def.getBpmnXml() == null || def.getBpmnXml().isBlank()) {
+            return null;
+        }
+        BpmnModel model = parseDraftModel(def.getBpmnXml());
+        if (model == null || model.getMainProcess() == null) {
+            return null;
+        }
+        for (FlowNode n : model.getMainProcess().findFlowElementsOfType(FlowNode.class, true)) {
+            if (nodeKey.equals(n.getId())) {
+                return n;
+            }
+        }
+        return null;
+    }
+
+    /** 解析草稿 BPMN 文本（不写缓存：草稿每次保存都变，缓存会拿到过期模型） */
+    private BpmnModel parseDraftModel(String xml) {
+        try {
+            // 与 WfTestServiceImpl#parseBpmnModel 同款：本版 convertToBpmnModel 收 InputStreamProvider
+            return new org.flowable.bpmn.converter.BpmnXMLConverter()
+                .convertToBpmnModel(() -> new java.io.ByteArrayInputStream(
+                    xml.getBytes(java.nio.charset.StandardCharsets.UTF_8)), false, false);
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 草稿 BPMN 解析失败（测试域按无配置处理）", e);
+            return null;
+        }
+    }
+
     /** 节点明细表内字段级权限列表（dt 作用域；空列表表示无配置） */
     public List<BpmnExtensionUtil.WfDetailPermExt> detailPerms(Long defId, String nodeKey) {
         BpmnExtensionUtil.WfNodeExt node = readNode(defId, nodeKey);
@@ -544,7 +606,15 @@ public class WfBpmnExtensionReader {
     private FlowNode findFlowNode(Long defId, String nodeKey) {
         // 锚定 def 自身的部署（与 nodes/links 一致），草稿/未部署返回 null 让调用方回退 wf_* 表，
         // 并避免按 procKey 取「最新版本」时把同 procKey 其他定义的模型错串到本 def（跨 def 串数据）。
-        String procDefId = resolveOwnProcDefId(defId);
+        //
+        // 2026-10-11（用户拍板 A）：测试态（status=3 且已「测 试」部署过）改读**测试部署**
+        // （resolveConfigProcDefId → test_proc_def_id），与 nodes()/links() 及「实例实际在引擎上跑的
+        // 那份 BPMN」保持同版本。
+        //   此前 node()/operators()/fieldPerms 一律读正式 proc_def_id，而测试实例跑的是
+        //   __test 部署（deployForTest 生成）→ 两边不是同一份 BPMN：用户在设计器改了操作者/
+        //   节点配置，测试里仍按上一次正式部署解析（表现为「改了没生效」）。
+        //   正式态（status=1/其它）下 resolveConfigProcDefId 返回的仍是 proc_def_id，行为零变化。
+        String procDefId = resolveConfigProcDefId(defId);
         if (procDefId == null) {
             return null;
         }

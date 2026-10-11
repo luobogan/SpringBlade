@@ -100,6 +100,20 @@ public interface IUserService extends BaseService<User> {
 	IPage<UserVO> selectPage(Map<String, Object> user, Query query);
 
 	/**
+	 * 按主键批量查询用户（供"历史意见/审批人 id → 姓名"反查使用）
+	 * <p>
+	 * 存在原因：/user/detail 标注了 {@code @PreAuth(HAS_ROLE_ADMIN)}，非管理员角色
+	 * 调用会得到 401「请求未授权」；而审批意见里出现的历史处理人并不要求管理员，
+	 * 因此需要一个只需登录即可调用的轻量反查接口。
+	 * <p>
+	 * 非超管时强制按当前会话租户隔离，避免跨租户读取他人信息。
+	 *
+	 * @param ids 逗号分隔的用户主键
+	 * @return 命中用户的基础信息（id/realName/account/deptName/roleName 等）
+	 */
+	List<UserVO> selectByIds(String ids);
+
+	/**
 	 * 用户信息
 	 *
 	 * @param userId 用户主键

@@ -87,6 +87,22 @@ public class UserController {
 	}
 
 	/**
+	 * 按主键批量查询用户基础信息（id → 姓名反查）
+	 * <p>
+	 * 与 {@code /detail} 的区别：/detail 限管理员（@PreAuth(HAS_ROLE_ADMIN)），
+	 * 而审批意见里的历史处理人可能是普通业务角色，因此提供这个只需登录的只读反查接口。
+	 * 仅返回 id/姓名/账号/部门/角色等展示所需字段。
+	 *
+	 * @param ids 逗号分隔的用户主键，如 {@code 3,11,37}
+	 */
+	@Operation(summary = "按主键批量查询用户", description = "传入ids，逗号分隔")
+	@GetMapping("/names")
+	@PreAuth
+	public R<List<UserVO>> names(@RequestParam String ids) {
+		return R.data(userService.selectByIds(ids));
+	}
+
+	/**
 	 * 查询单条
 	 */
 	@Operation(summary = "查看详情", description = "传入id")

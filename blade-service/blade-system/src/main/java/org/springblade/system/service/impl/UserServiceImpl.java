@@ -365,6 +365,23 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 	}
 
 	@Override
+	public List<UserVO> selectByIds(String ids) {
+		List<Long> idList = Func.toLongList(ids);
+		if (Func.isEmpty(idList)) {
+			return new ArrayList<>();
+		}
+		QueryWrapper<User> queryWrapper = Wrappers.<User>query().lambda().in(User::getId, idList);
+		// 非超管强制按当前会话租户隔离，避免跨租户读取他人信息
+		if (!SecureUtil.isAdministrator()) {
+			queryWrapper.eq(User::getTenantId, SecureUtil.getTenantId());
+		}
+		// 只取反查需要的字段，避免把密码、盐、身份证等敏感列一并带出
+		queryWrapper.select(User::getId, User::getAccount, User::getName, User::getRealName,
+			User::getDeptId, User::getRoleId, User::getStatus, User::getIsDeleted, User::getTenantId);
+		return UserWrapper.build().entityVO(list(queryWrapper));
+	}
+
+	@Override
 	public UserInfo userInfo(Long userId) {
 		UserInfo userInfo = new UserInfo();
 		User user = baseMapper.selectById(userId);

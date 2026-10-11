@@ -1161,9 +1161,10 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
 
     /** 从新格式 wf:node 读取字段权限并覆盖式写入 wf_node_field_perm（field/perm，scope 默认 main；明细表权限以 dt{idx} 形式携带） */
     private void importNodeFieldPermsFromWfNode(Long defId, String nodeKey, Element wfNode) {
-    	fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
+    	int removed = fieldPermMapper.delete(Wrappers.<WfNodeFieldPerm>lambdaQuery()
     		.eq(WfNodeFieldPerm::getDefId, defId)
     		.eq(WfNodeFieldPerm::getNodeKey, nodeKey));
+    	int inserted = 0;
     	for (Element pEl : childElements(wfNode, "wf:fieldPerm")) {
     		WfNodeFieldPerm p = new WfNodeFieldPerm();
     		p.setDefId(defId);
@@ -1184,8 +1185,11 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     		} else {
     			applyThreeDim(p, perm);
     		}
-    		fieldPermMapper.insert(p);
+    		fieldPermMapper.upsertFieldPerm(p);
+    		inserted++;
     	}
+    	log.warn("[blade-workflow] importNodeFieldPermsFromWfNode defId={} nodeKey={} removed={} inserted={}",
+    		defId, nodeKey, removed, inserted);
     }
 
     /** 从新格式 wf:node 读取超时规则并覆盖式写入 wf_node_timeout（对齐 NodeTimeoutModal 的 BPMN 写入） */
