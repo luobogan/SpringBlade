@@ -17,6 +17,7 @@ package org.springblade.system.service.impl;
 
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -370,7 +371,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		if (Func.isEmpty(idList)) {
 			return new ArrayList<>();
 		}
-		QueryWrapper<User> queryWrapper = Wrappers.<User>query().lambda().in(User::getId, idList);
+		LambdaQueryWrapper<User> queryWrapper = Wrappers.<User>lambdaQuery().in(User::getId, idList);
 		// 非超管强制按当前会话租户隔离，避免跨租户读取他人信息
 		if (!SecureUtil.isAdministrator()) {
 			queryWrapper.eq(User::getTenantId, SecureUtil.getTenantId());
@@ -378,7 +379,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserMapper, User> implement
 		// 只取反查需要的字段，避免把密码、盐、身份证等敏感列一并带出
 		queryWrapper.select(User::getId, User::getAccount, User::getName, User::getRealName,
 			User::getDeptId, User::getRoleId, User::getStatus, User::getIsDeleted, User::getTenantId);
-		return UserWrapper.build().entityVO(list(queryWrapper));
+		return UserWrapper.build().listVO(list(queryWrapper));
 	}
 
 	@Override
