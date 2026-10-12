@@ -297,7 +297,7 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
             result.put("success", false);
             result.put("msg", "数据库表同步失败: " + e.getMessage());
             log.info("========== 表结构同步失败 ==========");
-            throw new RuntimeException("同步表结构失败", e); // 触发事务回滚
+            throw new RuntimeException("同步表结构失败: " + e.getMessage(), e); // 触发事务回滚，并带上真实原因便于定位
         }
 
         return result;

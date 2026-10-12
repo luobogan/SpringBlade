@@ -470,7 +470,9 @@ public class WorkflowBillController extends BladeController {
             return R.data(result);
         } catch (Exception e) {
             log.error("同步表结构失败: " + id, e);
-            return R.fail("同步表结构失败: " + e.getMessage());
+            // 透出真实原因（DDL/SQL 报错），避免只看到「同步表结构失败: 同步表结构失败」难以定位
+            String msg = e.getMessage();
+            return R.fail(msg != null && msg.startsWith("同步表结构失败") ? msg : "同步表结构失败: " + msg);
         }
     }
 
