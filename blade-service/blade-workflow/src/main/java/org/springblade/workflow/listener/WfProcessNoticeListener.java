@@ -39,8 +39,9 @@ import java.util.Collections;
  * </ul>
  *
  * <p><b>边界</b>：候选人/候选组任务（assignee 为空）暂不通知；实例记录查不到
- * （engine_inst_id 未落 wf_instance）跳过；消息由 blade-message 系统代发
- * （senderId=0，category=2，写入每人一条的 type=3 系统通知会话）。</p>
+ * （engine_inst_id 未落 wf_instance）跳过；<b>测试流程（{@code wf_instance.is_test=1}）不发送任何
+ * 真实通知</b>（设计文档 P0-4「不外溢」，失败安全默认排除测试，保证正式人员零感知）；消息由
+ * blade-message 系统代发（senderId=0，category=2，写入每人一条的 type=3 系统通知会话）。</p>
  *
  * <p>开关 {@code blade.workflow.notice.enabled}，默认 <b>true</b>；
  * 关闭即完全回到「无流程消息」的历史行为。</p>
@@ -99,6 +100,13 @@ public class WfProcessNoticeListener implements FlowableEventListener {
 					entityEvent.getProcessInstanceId());
 				return;
 			}
+			// 测试流程不外溢：is_test=1 实例不向任何人发送真实通知（设计文档 P0-4，失败安全默认排除测试）。
+			// 正式人员（含被当作正式账号使用的测试人）均不会收到测试流程通知；测试人员改走审批链接直接办理。
+			if (Integer.valueOf(1).equals(instance.getIsTest())) {
+				log.debug("[WfNotice] 测试实例({})不发送真实通知，跳过待办通知",
+					entityEvent.getProcessInstanceId());
+				return;
+			}
 			NoticeSendDTO dto = new NoticeSendDTO();
 			dto.setTenantId(instance.getTenantId());
 			dto.setUserIds(Collections.singletonList(userId));
@@ -128,6 +136,11 @@ public class WfProcessNoticeListener implements FlowableEventListener {
 			}
 			WfInstance instance = findInstance(procInstId);
 			if (instance == null || instance.getStarter() == null) {
+				return;
+			}
+			// 测试流程不外溢：is_test=1 实例不向发起人发送真实通知（设计文档 P0-4）
+			if (Integer.valueOf(1).equals(instance.getIsTest())) {
+				log.debug("[WfNotice] 测试实例({})不发送真实通知，跳过办结通知", procInstId);
 				return;
 			}
 			NoticeSendDTO dto = new NoticeSendDTO();

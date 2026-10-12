@@ -143,6 +143,13 @@ public class WfTaskController {
         return R.data(taskService.markViewed(id));
     }
 
+    @GetMapping("/{id}")
+    @Operation(summary = "任务详情（含所属实例ID）",
+        description = "供消息中心 / 浮窗点击「待办任务」跳转办理页时，由 taskId 解析出 instanceId；记录级鉴权（仅办理人或管理员可见）")
+    public R<WfTaskVO> detail(@PathVariable("id") Long id) {
+        return R.data(taskService.detail(id));
+    }
+
     private static Long resolveAssignee(Long assignee) {
         return (assignee != null) ? assignee : SecureUtil.getUserId();
     }

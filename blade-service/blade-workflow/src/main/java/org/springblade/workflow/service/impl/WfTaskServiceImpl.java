@@ -755,6 +755,20 @@ public class WfTaskServiceImpl implements IWfTaskService {
     }
 
     @Override
+    public WfTaskVO detail(Long taskId) {
+        if (taskId == null) {
+            throw new ServiceException("任务不存在");
+        }
+        WfTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            throw new ServiceException("任务不存在");
+        }
+        // 记录级鉴权：仅任务办理人本人（或流程管理员）可见，防越权探查他人任务
+        WfAuthUtil.requireOperateTask(task, "查看");
+        return toVO(task);
+    }
+
+    @Override
     public Map<String, Long> count(Long assignee) {
         Map<String, Long> result = new HashMap<>(4);
         // 记录级鉴权：非流程管理员只能看自己的角标数（顶栏待办红点）

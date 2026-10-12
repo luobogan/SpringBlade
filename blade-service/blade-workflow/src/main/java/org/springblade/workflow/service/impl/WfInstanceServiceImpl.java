@@ -2401,8 +2401,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             HistoricProcessInstance procInst = processService.historicProcess(engineInstId);
             procEnd = (procInst != null) ? procInst.getEndTime() : null;
         }
-        // 四色计算抽成纯函数（见 fillActivityColors），便于无引擎 / 无鉴权的单测直接断言集合
-        fillActivityColors(view, acts, status, rejectNodeKey, procEnd);
+        // 四色计算抽成纯函数（见 fillActivityColors），便于无引擎 / 无鉴权的单测直接断言集合。
+        // audit 历史不记录 sequenceFlow 实例，故把 BPMN 连线定义一并传入，由已激活节点序列反推「已走连线」。
+        List<SeqFlow> flows = parseSequenceFlows(bpmn);
+        fillActivityColors(view, acts, status, rejectNodeKey, procEnd, flows);
+        // 临时排查日志：确认进度图是否产出「已走连线」（定位连线不上色问题，定位后可删）
+        log.info("[WfProgress] instId={}, isTest={}, status={}, engineInstId={}, nodeActs={}, seqFlows={}, finishedNodes={}, finishedSeq={}",
+            id, inst.getIsTest(), status, engineInstId, acts.size(), flows.size(),
+            view.getFinishedActivityIds(), view.getFinishedSequenceFlowIds());
         return view;
     }
 
@@ -2428,6 +2434,18 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      */
     static void fillActivityColors(WfProgressView view, List<HistoricActivityInstance> acts,
                                    Integer status, String rejectNodeKey, Date procEnd) {
+        fillActivityColors(view, acts, status, rejectNodeKey, procEnd, null);
+    }
+
+    /**
+     * 同 {@link #fillActivityColors(WfProgressView, List, Integer, String, Date)}，额外按 BPMN 连线定义
+     * 反推「已走连线」（audit 历史不记录 sequenceFlow 实例时使用；full 历史已含显式 sequenceFlow 记录则二者取并集）。
+     *
+     * @param seqFlows BPMN 全部 sequenceFlow 的 (id / sourceRef / targetRef)；null 或空则退回仅按历史里的显式 sequenceFlow 记录
+     */
+    static void fillActivityColors(WfProgressView view, List<HistoricActivityInstance> acts,
+                                   Integer status, String rejectNodeKey, Date procEnd,
+                                   List<SeqFlow> seqFlows) {
         Set<String> unfinished = new LinkedHashSet<>();
         Set<String> finished = new LinkedHashSet<>();
         Set<String> finishedSeq = new LinkedHashSet<>();
@@ -2497,11 +2515,136 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             }
         }
 
+        // audit 历史不记录 sequenceFlow 实例：用「已激活节点 + BPMN 连线(source→target)」反推已走连线。
+        // 反推规则（在「已激活子图」内按目标看入边，并用祖先可达性消歧）：
+        //   · 仅保留两端节点都已激活的 flow 作为候选；
+        //   · 对每个目标节点，其多条入边中，若某入边起点是「另一条入边起点」的祖先（在已激活子图可达），
+        //     说明真正抵达目标的是那条更下游的入边，故抑制该祖先入边——
+        //     以此排除「排他网关未走分支在汇聚点被误标」（如 无需付款default 与 需付款 同时变绿）。
+        //   线性 / 排他分支 / 并行 fork / 并行 merge 均可正确判定。
+        if (seqFlows != null && !seqFlows.isEmpty()) {
+            // ① 已激活节点集合（排除连线自身）
+            Set<String> activated = new LinkedHashSet<>();
+            for (HistoricActivityInstance hai : acts) {
+                String t = hai.getActivityType();
+                if (t == null || "sequenceFlow".equals(t)) {
+                    continue;
+                }
+                if (hai.getActivityId() != null) {
+                    activated.add(hai.getActivityId());
+                }
+            }
+            // ② 已激活子图邻接表：仅两端皆激活的 flow，用于祖先可达性判断
+            Map<String, List<String>> adj = new HashMap<>();
+            for (SeqFlow f : seqFlows) {
+                if (activated.contains(f.sourceRef) && activated.contains(f.targetRef)) {
+                    adj.computeIfAbsent(f.sourceRef, k -> new ArrayList<>()).add(f.targetRef);
+                }
+            }
+            // ③ 按目标聚合入边；抑制「是其它入边起点祖先」的入边
+            Map<String, List<SeqFlow>> byTarget = new LinkedHashMap<>();
+            for (SeqFlow f : seqFlows) {
+                if (activated.contains(f.sourceRef) && activated.contains(f.targetRef)) {
+                    byTarget.computeIfAbsent(f.targetRef, k -> new ArrayList<>()).add(f);
+                }
+            }
+            for (List<SeqFlow> inFlows : byTarget.values()) {
+                if (inFlows.size() == 1) {
+                    finishedSeq.add(inFlows.get(0).id);
+                    continue;
+                }
+                for (SeqFlow f : inFlows) {
+                    boolean ancestorOfAnother = false;
+                    for (SeqFlow g : inFlows) {
+                        // f 的起点可达 g 的起点 ⇒ f 的起点是更高层的祖先，抵到目标的是 g，抑制 f
+                        if (g != f && reachable(adj, f.sourceRef, g.sourceRef)) {
+                            ancestorOfAnother = true;
+                            break;
+                        }
+                    }
+                    if (!ancestorOfAnother) {
+                        finishedSeq.add(f.id);
+                    }
+                }
+            }
+        }
+
         view.setUnfinishedActivityIds(new ArrayList<>(unfinished));
         view.setFinishedActivityIds(new ArrayList<>(finished));
         view.setFinishedSequenceFlowIds(new ArrayList<>(finishedSeq));
         view.setRejectedActivityIds(new ArrayList<>(rejected));
         view.setCancelledActivityIds(new ArrayList<>(cancelled));
+    }
+
+    /**
+     * BPMN 连线三元组（sequenceFlow 的 id / sourceRef / targetRef），供反推已走连线。
+     */
+    private static final class SeqFlow {
+        private final String id;
+        private final String sourceRef;
+        private final String targetRef;
+
+        private SeqFlow(String id, String sourceRef, String targetRef) {
+            this.id = id;
+            this.sourceRef = sourceRef;
+            this.targetRef = targetRef;
+        }
+    }
+
+    /**
+     * 从 BPMN XML 抽取全部 sequenceFlow 的 (id / sourceRef / targetRef)，用于反推已走连线。
+     * 容忍命名空间前缀（{@code bpmn:sequenceFlow} / {@code sequenceFlow}）与属性书写顺序。
+     */
+    private static List<SeqFlow> parseSequenceFlows(String bpmnXml) {
+        List<SeqFlow> out = new ArrayList<>();
+        if (bpmnXml == null || bpmnXml.isEmpty()) {
+            return out;
+        }
+        Matcher tag = Pattern.compile("<(?:[\\w.-]+:)?sequenceFlow\\b[^>]*>").matcher(bpmnXml);
+        while (tag.find()) {
+            String s = tag.group();
+            String id = seqAttr(s, "id");
+            String src = seqAttr(s, "sourceRef");
+            String dst = seqAttr(s, "targetRef");
+            if (id != null && src != null && dst != null) {
+                out.add(new SeqFlow(id, src, dst));
+            }
+        }
+        return out;
+    }
+
+    /** 在单个 sequenceFlow 开标签内取某属性值（属性以空白分隔，避免误匹配其它属性名里的子串）。 */
+    private static String seqAttr(String tag, String name) {
+        Matcher m = Pattern.compile("(?:^|\\s)" + Pattern.quote(name) + "\\s*=\\s*\"([^\"]*)\"").matcher(tag);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** 在「已激活子图」中 from 是否可达 to（用于判断同一目标各入边起点间的祖先关系）。 */
+    private static boolean reachable(Map<String, List<String>> adj, String from, String to) {
+        if (from.equals(to)) {
+            return true;
+        }
+        Set<String> visited = new LinkedHashSet<>();
+        List<String> stack = new ArrayList<>();
+        stack.add(from);
+        while (!stack.isEmpty()) {
+            String cur = stack.remove(stack.size() - 1);
+            if (!visited.add(cur)) {
+                continue;
+            }
+            List<String> nexts = adj.get(cur);
+            if (nexts != null) {
+                for (String next : nexts) {
+                    if (next.equals(to)) {
+                        return true;
+                    }
+                    if (!visited.contains(next)) {
+                        stack.add(next);
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**
