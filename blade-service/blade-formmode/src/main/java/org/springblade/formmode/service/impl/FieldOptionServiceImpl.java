@@ -58,6 +58,9 @@ public class FieldOptionServiceImpl extends ServiceImpl<FieldOptionMapper, Field
         // 2. 批量插入新选项
         if (options != null && !options.isEmpty()) {
             for (FieldOption option : options) {
+                // 整体替换语义：忽略前端回传的旧 id，交由数据库自增，
+                // 避免与已逻辑删除但仍物理存在的旧行主键冲突（Duplicate entry）
+                option.setId(null);
                 option.setFieldId(fieldId);
                 option.setFormId(formId);
                 option.setIsDeleted(0);

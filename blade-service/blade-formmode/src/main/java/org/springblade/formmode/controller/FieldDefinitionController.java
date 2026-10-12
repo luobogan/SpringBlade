@@ -42,6 +42,24 @@ public class FieldDefinitionController {
     }
 
     /**
+     * 获取字段类型列表（HTML类型 + 详细类型，泛微E9标准）
+     */
+    @GetMapping("/field-types")
+    @Operation(summary = "获取字段类型列表", description = "获取字段HTML类型与详细类型组合")
+    public R<List<Map<String, Object>>> fieldTypes() {
+        return R.data(org.springblade.formmode.constant.FieldTypeMeta.fieldTypes());
+    }
+
+    /**
+     * 获取浏览框类型列表
+     */
+    @GetMapping("/browser-types")
+    @Operation(summary = "获取浏览框类型列表", description = "获取浏览按钮类型列表")
+    public R<List<Map<String, Object>>> browserTypes() {
+        return R.data(org.springblade.formmode.constant.FieldTypeMeta.browserTypes());
+    }
+
+    /**
      * 获取字段详情
      */
     @GetMapping("/{id}")

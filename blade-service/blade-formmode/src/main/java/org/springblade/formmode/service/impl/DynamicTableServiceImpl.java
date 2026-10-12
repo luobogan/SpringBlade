@@ -593,11 +593,17 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                 return "VARCHAR(255)";
             case "text":
                 return "TEXT";
-            case "decimal":
-                if (fieldLen != null && decimalDigit != null) {
-                    return "DECIMAL(" + fieldLen + "," + decimalDigit + ")";
+            case "decimal": {
+                // fieldLen 对 decimal 表示精度(M)，但前端常把 varchar 的默认长度 255 误传进来；
+                // MySQL DECIMAL 精度(M)上限为 65，非法/超限按 18 处理，scale(D) 不得超过 M，
+                // 否则会生成 DECIMAL(255,0) 这类非法 SQL，导致 CREATE TABLE 报 BadSqlGrammar
+                int precision = (fieldLen != null && fieldLen > 0 && fieldLen <= 65) ? fieldLen : 18;
+                int scale = (decimalDigit != null && decimalDigit >= 0) ? decimalDigit : 2;
+                if (scale > precision) {
+                    scale = precision;
                 }
-                return "DECIMAL(10,2)";
+                return "DECIMAL(" + precision + "," + scale + ")";
+            }
             case "date":
                 return "DATE";
             case "datetime":

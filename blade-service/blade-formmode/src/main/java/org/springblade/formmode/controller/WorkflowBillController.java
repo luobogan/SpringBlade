@@ -384,7 +384,7 @@ public class WorkflowBillController extends BladeController {
     @Operation(summary = "同步表结构（带字段定义）", description = "使用前端传入的字段定义同步数据库表结构，包含数据兼容性检查")
     public R<Map<String, Object>> syncTableStructureWithFields(
             @Parameter(description = "表单ID") @PathVariable String id,
-            jakarta.servlet.http.HttpServletRequest request) {
+            @RequestBody List<Map<String, Object>> fields) {
         try {
             WorkflowBill workflowBill = workflowBillService.getById(id);
             if (workflowBill == null) {
@@ -395,18 +395,6 @@ public class WorkflowBillController extends BladeController {
             if (tableName == null || tableName.isEmpty()) {
                 return R.fail("表单表名未配置");
             }
-
-            // 直接读取请求体
-            String requestBody = new java.io.BufferedReader(
-                new java.io.InputStreamReader(request.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))
-                .lines().collect(java.util.stream.Collectors.joining("\n"));
-
-            log.info("========== 接收到同步表结构请求，请求体: {}", requestBody);
-
-            // 使用Jackson解析请求体
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            List<Map<String, Object>> fields = mapper.readValue(requestBody,
-                new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Object>>>() {});
 
             log.info("========== 接收到同步表结构请求，前端传入 {} 个字段定义 ==========", fields.size());
 
