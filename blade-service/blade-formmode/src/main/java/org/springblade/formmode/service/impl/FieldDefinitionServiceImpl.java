@@ -174,8 +174,17 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
         // 4. 保存选项数据
         if (options != null && !options.isEmpty()) {
             for (FieldOption option : options) {
+                // 新字段的选项一律按新记录插入：忽略前端回传的旧 id，交由数据库自增，
+                // 避免与已存在（含逻辑删除）的旧行主键冲突（Duplicate entry，同 saveOptions 语义）
+                option.setId(null);
                 option.setFieldId(field.getId());
                 option.setFormId(field.getBillId());
+                if (option.getIsDeleted() == null) {
+                    option.setIsDeleted(0);
+                }
+                if (option.getStatus() == null) {
+                    option.setStatus(1);
+                }
             }
             fieldOptionService.saveBatch(options);
         }
