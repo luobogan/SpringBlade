@@ -140,4 +140,16 @@ public interface IWfTaskService {
      */
     boolean markViewed(Long taskId);
 
+    /**
+     * 任务详情（供消息中心 / 浮窗点击「待办任务」跳转办理页时，由 taskId 解析出 instanceId）。
+     *
+     * <p>流程消息只携带 taskId，而办理页（ApprovalPage）需要 instanceId 才能加载定义上下文；
+     * 本方法按记录级鉴权（仅任务办理人本人或流程管理员可见）返回任务视图，其中包含
+     * {@code instId}（实例ID）、{@code defId}、{@code nodeKey}，前端据此跳转。</p>
+     *
+     * @param taskId 待办任务ID
+     * @return 任务视图（含所属实例ID）
+     */
+    WfTaskVO detail(Long taskId);
+
 }
