@@ -5,7 +5,6 @@ import org.flowable.bpmn.model.ExtensionAttribute;
 import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
-import org.flowable.bpmn.model.UserTask;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -251,8 +250,8 @@ public final class BpmnExtensionUtil {
 
 	// ---------------------------------------------------------- wf:node 写
 
-	public static void writeNode(UserTask task, WfNodeExt ext) {
-		ExtensionElement node = ensureFirstExt(task, "node");
+	public static void writeNode(BaseElement element, WfNodeExt ext) {
+		ExtensionElement node = ensureFirstExt(element, "node");
 		setAttr(node, "nodeType", ext.nodeType);
 		setAttr(node, "signOrder", ext.signOrder);
 		setAttr(node, "mergeType", ext.mergeType);

@@ -19,10 +19,12 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfWorkflowType;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
+import org.springblade.workflow.service.IWfDefinitionPermNormalizeService;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfDefinitionRedeployService;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.DefinitionKeyTenantVO;
+import org.springblade.workflow.vo.PermNormalizeReportVO;
 import org.springblade.workflow.vo.RedeployReportVO;
 import org.springblade.workflow.vo.FormBindingVO;
 import org.springblade.workflow.vo.FormConditionVO;
@@ -72,6 +74,8 @@ public class WfDefinitionController {
     private final IWfDefinitionService definitionService;
     /** 批量重部署（会签/或签下沉多实例用：MI 仅在部署期注入，需重新部署才生效） */
     private final IWfDefinitionRedeployService redeployService;
+    /** 创建节点字段权限归一（去 wf_表 回填把历史只读搬进 BPMN 后的数据修复） */
+    private final IWfDefinitionPermNormalizeService permNormalizeService;
     /** 「以 Flowable 为唯一事实源」改造：defId → (procKey,tenantId) 回填查询 */
     private final WfProcessDefinitionMapper defMapper;
 
@@ -127,6 +131,22 @@ public class WfDefinitionController {
         log.info("[blade-workflow][审计] 批量重部署（注入多实例）. onlyMissingMi={}, force={}, 结果={}, operator={}",
             onlyMissingMi, force, report.getMessage(), SecureUtil.getUserId());
         return R.data(report, "批量重部署已执行");
+    }
+
+    @PostMapping("/admin/normalize-create-node-perm")
+    @Operation(summary = "创建节点字段权限归一",
+        description = "把创建节点(nodeType=0) BPMN wf:node.fieldPerm/detailPerm 中「只读」条目归一到「可编辑」"
+            + "并重新部署（已发布→deploy、测试态→testDeploy、草稿仅清源不部署）。"
+            + "用于修复「去 wf_表」回填把历史只读权限搬进 BPMN 后，创建节点被误判为整表只读"
+            + "（表单字段不可编辑、浏览/附件弹窗按钮不出现）的问题。defId 为空则处理全部定义。")
+    public R<PermNormalizeReportVO> normalizeCreateNodePerm(
+        @Parameter(description = "指定流程定义ID；为空则处理全部有 BPMN 的定义")
+        @RequestParam(required = false) Long defId) {
+        PermNormalizeReportVO report = permNormalizeService.normalizeCreateNodeFieldPerm(defId);
+        // 管理面审计：会改写 BPMN 源并重新部署（生成新引擎版本），必须留痕
+        log.info("[blade-workflow][审计] 创建节点字段权限归一. defId={}, 结果={}, operator={}",
+            defId, report.getMessage(), SecureUtil.getUserId());
+        return R.data(report, "创建节点字段权限归一已执行");
     }
 
     @PutMapping("/{id}/bpmn")
