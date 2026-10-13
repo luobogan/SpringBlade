@@ -60,4 +60,9 @@ public class IFormmodeClientFallback implements IFormmodeClient {
         return R.fail("表单建模服务不可用");
     }
 
+    @Override
+    public R<FormDataVO> getBusinessData(Long formId, Long dataId) {
+        return R.fail("表单建模服务不可用");
+    }
+
 }

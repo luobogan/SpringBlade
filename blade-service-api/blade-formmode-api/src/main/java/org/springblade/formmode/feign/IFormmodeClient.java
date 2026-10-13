@@ -98,4 +98,15 @@ public interface IFormmodeClient {
     R<Boolean> deleteBusinessData(@RequestParam("formId") Long formId,
                                  @RequestParam("dataId") Long dataId);
 
+    /**
+     * 按「表单ID + 数据ID」读取业务数据行（含自定义字段值）。
+     *
+     * <p>与 {@link #deleteBusinessData} 对称：按 {@code workflow_bill.table_name} 定位真实业务表，
+     * 返回 {@link FormDataVO#getFieldValues()}（字段名→值）。供 blade-workflow 公文套红
+     * 按表单字段填充书签。Feign 直连、不带 /api/blade-formmode 前缀。</p>
+     */
+    @GetMapping("/form-data/by-form")
+    R<FormDataVO> getBusinessData(@RequestParam("formId") Long formId,
+                                  @RequestParam("dataId") Long dataId);
+
 }

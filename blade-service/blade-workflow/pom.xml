@@ -76,6 +76,26 @@
             <version>${flowable.version}</version>
         </dependency>
 
+        <!-- 公文版式/签章厂商实现（可选库模块）：optional，未部署时 blade-workflow 停留 L1；
+             部署后其 @ConditionalOnProperty bean 被本服务组件扫描（包在 org.springblade.workflow 下） -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-workflow-odoc-layout</artifactId>
+            <version>${revision}</version>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ============ Apache POI（Apache-2.0）：公文套红合成引擎 ============ -->
+        <!-- 用于 docx 书签字段替换 + 正文插入，产出套红版 docx。
+             选型说明：方案原定 docx4j，但本沙箱离线不可解析；POI 5.4.1 已在本地仓库，
+             能力等价（bookmark/CT 级 XML 操作），且零外部进程。合成逻辑收敛在
+             org.springblade.workflow.odoc.compose 接口后，便于日后平替。 -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.4.1</version>
+        </dependency>
+
         <!-- 仅测试用：内存库 + Spring 测试基座（版本由 spring-boot BOM 管理） -->
         <dependency>
             <groupId>com.h2database</groupId>

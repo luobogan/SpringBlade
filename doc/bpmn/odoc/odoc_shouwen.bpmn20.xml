@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  收文流程(receipt) = 收发文一体化 L1/L2 承载流程
+  公文表单主表字段(供 wf_odoc_process_set.doc_field_key / number_field_key 引用):
+    docId=正文(来文上传, fieldHtmlType=9)  title=标题  urgency=紧急程度  secretLevel=密级
+    topicType=主题词  issuedUnit=来文单位  receiveUnit=主送/收文单位
+    issueDate=收文日期  receiveNum=收文编号(登记出口自动取号)
+  offical_type=2; 收文无强制套红/签章节点, 仅转版式节点供 layout_node_key 引用。
+  本仓 application.yml 已开 operator-from-bpmn / definition-from-bpmn = true, wf: 为权威读源。
+  ============================================================================
+-->
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:wf="http://www.springblade.org/workflow"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             targetNamespace="http://www.springblade.org/workflow"
+             xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL http://www.omg.org/spec/BPMN/20100524/DI/BPMN20.xsd">
+
+  <process id="odoc_shouwen" name="收文流程" isExecutable="true">
+
+    <startEvent id="StartEvent_1" name="开始" flowable:initiator="initiator"/>
+    <sequenceFlow id="Flow_1" name="提交" sourceRef="StartEvent_1" targetRef="Task_Register"/>
+
+    <!-- 2. 登记(创建节点) -->
+    <userTask id="Task_Register" name="收文登记" flowable:assignee="${initiator}" flowable:formKey="odoc_shouwen_form">
+      <documentation>创建节点:收文员登记来文,上传正文(docId),填写标题/来文单位/紧急程度/密级/主题词/收文日期;receiveNum 暂隐藏(登记出口自动取号)。</documentation>
+      <extensionElements>
+        <wf:node nodeType="0" signOrder="0" allowReject="1" autoApprove="0">
+          <wf:operator opType="17" objId="" signOrder="0" bhxj="0"/>
+          <wf:fieldPerm scope="main" field="docId" perm="3"/>
+          <wf:fieldPerm scope="main" field="title" perm="3"/>
+          <wf:fieldPerm scope="main" field="urgency" perm="2"/>
+          <wf:fieldPerm scope="main" field="secretLevel" perm="2"/>
+          <wf:fieldPerm scope="main" field="topicType" perm="2"/>
+          <wf:fieldPerm scope="main" field="issuedUnit" perm="2"/>
+          <wf:fieldPerm scope="main" field="receiveUnit" perm="1"/>
+          <wf:fieldPerm scope="main" field="issueDate" perm="2"/>
+          <wf:fieldPerm scope="main" field="receiveNum" perm="0"/>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_2" name="提交" sourceRef="Task_Register" targetRef="Task_Draft"/>
+
+    <!-- 3. 拟办(办公室拟办意见) -->
+    <userTask id="Task_Draft" name="拟办" flowable:candidateGroups="role_office">
+      <documentation>办公室拟办:提出拟办意见,来文与表单只读。</documentation>
+      <extensionElements>
+        <wf:node nodeType="1" signOrder="0" allowReject="1" autoApprove="0">
+          <wf:operator opType="2" objId="role_office" signOrder="0" bhxj="0"/>
+          <wf:fieldPerm scope="main" field="docId" perm="1"/>
+          <wf:fieldPerm scope="main" field="title" perm="1"/>
+          <wf:fieldPerm scope="main" field="receiveUnit" perm="2"/>
+          <wf:fieldPerm scope="main" field="receiveNum" perm="1"/>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_3" name="通过" sourceRef="Task_Draft" targetRef="Task_LeaderApprove"/>
+
+    <!-- 4. 批办(领导批办) -->
+    <userTask id="Task_LeaderApprove" name="批办" flowable:candidateGroups="role_leader">
+      <documentation>单位领导批办:明确承办部门与办理要求。</documentation>
+      <extensionElements>
+        <wf:node nodeType="1" signOrder="0" allowReject="1" autoApprove="0">
+          <wf:operator opType="2" objId="role_leader" signOrder="0" bhxj="0"/>
+          <wf:fieldPerm scope="main" field="docId" perm="1"/>
+          <wf:fieldPerm scope="main" field="receiveNum" perm="1"/>
+          <wf:timeout seq="1" enabled="1" startType="1" endType="1"
+                      durationMin="1440" actionWay="remind" remindTypes="sys"/>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_4" name="通过" sourceRef="Task_LeaderApprove" targetRef="Task_Handle"/>
+
+    <!-- 5. 承办(承办部门办理) -->
+    <userTask id="Task_Handle" name="承办" flowable:candidateGroups="role_handle">
+      <documentation>承办部门办理:落实领导批办意见,可退回拟办节点。</documentation>
+      <extensionElements>
+        <wf:node nodeType="1" signOrder="1" allowReject="1" autoApprove="0">
+          <wf:operator opType="2" objId="role_handle" signOrder="1" bhxj="0"/>
+          <wf:fieldPerm scope="main" field="docId" perm="1"/>
+          <wf:fieldPerm scope="main" field="receiveNum" perm="1"/>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_5" name="通过" sourceRef="Task_Handle" targetRef="Task_Circulate"/>
+
+    <!-- 6. 传阅(抄送, signOrder=3 不需提交) -->
+    <userTask id="Task_Circulate" name="传阅" flowable:candidateGroups="role_circulate">
+      <documentation>传阅:向相关单位/人员传阅,signOrder=3 抄送(不需提交)。</documentation>
+      <extensionElements>
+        <wf:node nodeType="1" signOrder="3" allowReject="0" autoApprove="0">
+          <wf:operator opType="2" objId="role_circulate" signOrder="3" bhxj="0"/>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_6" name="通过" sourceRef="Task_Circulate" targetRef="Task_Layout"/>
+
+    <!-- 7. 转版式(办理节点, layout_node_key 引用) -->
+    <userTask id="Task_Layout" name="转版式归档" flowable:candidateGroups="role_office">
+      <documentation>转版式:按 wf_odoc_process_set.layout_format 同一 to-layout 接口转 PDF(12)/OFD(13),注入元数据 wf_odoc_meta;layout_format=0 自动通过。</documentation>
+      <extensionElements>
+        <wf:node nodeType="1" signOrder="0" allowReject="1" autoApprove="0">
+          <wf:operator opType="2" objId="role_office" signOrder="0" bhxj="0"/>
+          <wf:fieldPerm scope="main" field="docId" perm="1"/>
+        </wf:node>
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="Flow_7" name="通过" sourceRef="Task_Layout" targetRef="EndEvent_1"/>
+
+    <endEvent id="EndEvent_1" name="归档">
+      <extensionElements><wf:node nodeType="3"/></extensionElements>
+    </endEvent>
+
+  </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane bpmnElement="odoc_shouwen" id="BPMNPlane_1">
+      <bpmndi:BPMNShape bpmnElement="StartEvent_1" id="StartEvent_1_di">
+        <omgdc:Bounds x="100" y="285" width="30" height="30"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Register" id="Task_Register_di">
+        <omgdc:Bounds x="160" y="260" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Draft" id="Task_Draft_di">
+        <omgdc:Bounds x="330" y="260" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_LeaderApprove" id="Task_LeaderApprove_di">
+        <omgdc:Bounds x="500" y="260" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Handle" id="Task_Handle_di">
+        <omgdc:Bounds x="670" y="260" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Circulate" id="Task_Circulate_di">
+        <omgdc:Bounds x="840" y="260" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="Task_Layout" id="Task_Layout_di">
+        <omgdc:Bounds x="1010" y="260" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape bpmnElement="EndEvent_1" id="EndEvent_1_di">
+        <omgdc:Bounds x="1180" y="285" width="30" height="30"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge bpmnElement="Flow_1" id="Flow_1_di">
+        <omgdi:waypoint x="130" y="300"/><omgdi:waypoint x="160" y="300"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_2" id="Flow_2_di">
+        <omgdi:waypoint x="280" y="300"/><omgdi:waypoint x="330" y="300"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_3" id="Flow_3_di">
+        <omgdi:waypoint x="450" y="300"/><omgdi:waypoint x="500" y="300"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_4" id="Flow_4_di">
+        <omgdi:waypoint x="620" y="300"/><omgdi:waypoint x="670" y="300"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_5" id="Flow_5_di">
+        <omgdi:waypoint x="790" y="300"/><omgdi:waypoint x="840" y="300"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_6" id="Flow_6_di">
+        <omgdi:waypoint x="960" y="300"/><omgdi:waypoint x="1010" y="300"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="Flow_7" id="Flow_7_di">
+        <omgdi:waypoint x="1130" y="300"/><omgdi:waypoint x="1180" y="300"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</definitions>

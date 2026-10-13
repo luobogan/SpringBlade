@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springblade</groupId>
+        <artifactId>blade-service</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>blade-workflow-odoc-layout</artifactId>
+    <packaging>jar</packaging>
+    <description>公文版式转换 / 电子签章厂商实现（可选纯库模块，非微服务；L2 增强，未装配则 blade-workflow 停留 L1）</description>
+
+    <dependencies>
+        <!-- L2 SPI 契约（IOdocFormatConvertor / IOdocSealService） -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-workflow-api</artifactId>
+        </dependency>
+        <!-- @ConditionalOnProperty / @Component / @Value -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+
+        <!--
+          厂商 SDK 按需 optional 引入（示例，默认不引入；沙箱离线不可解析，故留空）：
+          数科 OFD / 永中 / 福昕 / 福昕GSDK、契约锁 CA 等，引入后设 <optional>true</optional>，
+          并在对应实现类里完成真实转换/签章逻辑。
+        -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- 纯库模块：禁用 spring-boot repackage（无可执行 main 类） -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

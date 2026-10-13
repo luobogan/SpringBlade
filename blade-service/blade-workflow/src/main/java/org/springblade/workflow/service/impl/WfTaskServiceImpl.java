@@ -6,6 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.workflow.action.NodeActionExecutor;
+import org.springblade.workflow.odoc.action.WfNodeMustDoActionExecutor;
+import org.springblade.workflow.odoc.number.WfOdocNumberAssignListener;
 import org.springblade.workflow.dto.AddSignDTO;
 import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.dto.ApproveDTO;
@@ -126,6 +128,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfFormSnapshotMapper snapshotMapper;
     private final WfRejectManager rejectManager;
     private final WfSubflowRequestMapper subflowRequestMapper;
+    /** 公文「节点必做动作」拦截（套红/后续签章/清稿等提交前校验） */
+    private final WfNodeMustDoActionExecutor odocMustDoActionExecutor;
+    /** 公文文号「出口监听」（定稿节点取号并回写表单） */
+    private final WfOdocNumberAssignListener odocNumberAssignListener;
     /** 节点操作者解析（退回弹窗「操作者」列展示用，解析失败不阻塞） */
     private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
     /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
@@ -304,6 +310,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
             }
         }
 
+        // 公文「节点必做动作」提交拦截：套红节点且开启强制套红时，未套红则拒绝提交
+        odocMustDoActionExecutor.checkBeforeSubmit(inst, node);
+
         // 2.5 提交变量（提前准备：普通提交与「退回发起人后由创建节点重新提交」两条路径共用）
         Map<String, Object> vars = new HashMap<>(8);
         if (dto != null && dto.getVariables() != null) {
@@ -395,6 +404,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (!testInst) {
             nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, operator);
             nodeActionExecutor.triggerSubflow(inst, node, NodeActionExecutor.TRIGGER_AFTER_SUBMIT, operator);
+            // 公文文号出口监听：定稿节点取号并回写表单（失败不阻断主干，仅告警）
+            try {
+                odocNumberAssignListener.onNodeSubmit(inst, node);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 公文文号取号/回写失败（忽略）. instId={}, nodeKey={}, {}",
+                    inst.getId(), node.getNodeKey(), e.getMessage());
+            }
         }
 
         // 二期 T9（对齐 ecology updateBizState）：待办已办理 → 把 TASK_CREATED 时发的

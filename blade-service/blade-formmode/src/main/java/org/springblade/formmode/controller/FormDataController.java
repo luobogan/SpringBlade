@@ -177,6 +177,21 @@ public class FormDataController extends BladeController {
     }
 
     /**
+     * 按「表单ID + 数据ID」读取业务数据行（含自定义字段值）。
+     *
+     * <p>与 {@code /by-form} 删除对称：按 {@code workflow_bill.table_name} 定位真实业务表，
+     * 返回 {@link FormDataVO#getFieldValues()}（字段名→值，已过滤系统字段）。
+     * 供 blade-workflow 公文套红时按表单字段填充书签（Feign 透传 token，仅要求已登录）。</p>
+     */
+    @GetMapping("/by-form")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    public R<FormDataVO> getByForm(@RequestParam("formId") Long formId,
+                                   @RequestParam("dataId") Long dataId) {
+        FormDataVO result = formDataService.getFormDataById(formId, dataId);
+        return result != null ? R.data(result) : R.fail("数据不存在");
+    }
+
+    /**
      * 批量删除数据
      */
     @DeleteMapping("/batch/{modeId}")
