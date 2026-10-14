@@ -49,6 +49,11 @@
             <groupId>org.springblade</groupId>
             <artifactId>blade-user-api</artifactId>
         </dependency>
+        <!-- 反向查询组织层级：解析矩阵 -13「创建人分部」条件（部门 → 所属分部） -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-system-api</artifactId>
+        </dependency>
         <!-- 流程消息：待办产生/流程办结时经 INoticeClient 给相关人发通知（写入统一消息中心） -->
         <dependency>
             <groupId>org.springblade</groupId>

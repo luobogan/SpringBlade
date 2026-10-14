@@ -326,6 +326,59 @@ class WfBpmnExtensionRoundTripTest {
 		assertEquals("1", o.isPending);
 	}
 
+	// -------------------------------------------------- 矩阵操作者（opType=99）matrixJson 往返保真
+
+	private static final String MATRIX_JSON =
+		"{\"matrixId\":\"2110000000000000001\",\"valueField\":\"f3\","
+			+ "\"conditions\":[{\"condField\":\"f1\",\"wfField\":\"dept_field\",\"bhxj\":0},"
+			+ "{\"condField\":\"f2\",\"wfField\":\"-12\",\"bhxj\":0}]}";
+
+	/** 携带 opType=99 + matrixJson 的操作者，验证 matrixJson 经 readNode 解析无损 */
+	private static final String BPMN_MATRIX_OP = """
+		<?xml version="1.0" encoding="UTF-8"?>
+		<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+		             xmlns:wf="http://www.springblade.org/workflow"
+		             targetNamespace="http://www.springblade.org/workflow">
+		  <process id="p" isExecutable="true">
+		    <userTask id="approve1" name="矩阵审批">
+		      <extensionElements>
+		        <wf:node nodeType="2">
+		          <wf:operator groupNo="0" opType="99" objId="2110000000000000001"
+		                       matrixJson="{&quot;matrixId&quot;:&quot;2110000000000000001&quot;,&quot;valueField&quot;:&quot;f3&quot;,&quot;conditions&quot;:[{&quot;condField&quot;:&quot;f1&quot;,&quot;wfField&quot;:&quot;dept_field&quot;,&quot;bhxj&quot;:0},{&quot;condField&quot;:&quot;f2&quot;,&quot;wfField&quot;:&quot;-12&quot;,&quot;bhxj&quot;:0}]}"/>
+		        </wf:node>
+		      </extensionElements>
+		    </userTask>
+		  </process>
+		</definitions>
+		""";
+
+	@Test
+	@DisplayName("矩阵操作者（opType=99）matrixJson 经 readNode 解析无损")
+	void matrixOperatorParsed() {
+		WfNodeExt ext = BpmnExtensionUtil.readNode(
+			(UserTask) parse(BPMN_MATRIX_OP).getMainProcess().getFlowElement("approve1"));
+		assertEquals(1, ext.operators.size());
+		BpmnExtensionUtil.WfOperatorExt o = ext.operators.get(0);
+		assertEquals("99", o.opType);
+		assertEquals("2110000000000000001", o.objId);
+		assertEquals(MATRIX_JSON, o.matrixJson);
+	}
+
+	@Test
+	@DisplayName("矩阵操作者（opType=99）matrixJson 经 writeNode 写回后往返无损")
+	void matrixOperatorRoundTrip() {
+		BpmnModel model = parse(BPMN_MATRIX_OP);
+		UserTask task = (UserTask) model.getMainProcess().getFlowElement("approve1");
+		BpmnExtensionUtil.writeNode(task, BpmnExtensionUtil.readNode(task));
+		BpmnModel written = parse(write(model));
+		WfNodeExt ext = BpmnExtensionUtil.readNode(
+			(UserTask) written.getMainProcess().getFlowElement("approve1"));
+		assertEquals(1, ext.operators.size());
+		BpmnExtensionUtil.WfOperatorExt o = ext.operators.get(0);
+		assertEquals("99", o.opType);
+		assertEquals(MATRIX_JSON, o.matrixJson);
+	}
+
 	// -------------------------------------------------- P3-5 timeout 全字段往返保真
 
 	/** 携带全部超时字段的 userTask，用于验证 timeoutFromBpmn 切换前 BPMN schema 字段完整无损 */

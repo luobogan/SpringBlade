@@ -135,5 +135,15 @@ public class DeptController extends BladeController {
 		return R.status(deptService.isCanceled(Func.toLongList(ids)));
 	}
 
+	/**
+	 * 取某组织节点所属「分部(division)」节点ID（供工作流矩阵 -13「创建人分部」条件使用）。
+	 * 经网关 Feign 调用时由请求拦截器注入租户，无需额外入参。
+	 */
+	@GetMapping("/division-id-by-dept")
+	@Operation(summary = "取组织节点的所属分部ID", description = "部门节点取 subcompanyId；本身是分部则返回自身；无归属返回 null")
+	public R<Long> divisionIdByDept(@RequestParam Long deptId) {
+		return R.data(deptService.divisionId(deptId));
+	}
+
 
 }

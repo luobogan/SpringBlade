@@ -1125,6 +1125,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             op.setIsPending(parseIntSafe(attr(opEl, "isPending", null), 0));
             op.setIsModify(parseIntSafe(attr(opEl, "isModify", null), 0));
             op.setSignType(parseIntSafe(attr(opEl, "signType", null), 0));
+            // matrixJson 非表列（仅 BPMN 读源装配），此处在内存对象上携带，便于同进程消费方一致
+            op.setMatrixJson(attr(opEl, "matrixJson", null));
             operatorMapper.insert(op);
         }
     }

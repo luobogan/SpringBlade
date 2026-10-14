@@ -147,6 +147,8 @@ public final class BpmnExtensionUtil {
 			o.isPending = attr(op, "isPending");
 			o.isModify = attr(op, "isModify");
 			o.signType = attr(op, "signType");
+			// opType=99（矩阵）：矩阵ID 在 objId，结果维度与条件映射在 matrixJson
+			o.matrixJson = attr(op, "matrixJson");
 			ext.operators.add(o);
 		}
 		for (ExtensionElement fp : allChild(node, "fieldPerm")) {
@@ -282,6 +284,7 @@ public final class BpmnExtensionUtil {
 			setAttr(e, "isPending", o.isPending);
 			setAttr(e, "isModify", o.isModify);
 			setAttr(e, "signType", o.signType);
+			setAttr(e, "matrixJson", o.matrixJson);
 			node.addChildElement(e);
 		}
 		for (WfFieldPermExt f : ext.fieldPerms) {
@@ -465,6 +468,30 @@ public final class BpmnExtensionUtil {
 		public String groupNo, opType, objId, bhxj, levelMin, levelMax,
 			signOrder, batchNo, groupName, canView, conditionJson,
 			isCoadjutant, coadjutants, isPending, isModify, signType;
+		/**
+		 * opType=99（矩阵）时的矩阵配置 JSON。
+		 *
+		 * <p>{@code objId} 复用为矩阵ID，本字段承载结果维度与条件映射：</p>
+		 * <pre>{@code
+		 * {
+		 *   "matrixId": "2110000000000000001",
+		 *   "valueField": "f3",
+		 *   "conditions": [
+		 *     { "condField": "f1", "wfField": "dept_field", "bhxj": 0 },
+		 *     { "condField": "f2", "wfField": "-12", "bhxj": 0 }
+		 *   ]
+		 * }
+		 * }</pre>
+		 *
+		 * <p>wfField 语义：{@code -12} 创建人部门 / {@code -13} 创建人分部 /
+		 * {@code -1} 指定分部 / {@code -2} 指定部门 / 其它 = 表单字段名。</p>
+		 *
+		 * <p>⚠️ 新增本字段必须同步三处，否则属性会静默丢失：
+		 * 读循环、写循环、以及 {@code resources/moddle/wf-moddle-extension.json}
+		 * 的 {@code Operator} properties（Flowable 严格按 moddle schema 解析，
+		 * 未声明的属性会被直接丢弃）。</p>
+		 */
+		public String matrixJson;
 	}
 
 	public static class WfFieldPermExt {

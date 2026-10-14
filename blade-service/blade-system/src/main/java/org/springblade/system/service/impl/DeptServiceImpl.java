@@ -338,4 +338,36 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements ID
 			.in(Dept::getId, ids));
 	}
 
+	@Override
+	public Long divisionId(Long deptId) {
+		if (deptId == null || deptId <= 0) {
+			return null;
+		}
+		Dept dept = this.getById(deptId);
+		if (dept == null) {
+			return null;
+		}
+		// 自身即为分部
+		if (Integer.valueOf(1).equals(dept.getDeptType())) {
+			return dept.getId();
+		}
+		// 部门：优先取所属分部（submit 时已推导 subcompanyId）
+		if (dept.getSubcompanyId() != null && dept.getSubcompanyId() > 0) {
+			return dept.getSubcompanyId();
+		}
+		// 兜底：subcompanyId 未推导时沿 parent 向上找最近的分部，最多 10 层防环
+		Long cursor = dept.getParentId();
+		for (int i = 0; i < 10 && cursor != null && cursor > 0; i++) {
+			Dept parent = this.getById(cursor);
+			if (parent == null) {
+				break;
+			}
+			if (Integer.valueOf(1).equals(parent.getDeptType())) {
+				return parent.getId();
+			}
+			cursor = parent.getParentId();
+		}
+		return null;
+	}
+
 }

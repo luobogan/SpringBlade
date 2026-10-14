@@ -5,13 +5,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.StringUtil;
+import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
+import org.springblade.system.feign.IDeptClient;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
+import org.springblade.workflow.matrix.service.IWfMatrixService;
+import org.springblade.workflow.matrix.vo.MatrixMatchVO;
 import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.config.WfRetirementProperties;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +23,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -91,12 +96,18 @@ public class WfOperatorResolver {
     public static final int OP_FIELD_ROLE = 43;
     /** 本部门（到达本节点的当前办理人所在部门） */
     public static final int OP_DEPT_SELF = 19;
+    /** 矩阵（条件维度匹配 → 取结果维度人员；matrixId 在 objId，配置在 matrixJson） */
+    public static final int OP_MATRIX = 99;
 
     private final WfNodeOperatorMapper operatorMapper;
     private final WfProcessNodeMapper nodeMapper;
     private final WfFormSnapshotMapper snapshotMapper;
     /** 用户中心：把「部门/角色/岗位/所有人/上级/本部门」解析成真实办理人（Feign 失败即降级，不阻塞流转） */
     private final IUserClient userClient;
+    /** 组织层级：解析矩阵 -13「创建人分部」条件（部门 → 所属分部；Feign 失败即降级为空） */
+    private final IDeptClient deptClient;
+    /** 矩阵：按条件维度匹配取人（opType=99） */
+    private final IWfMatrixService matrixService;
     /** P3-5：操作者改读 BPMN {@code wf:} 扩展（替代 wf_node_operator）。默认关，运行时回归后开启 */
     private final WfBpmnExtensionReader bpmnReader;
 
@@ -233,6 +244,9 @@ public class WfOperatorResolver {
             case OP_DEPT_SELF:
                 base = userIdsByDeptOfUser(currentOperator, containChild);
                 break;
+            case OP_MATRIX:
+                base = byMatrix(op, starter, currentOperator, formData);
+                break;
             default:
                 log.warn("[blade-workflow] 操作者类型暂不支持解析，已跳过（待办将回退为引擎 assignee）. "
                         + "opType={}, objId={}", type, op.getObjId());
@@ -336,6 +350,7 @@ public class WfOperatorResolver {
         op.setIsPending(toInt(e.isPending));
         op.setIsModify(toInt(e.isModify));
         op.setCoadjutants(e.coadjutants);
+        op.setMatrixJson(e.matrixJson);
         return op;
     }
 
@@ -520,6 +535,166 @@ public class WfOperatorResolver {
     private static List<Long> single(Long id) {
         return (id == null || id <= 0) ? List.of() : List.of(id);
     }
+
+    // ---------------------------------------------------------- 矩阵操作者（opType=99）
+
+    /**
+     * 矩阵操作者解析：把 {@code matrixJson} 的条件维度映射到表单/系统字段取值，
+     * 调 {@link IWfMatrixService#matchUsers} 按 AND 匹配矩阵行，取结果维度人员。
+     *
+     * <p>matrixJson 结构（详见矩阵落地文档）：</p>
+     * <pre>{@code
+     * {
+     *   "matrixId": "2110000000000000001",   // 也可由 operator.objId 兜底
+     *   "valueField": "f3",                  // 结果维度 fieldKey
+     *   "conditions": [
+     *     { "condField": "f1", "wfField": "dept_field", "bhxj": 0 },
+     *     { "condField": "f2", "wfField": "-12",        "bhxj": 0, "objId": "" },
+     *     { "condField": "f3", "wfField": "-1",         "bhxj": 0, "objId": "20000000001" }
+     *   ]
+     * }
+     * }</pre>
+     *
+     * <p>wfField 语义：</p>
+     * <ul>
+     *   <li>普通字符串 = 表单字段名（{@code formData.get}）</li>
+     *   <li>{@code -12} = 创建人部门（{@link IUserClient#userInfo} 取 deptId）</li>
+     *   <li>{@code -13} = 创建人分部（经 {@link IDeptClient#divisionIdByDept} 解析：部门 → 所属分部）</li>
+     *   <li>{@code -1} / {@code -2} = 指定分部/指定部门：取条件携带的固定 {@code objId}</li>
+     * </ul>
+     *
+     * <p><b>降级策略</b>：解析/匹配失败一律 warn + 返回空集合，交由上游「MI 空集合守卫」拦截，
+     * 不抛异常阻塞流转主链路（对齐其它操作者分支）。</p>
+     */
+    private List<Long> byMatrix(WfNodeOperator op, Long starter, Long currentOperator, Map<String, Object> formData) {
+        String json = op.getMatrixJson();
+        String matrixId = StringUtil.isBlank(op.getObjId()) ? null : op.getObjId().trim();
+        MatrixCfg cfg = null;
+        if (!StringUtil.isBlank(json)) {
+            try {
+                cfg = JsonUtil.parse(json, MatrixCfg.class);
+            } catch (Exception e) {
+                // E9 教训 #10：解析失败必须带原文定位，禁止静默吞掉
+                log.error("[blade-workflow] 矩阵操作者 matrixJson 解析失败. objId={}, matrixJson={}", op.getObjId(), json, e);
+                return List.of();
+            }
+        }
+        if (cfg != null && !StringUtil.isBlank(cfg.matrixId)) {
+            matrixId = cfg.matrixId.trim();
+        }
+        if (StringUtil.isBlank(matrixId) || cfg == null || StringUtil.isBlank(cfg.valueField)) {
+            log.warn("[blade-workflow] 矩阵操作者缺少 matrixId 或 valueField，按无操作者处理. objId={}, matrixJson={}",
+                op.getObjId(), json);
+            return List.of();
+        }
+
+        Map<String, String> condValues = new LinkedHashMap<>();
+        if (cfg.conditions != null) {
+            for (MatrixCfg.Cond c : cfg.conditions) {
+                if (c == null || StringUtil.isBlank(c.condField) || StringUtil.isBlank(c.wfField)) {
+                    continue;
+                }
+                String value = resolveConditionValue(c.wfField.trim(), c.objId, starter, formData);
+                if (value == null || value.isBlank()) {
+                    // E9 教训 #2：条件值为空 → 不参与匹配（禁止等价于 is null）
+                    log.warn("[blade-workflow] 矩阵条件取值为空，该条件不参与匹配. matrixId={}, condField={}, wfField={}",
+                        matrixId, c.condField, c.wfField);
+                    continue;
+                }
+                condValues.put(c.condField.trim(), value);
+            }
+        }
+
+        MatrixMatchVO match = matrixService.matchUsers(Long.valueOf(matrixId), cfg.valueField.trim(), condValues);
+        // E9 教训 #10：为空/未命中必须带完整上下文（矩阵名+条件+命中行）定位
+        if (match.isEmpty()) {
+            log.warn("[blade-workflow] 矩阵解析未命中任何办理人. {}", match.describe());
+            return List.of();
+        }
+        log.info("[blade-workflow] 矩阵解析命中办理人. {}", match.describe());
+        return match.getUserIds();
+    }
+
+    /**
+     * 解析单条矩阵条件的取值。
+     *
+     * @param wfField    条件来源：表单字段名 / -12 / -13 / -1 / -2
+     * @param fixedObjId -1/-2（指定分部/部门）时携带的固定 ID
+     */
+    private String resolveConditionValue(String wfField, String fixedObjId, Long starter, Map<String, Object> formData) {
+        if ("-12".equals(wfField)) {
+            return creatorDeptId(starter);
+        }
+        if ("-13".equals(wfField)) {
+            // 创建人分部：先取创建人部门ID，再经 IDeptClient 解析其所属分部（部门 → subcompanyId）。
+            return creatorDivisionId(starter);
+        }
+        if ("-1".equals(wfField) || "-2".equals(wfField)) {
+            // 指定分部/部门：固定 ID 随条件携带（设计期确定）
+            return StringUtil.isBlank(fixedObjId) ? null : fixedObjId.trim();
+        }
+        // 普通表单字段名
+        Object v = formData.get(wfField);
+        return v == null ? null : String.valueOf(v).trim();
+    }
+
+    /** 取创建人部门ID（取 deptId 逗号串中的第一个） */
+    private String creatorDeptId(Long starter) {
+        if (starter == null || starter <= 0) {
+            return null;
+        }
+        try {
+            R<UserInfo> r = userClient.userInfo(starter);
+            if (r == null || !r.isSuccess() || r.getData() == null || r.getData().getUser() == null) {
+                log.warn("[blade-workflow] 查创建人信息失败，矩阵 -12 条件无法取值. starter={}", starter);
+                return null;
+            }
+            String deptId = r.getData().getUser().getDeptId();
+            if (StringUtil.isBlank(deptId)) {
+                return null;
+            }
+            String[] parts = deptId.split("[,，;；\\s]+");
+            return parts.length > 0 ? parts[0].trim() : null;
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 查创建人部门异常，矩阵 -12 条件无法取值: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 取创建人所属分部ID（先取部门，再解析其所属分部；组织服务不可用 → 返回 null，条件不参与匹配） */
+    private String creatorDivisionId(Long starter) {
+        String deptId = creatorDeptId(starter);
+        if (StringUtil.isBlank(deptId)) {
+            log.warn("[blade-workflow] 矩阵 -13 条件无法取创建人部门，按无值处理. starter={}", starter);
+            return null;
+        }
+        try {
+            R<Long> r = deptClient.divisionIdByDept(Long.valueOf(deptId.trim()));
+            if (r == null || !r.isSuccess() || r.getData() == null || r.getData() <= 0) {
+                log.warn("[blade-workflow] 查创建人分部失败，矩阵 -13 条件无法取值. starter={}, deptId={}", starter, deptId);
+                return null;
+            }
+            return String.valueOf(r.getData());
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 查创建人分部异常，矩阵 -13 条件无法取值: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 矩阵操作者 {@code matrixJson} 解析载体（Jackson 反序列化用） */
+    public static class MatrixCfg {
+        public String matrixId;
+        public String valueField;
+        public List<Cond> conditions;
+
+        public static class Cond {
+            public String condField;
+            public String wfField;
+            public String objId;
+            public Integer bhxj;
+        }
+    }
+
 
     /**
      * 把「逗号/分号/空白分隔的 id 串」解析成 id 列表（支持多选）。

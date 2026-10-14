@@ -85,4 +85,16 @@ public class WfNodeOperator extends TenantEntity {
     @Schema(description = "协办/征询意见人（人员id串，逗号分隔）")
     private String coadjutants;
 
+    /**
+     * opType=99（矩阵）时的矩阵配置 JSON（{@code matrixId} / {@code valueField} / {@code conditions[]}）。
+     *
+     * <p><b>非表列</b>：{@code wf_node_operator} 已是「P6 停写」的过渡表，节点操作者的权威源是
+     * BPMN {@code <wf:operator>} 的 {@code matrixJson} 属性。此处仅作为 BPMN 读源装配后的
+     * 内存载体，<b>不落库、不加列</b>，避免与正在进行的「去 wf_ 表」改造冲突
+     * （同 {@link #nodeKey} 的既有做法）。</p>
+     */
+    @Schema(description = "矩阵配置JSON（opType=99；非表列，仅BPMN读源装配）")
+    @TableField(exist = false)
+    private String matrixJson;
+
 }

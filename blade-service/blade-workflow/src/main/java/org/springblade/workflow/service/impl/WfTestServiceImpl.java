@@ -801,6 +801,7 @@ public class WfTestServiceImpl implements IWfTestService {
         op.setIsPending(toIntSafely(o.isPending));
         op.setIsModify(toIntSafely(o.isModify));
         op.setSignType(toIntSafely(o.signType));
+        op.setMatrixJson(o.matrixJson);
         return op;
     }
 

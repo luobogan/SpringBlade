@@ -128,4 +128,15 @@ public interface IDeptService extends IService<Dept> {
 	 */
 	boolean isCanceled(List<Long> ids);
 
+	/**
+	 * 取某组织节点所属「分部(division)」节点ID（供工作流矩阵 -13「创建人分部」条件使用）。
+	 * <p>解析规则：传入节点本身是分部(deptType=1) → 返回自身；传入部门(deptType=2) → 返回其
+	 * 所属分部 subcompanyId；subcompanyId 为空则沿 parent 向上找最近的 deptType=1；节点不存在或
+	 * 无分部归属 → 返回 null。</p>
+	 *
+	 * @param deptId 组织节点ID（公司/分部/部门均可）
+	 * @return 分部节点ID；无归属或节点不存在时返回 null
+	 */
+	Long divisionId(Long deptId);
+
 }
