@@ -145,5 +145,23 @@ public class DeptController extends BladeController {
 		return R.data(deptService.divisionId(deptId));
 	}
 
+	/**
+	 * 组织子树 ID 集合（含自身与全部子孙）。供工作流矩阵条件按范围「含下级(bhxj=1)」展开。
+	 */
+	@GetMapping("/child-ids")
+	@Operation(summary = "组织子树ID集合", description = "含自身与全部子孙；节点不存在返回空集合")
+	public R<List<Long>> childIds(@RequestParam Long deptId) {
+		return R.data(deptService.getDeptChildIds(deptId));
+	}
+
+	/**
+	 * 组织祖先链 ID 集合（根 → 父 → 自身）。供矩阵条件按范围「含上级(bhxj=2)/逐级向上(bhxj=3)」展开。
+	 */
+	@GetMapping("/ancestor-ids")
+	@Operation(summary = "组织祖先链ID集合", description = "根→父→自身；节点不存在返回空集合")
+	public R<List<Long>> ancestorIds(@RequestParam Long deptId) {
+		return R.data(deptService.getDeptAncestorIds(deptId));
+	}
+
 
 }

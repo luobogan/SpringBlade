@@ -692,6 +692,8 @@ browserlist=179,124,141,136,101,6086,21002,21003     # 条件维度可选择的�
 
 ## 七、SpringBlade 侧现状与落地建议
 
+> ⚠️ 更新（2026-10-15）：本章 7.1/7.2/8 中「opType=99 未实现」的描述**已过时**——矩阵操作者已实现并落地。最新进度、后端缺口核查与开发任务见 **第十一章**；本章保留作历史与方案评估参考。
+
 ### 7.1 现状：已预留、未实现
 
 `blade-service-api/blade-workflow-api/.../entity/WfNodeOperator.java` 的类注释**已把 opType=99 纳入对齐契约**：
@@ -991,3 +993,154 @@ case OP_MATRIX:
 | 异常被吞（③） | 禁止 `printStackTrace` 了事，必须 `log.error` 带矩阵名 + 条件值 |
 | 前端拼错索引/遍历错数组（㊱㊾） | 矩阵条件增删用**稳定 id** 而非数组下标 |
 | 条件 AND 无界面表达（㊱） | 配置界面显式展示 "AND" 连接关系 |
+
+---
+
+## 十一、SpringBlade 落地进度与「矩阵对应条件」后端缺口核查（2026-10-15）
+
+> 本章为最新核查结论，**取代 7.1 / 7.2 / 8 中「未实现」的旧描述**。依据：E9 运行时源码 `D:\workproject\ecology\src`（`MartrixItem` / `AbstractItem` / `weaver.matrix.MatrixUtil` / `GetMatrixbrowserCmd` / `DoSaveOperatorGroupInfoCmd`）逐行比对 SpringBlade 当前代码。
+
+### 11.0 存储路线说明
+
+未采用 7.2① 建议的独立 `wf_node_operator_matrix*` 表，而是走**路线 B 的 BPMN `wf:operator` 扩展**：`opType=99` + `objId=矩阵ID` + `matrixJson`（与 `WfOperatorResolver.byMatrix` 读取一致）。`matrixJson` 已同步进：前端 `wfModdle.json`（Operator 属性）、`bpmnExtension.ts`（读写）、`services/workflow` 的 `WfNodeOperator`、`nodeOperatorIO.toLocalOp`。引擎侧 `blade.workflow.operator-from-bpmn.enabled=true`（`application.yml`），运行时从 BPMN 读操作者，`matrixJson` 只在 BPMN 承载（表结构放不下），链路自洽。
+
+### 11.1 已落地能力（截至 2026-10-15）
+
+| E9 能力（依据） | SpringBlade 现状（代码位置） | 状态 |
+|---|---|---|
+| opType=99 分支 | `WfOperatorResolver.byMatrix`（L569-616） | ✅ |
+| 来源：表单字段 | `resolveConditionValue` else（L636-638，`formData.get(wfField)`） | ✅ |
+| 来源：`-12` 创建人部门 / `-13` 创建人分部 | L625-631（取 **starter**，与 E9 一致） | ✅ |
+| 来源：`-1`/`-2` 指定分部/部门（固定 objId） | L632-635 | ✅（编码见 11.2-5） |
+| 多条件 AND | `WfMatrixServiceImpl.rowMatches` 全满足（L449） | ✅ |
+| 单条件「输入集合 ∈ 行值集合」多值 | L448 双方 `split` 后任一命中 | ✅ |
+| 结果维度须为 `fieldtype=1` | `matchUsers` L370-377 校验 | ✅ |
+| 结果值=逗号用户ID、拆分 | L409-416 | ✅ |
+| 用户去重 | `LinkedHashSet`（L402/421） | ✅（优于 E9，E9 不去重） |
+| 离职/无效过滤 | `resolveWithForm.filterActive`（L183-185） | ✅ |
+| 矩阵维护页 / 数据行 / 匹配测试 / 操作者「矩阵对应」页签 | `pages/System/Matrix/*` + `NodeOperatorModal` 矩阵对应 | ✅ |
+| 唯一键软删除陷阱（字段/数据行覆盖保存撞 `uk_*`） | `physicalDeleteByMatrixId` / `physicalDeleteByOrder`+`physicalDeleteById` | ✅ 已修 |
+
+### 11.2 后端缺口清单（按严重度）
+
+#### A. 必缺（导致「范围」类矩阵条件不生效）
+
+| # | 缺口 | 与矩阵对应条件的关联 | 位置 |
+|---|---|---|---|
+| 1 | **`bhxj` 范围（0本部/1含下级/2含上级/3逐级向上）整链缺失**：前端 `condRowToCond` 不写 `bhxj`；后端 `byMatrix` L597 只传 `wfField/objId`、**不读 `c.bhxj`**、无展开逻辑 | E9 `workflow_matrixdetail.WORKFLOW_BHXJ` 是矩阵条件的核心列；缺它 → 部门/分部条件退化为「本部精确匹配」，与 E9「含下级/含上级」不符 | 前端 `NodeOperatorModal`；后端 `WfOperatorResolver` |
+| 2 | **部门/分部集合展开无数据来源**：`IDeptClient` 目前仅 `divisionIdByDept`，无「取子孙部门/分部ID集合」「取上级链」接口 | `bhxj=1` 需子孙集合、`bhxj=2/3` 需祖先链；无接口则范围无法落地 | `blade-system` `IDeptService/IDeptClient`（`Dept.ancestors` 列可支撑上级链；含下级需新增遍历） |
+| 3 | **逐级向上 `bhxj=3` 独立算法**：E9 逐级替换输入值、由近及远取**最近一级命中**（`MatrixUtil:489-521`），非一次性展开 | 决定「逐级向上」语义 | 后端 `byMatrix`/`matchUsers` |
+
+#### B. 建议对齐（语义差异）
+
+| # | 缺口 | 说明 | 位置 |
+|---|---|---|---|
+| 4 | **空条件值语义相反**：E9 空值**不跳过**、去匹配该列为空/null 的行（`MatrixUtil:611-615`）；我们空值**跳过该条件**（`byMatrix` L598、`matchUsers` L383）→ 创建人无部门等场景可能**忽略条件、多匹配错派** | 建议改 E9 语义：空值→该行此维度需为空才满足（通常无命中→节点被拦截，更安全） | `WfMatrixServiceImpl.matchUsers` |
+| 5 | **`-1/-2` 编码与 E9 相反**：E9 `-1`=指定**分部**、`-2`=指定**部门**（`MartrixItem:197,211`）；我们前端 `fixedDept→-1`、`fixedBranch→-2`。后端对二者一视同仁返回 `objId`，**当前无功能影响**，但文档/后续按类型分叉会踩坑 | 校正前端映射与 E9 一致 | 前端 `NodeOperatorModal.condRowToCond` |
+
+#### C. 低优先 / 可选
+
+| # | 缺口 | 说明 |
+|---|---|---|
+| 6 | 指定部门/分部支持**多选**（`objId` 逗号多值）：E9 `WORKFLOW_OBJID` 可多；我们固定源单选 | 前端 `PersonOrgField` 开 `multiple` |
+| 7 | 条件维度浏览类型覆盖不全：编辑器仅 1/17/4/164；E9 支持角色/岗位/日期/自定义(162) 等。匹配按字符串、不依赖类型，但「是否按 org 展开」需读条件维度 `browserType` 判定 | 前端编辑器 + 后端按 `browserType` 分叉 |
+| 8 | 自定义多选(162) `,值,` LIKE：E9 特殊处理；我们未暴露 162 | 低 |
+| 9 | 系统矩阵(issystem=1/2) + 父部门向上兜底 `getMatrixUsers_4_system`：E9 默认矩阵自动跟随组织并向上兜底一级；我们无默认矩阵 | 属矩阵维护模块，非操作者条件核心，P3 |
+
+#### D. 明确不做（记录）
+
+- **虚拟维度 `virtualid`**：SpringBlade 无 `HrmResourceVirtualView` 虚拟组织模型，不实现。
+- **当前办理人部门来源**：E9 `-12/-13` 仅取**创建人**，无「当前办理人」选项；截图中「本部门」实为 `bhxj=0` 的标签、非独立来源 → **不需要**新增当前办理人分支。
+
+### 11.3 深度分析补充遗漏点（本轮新增）
+
+1. **`bhxj` 需按条件维度 `browserType` 决定是否展开**：只有部门(4/57)/分部(164/194) 型条件才做组织展开；人力(1/17)/其它类型不展开。实现时从 `wf_matrix_field.browserType` 取类型，不要假设全是部门。
+2. **表单字段来源也要按类型展开**：E9 `default` 分支对「部门型/分部型表单字段」同样按 `bhxj` 展开（`MartrixItem:245,248`）。计划须覆盖表单字段来源，而非只 `-1/-2/-12/-13`。
+3. **`removeMatrix`「被流程引用时拒绝删除」需核实**：引用记录在 BPMN `matrixJson`（`objId=matrixId`）。删除校验是否真正扫描了 BPMN/定义需确认，否则会出现「删了矩阵但流程仍引用 → 运行时静默无操作者」（E9 教训③）。
+4. **`matchUsers` 全量取行 + 内存过滤**：小矩阵可接受，已建 `(matrix_id, data_order)` 唯一索引；万级行需评估（缓解见 9.6）。
+5. **覆盖保存（字段/数据行）为「整组物理删+插」且 `@Transactional`**：前端全量回填，并发/传不全才会丢数据，风险低，记录即可。
+
+### 11.4 开发任务分解（关闭必缺项，端到端）
+
+**后端 `blade-system`**
+- **T1** `IDeptService/IDeptClient` 增 `descendantIds(deptId)`、`ancestorIds(deptId)`（含分部 subcompany 对应；上级链直接用 `Dept.ancestors`，含下级用 children 遍历或 `ancestors LIKE`）
+
+**后端 `blade-workflow`**
+- **T2** `MatrixCfg.Cond` 确认含 `bhxj`；`byMatrix` 读取 `bhxj`，对 `resolveConditionValue` 取到的组织值按 `bhxj` 展开（0 原值 / 1 含下级 / 2 含上级 / 3 逐级向上），展开集作为条件多值传入 `matchUsers`；**按条件维度 `browserType` 判定是否展开**（部门/分部才展开）
+- **T3** 空值语义对齐（并入 T2）：空值→该行此维度为空才满足，消除「跳过导致多匹配」
+- **T4**（可选）逐级向上独立算法
+
+**前端**
+- **T5** `NodeOperatorModal` 条件行加「范围」下拉（本部/含下级/含上级/逐级向上）写入 `matrixJson.conditions[].bhxj`；结果维度标签改「操作者」、条件行加「属于」；`-1/-2` 编码对回 E9
+- **T6** 若采 E9 空值语义，`matchUsers`/`rowMatches` 配合支持「行内该维度为空」匹配
+
+**验证**
+- **T7** 单测：`bhxj` 0/1/2/3、空值、AND、多值、去重；E2E：节点配矩阵(含范围)→提交流转→命中预期办理人
+
+**依赖顺序**：T1 → T2 → T3/T4 → T5 → T6 → T7
+
+### 11.5 开发进度（2026-10-15）
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| T1 blade-system `child-ids`/`ancestor-ids` | ✅ 已部署并实测 | `IDeptClient`+`IDeptService`+`DeptServiceImpl`+`DeptController`；复用已有 `getDeptChildIds`，新增 `getDeptAncestorIds`（`ancestors` 列优先，沿父兜底）。实测：`ancestor-ids(行政部)=[1000000005,2000000004]`、`child-ids(1000000005)=自身+全部子孙` |
+| T2 blade-workflow `byMatrix` 按 `bhxj` 展开 | ✅ 已编译并重启 | 读 `bhxj`；按条件维度 `browserType` 判定是否组织展开；`0` 原值 / `1` 含下级(`childIds`) / `2` 含上级(`ancestorIds`)；`3` 逐级向上走 `matchEscalate`（祖先链由近及远取最近命中） |
+| T3 空值语义对齐 | ✅ 已部署并实测 | `matchUsers` 不再丢弃空值条件；`rowMatches` 空条件值→要求行内该维度也为空；`byMatrix`/`matchEscalate` 空值按空串传入。实测：空值匹配空行命中 `[3]`、非空不匹配空行 `[]`、单条件回归 `[3]` |
+| T5 前端范围选择器 | ✅ 已写（lint 通过） | 条件行加「属于」+ 范围下拉（本部/含下级/含上级/逐级向上，仅组织型维度显示）；`-1/-2` 编码对回 E9；结果维度改「操作者」；`matrixJson` 落 `bhxj` |
+| T6 配合空值语义 | ✅ 随 T3 完成 | `rowMatches` 已支持空值匹配空行 |
+| T7 E2E（节点配矩阵+范围→提交流转→命中办理人） | ✅ 已通过 | 脚本 `doc/bpmn/test_matrix_e2e.cjs`：导入含两矩阵节点（bhxj0 精确 / bhxj2 含上级）的 BPMN → deploy → `/test/run`；实测 bhxj0→`[3]`、bhxj2→`[3,4]`（展开到上级行），真实实例走到归档，`testStatus=1` |
+
+> 部署：本次改动了 `blade-system-api`、`blade-system`、`blade-workflow` 三个模块，已 `clean package` 并重启 blade-system、blade-workflow（均 `Started`）。前端为 umi dev，硬刷新即可。
+
+---
+
+## 十二、E9 矩阵数据迁移（ecology → SpringBlade）
+
+### 12.1 背景与工具
+
+E9 矩阵存于 SQL Server（`ecology2020_demo`）：`matrixinfo`（矩阵主表）、`matrixfieldinfo`（字段/维度定义）、`Matrixtable_<id>`（数据行，列名即 `fieldname`）。需同步到 SpringBlade 的 `wf_matrix` / `wf_matrix_field` / `wf_matrix_data`。
+
+**工具**：`doc/tools/EcologyMatrixMigration.java`（单文件 JDBC，零框架依赖，复用 `EcologyOrgMigration.java` 的写法与 `EcologyDataSourceConfig.java` 的 JDBC 常量：`jdbc:sqlserver://192.168.1.5:1433;databaseName=ecology2020_demo`，账号 `sa`/`1`）。直连 E9 读、直连 blade 写，无需打包进应用。
+
+### 12.2 映射规则（已实测）
+
+| 维度 | E9 来源 | SpringBlade 目标 | 处理 |
+|---|---|---|---|
+| 矩阵定义/字段 | `matrixinfo`/`matrixfieldinfo` | `wf_matrix`/`wf_matrix_field` | 直接搬；系统矩阵 2 额外补 `departmentDefineField`（billid=0）的 6 个结果维度（空值，待 UI 填） |
+| 结果维度（人力 1/17） | `HrmResource.id` | `blade_user.id` | **E9 用户 id == blade 用户 id（账号一致）**，原值直搬；若某 id 在 blade 不存在则保留原值并计入报告 |
+| 条件维度（部门 4/57） | `HrmDepartment.id` | `blade_dept.id` | 正值 `+ 2_000_000_000`；经 `blade_dept` 存在性校验，通过才改写 |
+| 条件维度（分部 164/194） | `HrmSubCompany.id` | `blade_dept.id` | 正值 `+ 1_000_000_000`；同上校验 |
+| 负值 / 非正整 / 非部门分部类型（如项目 8） | — | 保留原值 | 保留原值并计入「待人工核对清单」 |
+
+> 组织 id 偏移量与 `EcologyOrgMigration` 一致（分部 +1e9、部门 +2e9，维森→鼎泰仅公司前缀不同，名称一致）。
+
+### 12.3 运行
+
+```bash
+java -cp "mssql-jdbc-12.8.1.jre11.jar;mysql-connector-java-8.0.29.jar" EcologyMatrixMigration.java [--dry-run] \
+     [--eco-url ... --eco-user ... --eco-pass ...] [--blade-url ... --blade-user ... --blade-pass ...]
+```
+
+- `--dry-run`：只计算并输出预估 + 待核清单，不落库。
+- **幂等**：每次对目标 `matrix_id` 先物理 `DELETE` `wf_matrix_field` / `wf_matrix_data` / `wf_matrix` 再 `INSERT`（绕过 `@TableLogic`），可重复运行覆盖。
+- 字段/数据 id 用 `9e18` 命名空间，与 blade 既有雪花 id 不冲突。
+- 回滚：执行前请先备份 `wf_matrix` / `wf_matrix_field` / `wf_matrix_data`。
+
+### 12.4 实测结果（2026-10-15）
+
+| 项 | 数量 |
+|---|---|
+| 矩阵 `wf_matrix` | 12（含系统矩阵 1 分部矩阵 / 2 部门矩阵） |
+| 字段 `wf_matrix_field` | 37 |
+| 数据 `wf_matrix_data` | 95 |
+| 待人工核对 | 35 条 |
+
+**待核清单**（保留原值，需人工在 UI 改）：
+- 负值组织条件（E9 内部编码，无法反推）：矩阵 7 `bgs/dzb`(-13~-21)、矩阵 8 `gongh/bm`(-13~-30)、矩阵 9 `dq`(-27~-32)、矩阵 11 `yfzx`(-33~-35)、矩阵 3 `subcompany`(-5)。
+- 项目类型条件（`browserType=8`，SpringBlade 无项目模块）：矩阵 10 `xm`(76/75/73…) 共 7 条。
+
+**系统矩阵 1/2**：E9 源 `matrix_code` 结果列全空，如实同步；矩阵 2 已补 6 个结果维度字段（空值）。
+
+> 注：早期验证用的 `doc/bpmn/e9export/migrate_matrix.cjs`（node 版）与本 Java 工具映射逻辑一致，结果相同；后续以 `EcologyMatrixMigration.java` 为准（可重复运行）。
+
+

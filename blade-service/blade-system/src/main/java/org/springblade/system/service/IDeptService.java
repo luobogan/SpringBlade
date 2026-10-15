@@ -139,4 +139,13 @@ public interface IDeptService extends IService<Dept> {
 	 */
 	Long divisionId(Long deptId);
 
+	/**
+	 * 获取组织**祖先链** ID 集合（根 → 父 → 自身）。供工作流矩阵条件按范围「含上级(bhxj=2)/逐级向上(bhxj=3)」展开。
+	 * <p>优先用 {@code ancestors} 列（形如 "0,1,5,12"），为空时沿 parent 向上遍历（最多 10 层防环）；结果含自身。</p>
+	 *
+	 * @param deptId 组织节点ID（公司/分部/部门均可）
+	 * @return 祖先链 ID 集合（含自身，根在前）；节点不存在返回空集合
+	 */
+	List<Long> getDeptAncestorIds(Long deptId);
+
 }

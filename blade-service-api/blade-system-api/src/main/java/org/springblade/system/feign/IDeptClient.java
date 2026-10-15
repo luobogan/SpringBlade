@@ -6,6 +6,8 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import java.util.List;
+
 /**
  * 部门 Feign接口类
  *
@@ -38,5 +40,23 @@ public interface IDeptClient {
 	 */
 	@GetMapping(API_PREFIX + "/division-id-by-dept")
 	R<Long> divisionIdByDept(@RequestParam("deptId") Long deptId);
+
+	/**
+	 * 取组织子树 ID 集合（含自身与全部子孙）。供工作流矩阵条件按范围「含下级(bhxj=1)」展开。
+	 *
+	 * @param deptId 组织节点ID（公司/分部/部门均可）
+	 * @return 子树 ID 集合；节点不存在返回空集合
+	 */
+	@GetMapping(API_PREFIX + "/child-ids")
+	R<List<Long>> childIds(@RequestParam("deptId") Long deptId);
+
+	/**
+	 * 取组织祖先链 ID 集合（根 → 父 → 自身）。供矩阵条件按范围「含上级(bhxj=2)/逐级向上(bhxj=3)」展开。
+	 *
+	 * @param deptId 组织节点ID（公司/分部/部门均可）
+	 * @return 祖先链 ID 集合（含自身，根在前）；节点不存在返回空集合
+	 */
+	@GetMapping(API_PREFIX + "/ancestor-ids")
+	R<List<Long>> ancestorIds(@RequestParam("deptId") Long deptId);
 
 }

@@ -15,6 +15,7 @@ import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.matrix.service.IWfMatrixService;
+import org.springblade.workflow.matrix.entity.WfMatrixField;
 import org.springblade.workflow.matrix.vo.MatrixMatchVO;
 import org.springblade.workflow.util.BpmnExtensionUtil;
 import org.springblade.workflow.config.WfRetirementProperties;
@@ -28,7 +29,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /**
  * 节点操作者解析器：把 {@code wf_node_operator} 的配置解析成**具体的办理人用户ID集合**。
@@ -588,21 +592,57 @@ public class WfOperatorResolver {
             return List.of();
         }
 
-        Map<String, String> condValues = new LinkedHashMap<>();
+        // 载入矩阵字段浏览器类型：仅部门(4/57)/分部(164/194)型条件按 bhxj 做组织展开，其它类型不展开
+        Map<String, Integer> browserTypeOf = new HashMap<>();
+        try {
+            for (WfMatrixField f : matrixService.listFields(Long.valueOf(matrixId))) {
+                if (f.getFieldKey() != null) {
+                    browserTypeOf.put(f.getFieldKey(), f.getBrowserType());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 矩阵字段加载失败，范围(bhxj)将退化为本部匹配. matrixId={}, err={}", matrixId, e.getMessage());
+        }
+
+        // 先解析每条条件的原始值（可能为空），并识别逐级向上(bhxj=3)条件
+        Map<String, String> rawValues = new LinkedHashMap<>();
+        Map<String, MatrixCfg.Cond> condByField = new HashMap<>();
+        MatrixCfg.Cond escalate = null;
         if (cfg.conditions != null) {
             for (MatrixCfg.Cond c : cfg.conditions) {
                 if (c == null || StringUtil.isBlank(c.condField) || StringUtil.isBlank(c.wfField)) {
                     continue;
                 }
-                String value = resolveConditionValue(c.wfField.trim(), c.objId, starter, formData);
-                if (value == null || value.isBlank()) {
-                    // E9 教训 #2：条件值为空 → 不参与匹配（禁止等价于 is null）
-                    log.warn("[blade-workflow] 矩阵条件取值为空，该条件不参与匹配. matrixId={}, condField={}, wfField={}",
-                        matrixId, c.condField, c.wfField);
-                    continue;
+                String key = c.condField.trim();
+                rawValues.put(key, resolveConditionValue(c.wfField.trim(), c.objId, starter, formData));
+                condByField.put(key, c);
+                if (Integer.valueOf(3).equals(c.bhxj)) {
+                    escalate = c;
                 }
-                condValues.put(c.condField.trim(), value);
             }
+        }
+
+        // 逐级向上(bhxj=3)：由近及远逐级取最近命中（对齐 E9 MatrixUtil 逐级分支）
+        if (escalate != null) {
+            return matchEscalate(matrixId, cfg.valueField.trim(), escalate, rawValues, condByField, browserTypeOf);
+        }
+
+        // 普通：按 bhxj 展开组织值后一次性匹配
+        Map<String, String> condValues = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : rawValues.entrySet()) {
+            String condField = e.getKey();
+            String value = e.getValue();
+            if (value == null || value.isBlank()) {
+            	// E9 对齐：空值不跳过，按"匹配空行"处理（避免忽略条件导致多派）
+            	log.warn("[blade-workflow] 矩阵条件取值为空，按匹配空行处理. matrixId={}, condField={}", matrixId, condField);
+            	condValues.put(condField, "");
+            	continue;
+            }
+            MatrixCfg.Cond c = condByField.get(condField);
+            int bhxj = (c != null && c.bhxj != null) ? c.bhxj : 0;
+            Integer bt = browserTypeOf.get(condField);
+            boolean org = bt != null && (bt == 4 || bt == 57 || bt == 164 || bt == 194);
+            condValues.put(condField, (org && bhxj > 0) ? expandOrgByBhxj(value, bhxj) : value);
         }
 
         MatrixMatchVO match = matrixService.matchUsers(Long.valueOf(matrixId), cfg.valueField.trim(), condValues);
@@ -613,6 +653,96 @@ public class WfOperatorResolver {
         }
         log.info("[blade-workflow] 矩阵解析命中办理人. {}", match.describe());
         return match.getUserIds();
+    }
+
+    /**
+     * 逐级向上(bhxj=3)：非逐级条件先按各自范围展开为固定值；逐级条件沿祖先链**由近及远**，
+     * 每级单独匹配，取**最近一级命中**的办理人（对齐 E9 {@code MatrixUtil} 逐级分支；E9 约定逐级仅支持单条件）。
+     */
+    private List<Long> matchEscalate(String matrixId, String valueField, MatrixCfg.Cond escalate,
+                                     Map<String, String> rawValues, Map<String, MatrixCfg.Cond> condByField,
+                                     Map<String, Integer> browserTypeOf) {
+        Map<String, String> base = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : rawValues.entrySet()) {
+            String condField = e.getKey();
+            if (condField.equals(escalate.condField.trim())) {
+                continue;
+            }
+            String value = e.getValue();
+            if (value == null || value.isBlank()) {
+            	base.put(condField, ""); // E9 对齐：空值匹配空行
+            	continue;
+            }
+            MatrixCfg.Cond c = condByField.get(condField);
+            int bhxj = (c != null && c.bhxj != null) ? c.bhxj : 0;
+            Integer bt = browserTypeOf.get(condField);
+            boolean org = bt != null && (bt == 4 || bt == 57 || bt == 164 || bt == 194);
+            base.put(condField, (org && bhxj > 0) ? expandOrgByBhxj(value, bhxj) : value);
+        }
+        String raw = rawValues.get(escalate.condField.trim());
+        if (raw == null || raw.isBlank()) {
+            log.warn("[blade-workflow] 矩阵逐级条件取值为空，按无操作者处理. matrixId={}, condField={}", matrixId, escalate.condField);
+            return List.of();
+        }
+        Long id = parseId(raw);
+        if (id == null || id <= 0) {
+            // 非组织ID：直接按原值匹配一次
+            Map<String, String> cv = new LinkedHashMap<>(base);
+            cv.put(escalate.condField.trim(), raw);
+            MatrixMatchVO m = matrixService.matchUsers(Long.valueOf(matrixId), valueField, cv);
+            return m.isEmpty() ? List.of() : m.getUserIds();
+        }
+        List<Long> chain = new ArrayList<>();
+        try {
+            R<List<Long>> r = deptClient.ancestorIds(id);
+            if (r != null && r.isSuccess() && r.getData() != null && !r.getData().isEmpty()) {
+                chain = new ArrayList<>(r.getData());
+            }
+        } catch (Exception ex) {
+            log.warn("[blade-workflow] 矩阵逐级取祖先链失败，退化为仅本级. matrixId={}, deptId={}, err={}", matrixId, id, ex.getMessage());
+        }
+        if (chain.isEmpty()) {
+            chain = new ArrayList<>(List.of(id));
+        }
+        if (!chain.contains(id)) {
+            chain.add(id);
+        }
+        Collections.reverse(chain); // ancestorIds 为 根→自身，反转为 自身→根（由近及远）
+        for (Long level : chain) {
+            Map<String, String> cv = new LinkedHashMap<>(base);
+            cv.put(escalate.condField.trim(), String.valueOf(level));
+            MatrixMatchVO m = matrixService.matchUsers(Long.valueOf(matrixId), valueField, cv);
+            if (!m.isEmpty()) {
+                log.info("[blade-workflow] 矩阵逐级向上命中. matrixId={}, condField={}, level={}", matrixId, escalate.condField, level);
+                return m.getUserIds();
+            }
+        }
+        log.warn("[blade-workflow] 矩阵逐级向上未命中. matrixId={}, condField={}, chain={}", matrixId, escalate.condField, chain);
+        return List.of();
+    }
+
+    /** 按 bhxj 展开组织值：0本部原值 / 1含下级(childIds) / 2含上级(ancestorIds)；非组织ID或 Feign 失败时退化为原值 */
+    private String expandOrgByBhxj(String value, int bhxj) {
+        if (bhxj <= 0 || StringUtil.isBlank(value)) {
+            return value;
+        }
+        Long id = parseId(value);
+        if (id == null || id <= 0) {
+            return value;
+        }
+        try {
+            R<List<Long>> r = (bhxj == 1) ? deptClient.childIds(id) : deptClient.ancestorIds(id);
+            List<Long> ids = (r != null && r.isSuccess() && r.getData() != null) ? r.getData() : null;
+            if (ids == null || ids.isEmpty()) {
+                return value;
+            }
+            LinkedHashSet<Long> set = new LinkedHashSet<>(ids);
+            set.add(id);
+            return set.stream().map(String::valueOf).collect(Collectors.joining(","));
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 矩阵条件范围展开失败，退化为原值. value={}, bhxj={}, err={}", value, bhxj, e.getMessage());
+            return value;
+        }
     }
 
     /**

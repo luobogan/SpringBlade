@@ -370,4 +370,49 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements ID
 		return null;
 	}
 
+	@Override
+	public List<Long> getDeptAncestorIds(Long deptId) {
+		if (deptId == null || deptId <= 0) {
+			return new ArrayList<>();
+		}
+		Dept dept = this.getById(deptId);
+		if (dept == null) {
+			return new ArrayList<>();
+		}
+		List<Long> result = new ArrayList<>();
+		// 优先用 ancestors 列（submit 时维护，形如 "0,1,5,12"，根→父）
+		String ancestors = dept.getAncestors();
+		if (ancestors != null && !ancestors.isBlank()) {
+			for (String a : ancestors.split(",")) {
+				try {
+					long v = Long.parseLong(a.trim());
+					if (v > 0 && !result.contains(v)) {
+						result.add(v);
+					}
+				} catch (NumberFormatException ignore) {
+					// 跳过非数字片段
+				}
+			}
+		}
+		// 兜底：ancestors 为空时沿 parent 向上遍历（最多 10 层防环）
+		if (result.isEmpty()) {
+			java.util.LinkedList<Long> chain = new java.util.LinkedList<>();
+			Long cursor = dept.getParentId();
+			for (int i = 0; i < 10 && cursor != null && cursor > 0; i++) {
+				chain.addFirst(cursor);
+				Dept parent = this.getById(cursor);
+				if (parent == null) {
+					break;
+				}
+				cursor = parent.getParentId();
+			}
+			result.addAll(chain);
+		}
+		// 含自身（根→…→父→自身）
+		if (!result.contains(deptId)) {
+			result.add(deptId);
+		}
+		return result;
+	}
+
 }

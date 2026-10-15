@@ -185,8 +185,10 @@ public class WfMatrixServiceImpl implements IWfMatrixService {
 			toSave.add(f);
 		}
 
-		// 覆盖式：先删后插（同一事务，失败整体回滚）
-		matrixFieldMapper.delete(Wrappers.<WfMatrixField>lambdaQuery().eq(WfMatrixField::getMatrixId, matrixId));
+		// 覆盖式：先物理删除后插入（同一事务，失败整体回滚）。
+		// 必须物理删除：WfMatrixField 继承 TenantEntity → @TableLogic 让 delete() 变软删除，
+		// 而 uk_wf_matrix_field_key 不含 is_deleted，软删除行仍占唯一键 → INSERT 撞键。
+		matrixFieldMapper.physicalDeleteByMatrixId(matrixId);
 		for (WfMatrixField f : toSave) {
 			f.setId(null);
 			fillCreate(f);
@@ -285,6 +287,16 @@ public class WfMatrixServiceImpl implements IWfMatrixService {
 			}
 		}
 
+		// 行序唯一：(matrix_id, data_order) 有唯一索引且不含 is_deleted。
+		// @TableLogic 让软删除行仍占用唯一键 → 先拒绝重复的活跃行序，再物理清理软删除残留，避免重复键。
+		Long activeSameOrder = matrixDataMapper.selectCount(Wrappers.<WfMatrixData>lambdaQuery()
+			.eq(WfMatrixData::getMatrixId, matrixId)
+			.eq(WfMatrixData::getDataOrder, dataOrder));
+		if (activeSameOrder != null && activeSameOrder > 0) {
+			throw new ServiceException("行序 " + dataOrder + " 已存在，请更换行序");
+		}
+		matrixDataMapper.physicalDeleteByOrder(matrixId, dataOrder);
+
 		WfMatrixData row = new WfMatrixData();
 		row.setMatrixId(matrixId);
 		row.setDataOrder(dataOrder);
@@ -309,7 +321,8 @@ public class WfMatrixServiceImpl implements IWfMatrixService {
 		if (row == null) {
 			throw new ServiceException("数据行不存在: " + dataId);
 		}
-		matrixDataMapper.deleteById(dataId);
+		// 物理删除：软删除会残留并占用 uk_wf_matrix_data_order 唯一键，导致复用该行序重报重复键
+		matrixDataMapper.physicalDeleteById(dataId);
 		log.info("[matrix] 删除数据行 dataId={}, matrixId={}", dataId, row.getMatrixId());
 	}
 
@@ -363,21 +376,12 @@ public class WfMatrixServiceImpl implements IWfMatrixService {
 			return result;
 		}
 
-		// E9 教训 #2：条件值为空 → 该条件不参与匹配 + warn（禁止等价于 is null 匹配）
+		// E9 对齐：空值条件**不跳过**，按"匹配空行"处理（等价 col is null or col in ('')）；
+		// 仅"完全未配置条件"（上面 condValues 为空）才不匹配。避免空值条件被忽略导致多派。
 		Map<String, String> effective = new LinkedHashMap<>();
 		for (Map.Entry<String, String> e : condValues.entrySet()) {
 			String v = e.getValue();
-			if (v == null || v.isBlank()) {
-				log.warn("[matrix] 条件取值为空，该条件不参与匹配. matrixId={}, name={}, condField={}",
-					matrixId, m.getMatrixName(), e.getKey());
-				continue;
-			}
-			effective.put(e.getKey(), v.trim());
-		}
-		if (effective.isEmpty()) {
-			log.warn("[matrix] 全部条件取值为空，按不匹配处理. matrixId={}, name={}, rawConditions={}",
-				matrixId, m.getMatrixName(), condValues);
-			return result;
+			effective.put(e.getKey(), v == null ? "" : v.trim());
 		}
 		result.setEffectiveConditions(effective);
 
@@ -424,17 +428,21 @@ public class WfMatrixServiceImpl implements IWfMatrixService {
 		}
 		for (Map.Entry<String, String> cond : effective.entrySet()) {
 			Set<String> rowVals = splitTokens(str(data.get(cond.getKey())));
-			if (rowVals.isEmpty()) {
-				return false;
-			}
 			Set<String> condVals = splitTokens(cond.getValue());
 			if (condVals.isEmpty()) {
-				return false;
-			}
-			// 任一命中即满足该条件（E9 的 in / like '%,v,%' 语义），全部条件都满足才算命中
-			boolean any = condVals.stream().anyMatch(rowVals::contains);
-			if (!any) {
-				return false;
+				// 空值条件：仅匹配行内该维度也为空的行（E9: col is null or col in ('')）
+				if (!rowVals.isEmpty()) {
+					return false;
+				}
+			} else {
+				if (rowVals.isEmpty()) {
+					return false;
+				}
+				// 任一命中即满足该条件（E9 的 in / like '%,v,%' 语义），全部条件都满足才算命中
+				boolean any = condVals.stream().anyMatch(rowVals::contains);
+				if (!any) {
+					return false;
+				}
 			}
 		}
 		return true;
