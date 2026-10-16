@@ -9,6 +9,11 @@ blade:
       - /ws/message/**
       - /blade-message/ws/**
       - /api/blade-message/ws/**
+      # 登录前门户：登录页免鉴权拉取登录皮肤 / 登录前门户内容
+      - /blade-portal/login-template/**
+      - /api/blade-portal/login-template/**
+      - /blade-portal/pre-login/**
+      - /api/blade-portal/pre-login/**
   #多团队协作服务配置
   loadbalancer:
     #开启配置

@@ -10,6 +10,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springblade.workflow.vo.WfTaskVO;
+
+import java.util.List;
 
 /**
  * 审批流程 Feign 客户端接口
@@ -81,5 +85,26 @@ public interface IWorkflowClient {
      */
     @GetMapping("/feign/client/instance/ended/{id}")
     R<Boolean> isEnded(@PathVariable("id") Long id);
+
+    /**
+     * 查询指定办理人的待办列表（门户待办元素专供内部端点）
+     *
+     * <p><b>为什么待办/已办已由前端经网关直连，这里还要开内部端点</b>：
+     * 配置驱动门户的待办卡片数据由 blade-portal 服务端聚合后随元素数据一并返回
+     * （见 {@code POST /element-data/batch}）。若让前端自己取待办，
+     * 则每张卡片一次请求、且鉴权/条数个性化逻辑会散落到前端，
+     * 违背「服务端聚合、单元素失败不拖垮整页」的约定。</p>
+     *
+     * <p>本端点无 {@code @PreAuth}（内部 Feign 经服务发现直连、不带用户令牌），
+     * 路径以 {@code /feign/client} 前缀隔离，网关 {@code InnerFilter} 拒绝外部访问；
+     * 办理人由调用方以 {@code assignee} 显式传入（门户传当前登录用户ID）。</p>
+     *
+     * @param assignee 办理人用户ID
+     * @param limit    最多返回条数（为空取服务默认值）
+     * @return 待办列表
+     */
+    @GetMapping("/feign/client/task/todo")
+    R<List<WfTaskVO>> todoList(@RequestParam("assignee") Long assignee,
+                               @RequestParam(value = "limit", required = false) Integer limit);
 
 }

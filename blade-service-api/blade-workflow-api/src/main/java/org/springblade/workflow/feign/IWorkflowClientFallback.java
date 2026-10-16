@@ -5,7 +5,10 @@ import org.springblade.core.tool.api.R;
 import org.springblade.workflow.dto.StartProcessDTO;
 import org.springblade.workflow.vo.DefinitionKeyTenantVO;
 import org.springblade.workflow.vo.FormBindingVO;
+import org.springblade.workflow.vo.WfTaskVO;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 /**
  * 审批流程 Feign 客户端降级实现
@@ -43,6 +46,12 @@ public class IWorkflowClientFallback implements IWorkflowClient {
     public R<Boolean> isEnded(Long id) {
         log.error("[blade-workflow] 查询实例是否结束失败，服务不可用. id={}", id);
         return R.fail("审批流程服务不可用，无法查询实例状态");
+    }
+
+    @Override
+    public R<List<WfTaskVO>> todoList(Long assignee, Integer limit) {
+        log.error("[blade-workflow] 查询待办失败，服务不可用. assignee={}, limit={}", assignee, limit);
+        return R.fail("审批流程服务不可用，无法查询待办");
     }
 
 }

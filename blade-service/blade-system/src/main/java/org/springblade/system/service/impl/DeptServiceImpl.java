@@ -220,6 +220,11 @@ public class DeptServiceImpl extends ServiceImpl<DeptMapper, Dept> implements ID
 		if (dept.getCanceled() == null) {
 			dept.setCanceled(0);
 		}
+		// 空编号归一为 NULL：避免唯一键 uk_blade_dept_tenant_code 在 dept_code='' 时 Duplicate
+		//（MySQL 对 NULL 不做唯一约束；未设编号即视为"未编码"，可复用，对齐 alter_blade_dept_org.sql 删除置 NULL 的语义）
+		if (!Func.isNotBlank(dept.getDeptCode())) {
+			dept.setDeptCode(null);
+		}
 		Dept parent = null;
 		// 顶级判断：parentId 为空或 0（前端 TreeSelect 的"无"=0，等价于顶级）
 		if (Func.isEmpty(dept.getParentId()) || Func.toLong(dept.getParentId()) == 0L) {

@@ -21,6 +21,10 @@ import org.springblade.message.dto.SessionCreateDTO;
 import org.springblade.message.vo.SessionVO;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 /**
  * 消息中心 Feign 降级类
  *
@@ -37,6 +41,17 @@ public class IMessageClientFallback implements IMessageClient {
 	@Override
 	public R<SessionVO> createSession(SessionCreateDTO dto) {
 		return R.fail("消息中心服务暂不可用");
+	}
+
+	@Override
+	public R<Long> unreadCount(Long userId) {
+		return R.fail("消息中心服务暂不可用，无法查询未读数");
+	}
+
+	@Override
+	public R<List<Map<String, Object>>> recent(Long userId, Integer limit) {
+		// 降级返回空列表：门户元素不应因消息服务不可用而整页失败
+		return R.data(new ArrayList<>());
 	}
 
 }
