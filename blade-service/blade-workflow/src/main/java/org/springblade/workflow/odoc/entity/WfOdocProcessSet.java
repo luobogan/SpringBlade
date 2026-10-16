@@ -80,4 +80,34 @@ public class WfOdocProcessSet extends TenantEntity {
     @Schema(description = "签章位置配置(页/坐标/章型) JSON")
     private String sealConfig;
 
+    @Schema(description = "印发/来文单位字段")
+    private String issuedUnitFieldKey;
+
+    @Schema(description = "密级字段")
+    private String secretLevelFieldKey;
+
+    @Schema(description = "紧急程度字段")
+    private String urgencyFieldKey;
+
+    @Schema(description = "主题词字段")
+    private String topicFieldKey;
+
+    @Schema(description = "收文编号字段")
+    private String receiveNumFieldKey;
+
+    @Schema(description = "主送/收文单位字段")
+    private String receiveUnitFieldKey;
+
+    @Schema(description = "成文日期字段")
+    private String writtenDateFieldKey;
+
+    @Schema(description = "印发日期字段")
+    private String issuedDateFieldKey;
+
+    @Schema(description = "文种变更次数限制 1不限制 2仅一次 3自定义")
+    private Integer docTypeChangeNumber;
+
+    @Schema(description = "文种变更自定义次数(docTypeChangeNumber=3时有效)")
+    private Integer docTypeChangeTimes;
+
 }

@@ -3,6 +3,8 @@ package org.springblade.system.feign;
 import org.springblade.core.tool.api.R;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 /**
  * 部门 Feign失败配置
  *
@@ -16,6 +18,16 @@ public class IDeptClientFallback implements IDeptClient {
 
 	@Override
 	public R<Long> divisionIdByDept(Long deptId) {
+		return null;
+	}
+
+	@Override
+	public R<List<Long>> ancestorIds(Long deptId) {
+		return null;
+	}
+
+	@Override
+	public R<List<Long>> childIds(Long deptId) {
 		return null;
 	}
 

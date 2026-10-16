@@ -101,6 +101,18 @@
             <version>5.4.1</version>
         </dependency>
 
+        <!-- ============ iText 5.5.13（AGPL）：内置版式渲染器（L1 规则引擎落地） ============ -->
+        <!-- 离线环境无 OFD/CA 厂商 SDK，故提供「内置 PDF 渲染器」：POI 读取套红 docx →
+             iText 按 GB/T 9704 规则（A4 版心/页边距/红头红字/红色分隔线/仿宋正文/页码）渲染 PDF，
+             并注入公文元数据到 PDF Info 字典。OFD/CA 仍走 IOdocFormatConvertor / IOdocSealService
+             的厂商 SPI（OfdVendorConvertor / CaSealService 占位），按客户采购切换。
+             注：iText 5 为 AGPL 协议，生产商用需购买商业许可或替换为 Apache PDFBox（本沙箱 PDFBox 离线缺失）。 -->
+        <dependency>
+            <groupId>com.itextpdf</groupId>
+            <artifactId>itextpdf</artifactId>
+            <version>5.5.13</version>
+        </dependency>
+
         <!-- 仅测试用：内存库 + Spring 测试基座（版本由 spring-boot BOM 管理） -->
         <dependency>
             <groupId>com.h2database</groupId>

@@ -32,7 +32,7 @@ public class WfOdocLayoutServiceImpl implements IWfOdocLayoutService {
 
 	@Override
 	public boolean layoutAvailable() {
-		return resolveConvertor() != null;
+		return resolveConvertor(null) != null;
 	}
 
 	@Override
@@ -44,12 +44,13 @@ public class WfOdocLayoutServiceImpl implements IWfOdocLayoutService {
 		if (version == null) {
 			throw new IllegalArgumentException("来源 docx 版本不存在: " + srcVersionId);
 		}
-		IOdocFormatConvertor convertor = resolveConvertor();
+		String fmt = String.valueOf(format);
+		IOdocFormatConvertor convertor = resolveConvertor(fmt);
 		if (convertor == null) {
-			throw new ServiceException("版式转换未启用：未装配可用转换器（请部署 blade-workflow-odoc-layout 并配置厂商）");
+			throw new ServiceException("版式转换未启用：未装配支持格式 " + fmt
+				+ " 的可用转换器（PDF 用内置渲染器，OFD 用内置 OFD 写出器或厂商 SDK）");
 		}
 		byte[] docx = fileStore.download(version.getFileId());
-		String fmt = String.valueOf(format);
 		String fileName = withExt(baseName(version.getFileName()), extOf(format));
 		OdocConvertResult r = convertor.toLayout(docx, fmt, fileName);
 		if (!r.isSuccess()) {
@@ -100,11 +101,15 @@ public class WfOdocLayoutServiceImpl implements IWfOdocLayoutService {
 		return "layout-" + layoutFileId + "." + ext;
 	}
 
-	private IOdocFormatConvertor resolveConvertor() {
+	private IOdocFormatConvertor resolveConvertor(String format) {
 		if (convertors == null || convertors.isEmpty()) {
 			return null;
 		}
-		return convertors.stream().filter(IOdocFormatConvertor::available).findFirst().orElse(null);
+		return convertors.stream()
+			.filter(IOdocFormatConvertor::available)
+			.filter(c -> format == null || c.supports(format))
+			.findFirst()
+			.orElse(null);
 	}
 
 	private String baseName(String name) {

@@ -30,4 +30,16 @@ public class OdocProperties {
 
 	/** 本地文件存储目录（odoc 文件） */
 	private String uploadPath = "D:/workproject/springbladeandreact/springBlade/uploads/odoc";
+
+	/**
+	 * 版式转换厂商：none=使用内置 PDF 渲染器（离线默认），或 shuke/yozo/fuxin/fuxin-gsdk
+	 * （需在 blade-workflow-odoc-layout 接入对应 SDK）。空值等同 none。
+	 */
+	private String layoutVendor = "none";
+
+	/**
+	 * 内置 PDF 渲染器所用中文字体目录（CJK TTF）。留空则自动探测常用位置
+	 * （Windows C:/Windows/Fonts、Linux /usr/share/fonts 等）。
+	 */
+	private String pdfFontPath = "";
 }

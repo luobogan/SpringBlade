@@ -132,6 +132,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfNodeMustDoActionExecutor odocMustDoActionExecutor;
     /** 公文文号「出口监听」（定稿节点取号并回写表单） */
     private final WfOdocNumberAssignListener odocNumberAssignListener;
+    /** 公文信息镜像同步（提交后置：表单公文属性 → wf_odoc_request，供待办/查询列表免 join 表单） */
+    private final org.springblade.workflow.odoc.sync.WfOdocRequestSyncListener odocRequestSyncListener;
     /** 节点操作者解析（退回弹窗「操作者」列展示用，解析失败不阻塞） */
     private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
     /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
@@ -409,6 +411,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 odocNumberAssignListener.onNodeSubmit(inst, node);
             } catch (Exception e) {
                 log.warn("[blade-workflow] 公文文号取号/回写失败（忽略）. instId={}, nodeKey={}, {}",
+                    inst.getId(), node.getNodeKey(), e.getMessage());
+            }
+            // 公文信息镜像同步：把表单公文属性冗余到 wf_odoc_request（失败不阻断主干，仅告警）
+            try {
+                odocRequestSyncListener.syncInstance(inst);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 公文信息镜像同步失败（忽略）. instId={}, nodeKey={}, {}",
                     inst.getId(), node.getNodeKey(), e.getMessage());
             }
         }

@@ -19,6 +19,14 @@ public interface IOdocFormatConvertor {
 	String name();
 
 	/**
+	 * 是否支持目标格式（12=PDF / 13=OFD）。默认支持全部；内置渲染器按各自格式返回，
+	 * 便于服务按 format 择优（如内置 PDF 处理 12、内置 OFD 处理 13，厂商实现两者皆可）。
+	 */
+	default boolean supports(String format) {
+		return true;
+	}
+
+	/**
 	 * 转换 docx → 版式文件。
 	 *
 	 * @param docxBytes 源 docx 字节
