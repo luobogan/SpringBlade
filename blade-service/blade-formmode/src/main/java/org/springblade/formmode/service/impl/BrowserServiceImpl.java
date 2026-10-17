@@ -191,6 +191,24 @@ public class BrowserServiceImpl implements IBrowserService {
         category9.put("types", customTypes);
         result.add(category9);
 
+        // ========== 公文类别（odoc） ==========
+        // 与前端 components/FormMode/personOrg.ts 的 BROWSER_TYPE_META（258~264）一一对应：
+        // 收发文单位 / 多收发文单位 / 秘密等级 / 紧急程度 / 公文类型(doc_type) / 主题分类 / 发文字号。
+        // 此前后端硬编码的分类缺这一组，导致表单设计器「浏览按钮类型选择」里选不到任何 odoc 类型。
+        Map<String, Object> categoryOdoc = new HashMap<>();
+        categoryOdoc.put("categoryId", "odoc");
+        categoryOdoc.put("categoryName", "公文");
+        List<Map<String, Object>> odocTypes = new ArrayList<>();
+        addType(odocTypes, 258, "收发文单位", "odoc");
+        addType(odocTypes, 259, "多收发文单位", "odoc");
+        addType(odocTypes, 260, "秘密等级", "odoc");
+        addType(odocTypes, 261, "紧急程度", "odoc");
+        addType(odocTypes, 262, "公文类型", "odoc");
+        addType(odocTypes, 263, "主题分类", "odoc");
+        addType(odocTypes, 264, "发文字号", "odoc");
+        categoryOdoc.put("types", odocTypes);
+        result.add(categoryOdoc);
+
         return result;
     }
 

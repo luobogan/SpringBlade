@@ -11,6 +11,8 @@ import org.springblade.workflow.odoc.entity.WfOdocProcessSet;
 import org.springblade.workflow.odoc.entity.WfOdocRequest;
 import org.springblade.workflow.odoc.mapper.WfOdocProcessSetMapper;
 import org.springblade.workflow.odoc.mapper.WfOdocRequestMapper;
+import org.springblade.workflow.odoc.service.IWfOdocReceiveGroupService;
+import org.springblade.workflow.odoc.service.IWfOdocReceiveUnitService;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -34,6 +36,8 @@ public class WfOdocRequestSyncListener {
 	private final WfOdocProcessSetMapper processSetMapper;
 	private final WfOdocRequestMapper requestMapper;
 	private final IFormmodeClient formmodeClient;
+	private final IWfOdocReceiveUnitService receiveUnitService;
+	private final IWfOdocReceiveGroupService receiveGroupService;
 
 	private static final DateTimeFormatter DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -64,9 +68,10 @@ public class WfOdocRequestSyncListener {
 		target.setOfficalType(set.getOfficalType());
 		target.setSourceInstanceId(inst.getParentId());
 		target.setIssuedNum(str(fv, set.getNumberFieldKey()));
-		target.setIssuedUnit(str(fv, set.getIssuedUnitFieldKey()));
+		// 收发文单位：先展开公共组 id → 成员单位 id，再把单位 id 解析为名称落镜像（存量名称原样保留）
+		target.setIssuedUnit(receiveUnitService.namesOfCsv(receiveGroupService.expandToUnitIds(str(fv, set.getIssuedUnitFieldKey()))));
 		target.setReceiveNum(str(fv, set.getReceiveNumFieldKey()));
-		target.setReceiveUnit(str(fv, set.getReceiveUnitFieldKey()));
+		target.setReceiveUnit(receiveUnitService.namesOfCsv(receiveGroupService.expandToUnitIds(str(fv, set.getReceiveUnitFieldKey()))));
 		target.setSecretLevel(str(fv, set.getSecretLevelFieldKey()));
 		target.setUrgency(str(fv, set.getUrgencyFieldKey()));
 		target.setTopicType(str(fv, set.getTopicFieldKey()));
