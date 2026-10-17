@@ -15,6 +15,7 @@ import org.springblade.portal.mapper.BladeMenuMapper;
 import org.springblade.portal.mapper.PortalDeptMapper;
 import org.springblade.portal.mapper.PortalMenuMapper;
 import org.springblade.portal.mapper.PortalMenuShareMapper;
+import org.springblade.portal.service.IPortalConfigService;
 import org.springblade.portal.service.IPortalMenuService;
 import org.springblade.portal.vo.PortalMenuNode;
 import org.springframework.stereotype.Service;
@@ -22,7 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 门户菜单服务实现（对标泛微 portalmenu §14）
@@ -44,6 +45,24 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 	private final PortalDeptMapper deptMapper;
 	private final BladeMenuMapper bladeMenuMapper;
 	private final IPortalLogService logService;
+	private final IPortalConfigService configService;
+
+	/** 菜单树缓存 TTL（毫秒；与配置项缓存同口径） */
+	private static final long MENU_CACHE_TTL_MS = 60_000L;
+
+	/** 菜单树进程内缓存（isOpenMenuCache 开启时生效；对标 MenuCache §14.3）：key=userId|类型, value=缓存项 */
+	private final Map<String, MenuCacheEntry> menuTreeCache = new ConcurrentHashMap<>();
+
+	/** 菜单树缓存项（过期时间戳 + 节点快照） */
+	private static class MenuCacheEntry {
+		private final long expireAt;
+		private final List<PortalMenuNode> nodes;
+
+		private MenuCacheEntry(long expireAt, List<PortalMenuNode> nodes) {
+			this.expireAt = expireAt;
+			this.nodes = nodes;
+		}
+	}
 
 	@Override
 	public List<PortalMenu> list(String menuType) {
@@ -101,7 +120,11 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 				menu.setSortOrder(dto.getSortOrder() == null ? menu.getSortOrder() : dto.getSortOrder());
 				menu.setUpdateUser(userId);
 				menu.setUpdateTime(now);
-				return menuMapper.updateById(menu) > 0;
+				boolean sysOk = menuMapper.updateById(menu) > 0;
+				if (sysOk) {
+					clearMenuCache();
+				}
+				return sysOk;
 			}
 			menu.setParentId(parentId);
 			menu.setUpdateUser(userId);
@@ -118,6 +141,7 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 
 		boolean ok = creating ? menuMapper.insert(menu) > 0 : menuMapper.updateById(menu) > 0;
 		if (ok) {
+			clearMenuCache();
 			logService.record(creating ? PortalConstant.LOG_MENU_CREATE : PortalConstant.LOG_MENU_UPDATE,
 				"menu", String.valueOf(menu.getId()), menu.getMenuName(),
 				(creating ? "新建门户菜单 " : "编辑门户菜单 ") + menu.getMenuName(), null, null);
@@ -158,6 +182,7 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 		logService.record(PortalConstant.LOG_MENU_DELETE, "menu", String.valueOf(menuId),
 			menu.getMenuName(), "删除门户菜单 " + menu.getMenuName() + "（含子菜单 " + (toDelete.size() - 1) + " 个）",
 			null, null);
+		clearMenuCache();
 		return true;
 	}
 
@@ -168,6 +193,15 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 		}
 		BladeUser user = SecureUtil.getUser();
 		Long userId = (user == null) ? null : user.getUserId();
+		// 缓存读取（isOpenMenuCache 开启时生效；管理端写操作后全量失效）
+		String cacheKey = (userId == null ? "anon" : String.valueOf(userId)) + "|menu:" + menuType.trim();
+		boolean cacheOn = configService.isEnabled(PortalConstant.CONFIG_MENU_CACHE);
+		if (cacheOn) {
+			MenuCacheEntry hit = menuTreeCache.get(cacheKey);
+			if (hit != null && hit.expireAt > System.currentTimeMillis()) {
+				return hit.nodes;
+			}
+		}
 		String deptId = (user == null) ? null : user.getDeptId();
 		String roleIds = (user == null) ? null : user.getRoleId();
 		Long branchId = resolveBranchId(deptId);
@@ -214,12 +248,26 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 				roots.add(node);
 			}
 		}
+		if (cacheOn && !roots.isEmpty()) {
+			menuTreeCache.put(cacheKey, new MenuCacheEntry(System.currentTimeMillis() + MENU_CACHE_TTL_MS, roots));
+		}
 		return roots;
 	}
 
 	@Override
 	public List<PortalMenuNode> systemMenuTree(String region) {
 		BladeUser user = SecureUtil.getUser();
+		// 缓存读取（isOpenMenuCache 开启时生效；注意：系统菜单(blade_menu)的变更发生在
+		// blade-system 侧，缓存最长 TTL 后自然过期，属可接受延迟）
+		String sysCacheKey = (user == null || user.getUserId() == null ? "anon" : String.valueOf(user.getUserId()))
+			+ "|sys:" + ((region == null) ? "" : region.trim());
+		boolean cacheOn = configService.isEnabled(PortalConstant.CONFIG_MENU_CACHE);
+		if (cacheOn) {
+			MenuCacheEntry hit = menuTreeCache.get(sysCacheKey);
+			if (hit != null && hit.expireAt > System.currentTimeMillis()) {
+				return hit.nodes;
+			}
+		}
 		String tenantId = (user == null || user.getTenantId() == null || user.getTenantId().isBlank())
 			? "000000" : user.getTenantId();
 		// region 生效（对标泛微 leftmenu/topmenu 分工 §14.1）：
@@ -287,7 +335,15 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 				roots.add(node);
 			}
 		}
+		if (cacheOn && !roots.isEmpty()) {
+			menuTreeCache.put(sysCacheKey, new MenuCacheEntry(System.currentTimeMillis() + MENU_CACHE_TTL_MS, roots));
+		}
 		return roots;
+	}
+
+	/** 菜单树缓存全量失效（save/remove/saveShare 后调用；管理端低频操作，全量清理安全） */
+	private void clearMenuCache() {
+		menuTreeCache.clear();
 	}
 
 	private List<Long> parseLongList(String csv) {
@@ -400,6 +456,7 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 		}
 		logService.record(PortalConstant.LOG_MENU_SHARE, "menu", String.valueOf(menuId),
 			null, "更新菜单可见范围：新增 " + added + " 条，移除 " + removed + " 条", null, null);
+		clearMenuCache();
 		return true;
 	}
 

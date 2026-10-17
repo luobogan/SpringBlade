@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 门户插件管理服务实现（对标泛微 pluginmanage §14.2 G，hppluginsetting）
@@ -28,7 +29,7 @@ public class PortalPluginServiceImpl implements IPortalPluginService {
 	private final IPortalLogService logService;
 
 	@Override
-	public java.util.List<PortalPlugin> list() {
+	public List<PortalPlugin> list() {
 		return pluginMapper.selectList(new QueryWrapper<PortalPlugin>()
 			.eq("is_deleted", 0).orderByAsc("order_num").orderByAsc("id"));
 	}

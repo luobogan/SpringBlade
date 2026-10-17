@@ -56,4 +56,7 @@ public class PortalSettingSaveDTO implements Serializable {
 
 	@Schema(name = "全局默认字体（1大 2中 3默认）")
 	private Integer fontSize;
+
+	@Schema(name = "导航菜单源（1系统菜单blade_menu 2门户私有菜单blade_portal_menu front/top）")
+	private Integer menuSource;
 }

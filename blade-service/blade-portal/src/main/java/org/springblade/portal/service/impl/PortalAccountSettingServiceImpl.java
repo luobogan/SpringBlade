@@ -10,6 +10,7 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.portal.constant.PortalConstant;
 import org.springblade.portal.dto.PortalAccountSettingSaveDTO;
 import org.springblade.portal.entity.PortalAccountSetting;
+import org.springblade.portal.entity.PortalSetting;
 import org.springblade.portal.log.service.IPortalLogService;
 import org.springblade.portal.mapper.PortalAccountSettingMapper;
 import org.springblade.portal.service.IPortalAccountSettingService;
@@ -98,7 +99,7 @@ public class PortalAccountSettingServiceImpl implements IPortalAccountSettingSer
 	public AccountMoreVO getEffective(Long userId) {
 		AccountMoreVO vo = new AccountMoreVO();
 		PortalAccountSetting personal = get(userId);
-		org.springblade.portal.entity.PortalSetting global = settingService.get();
+		PortalSetting global = settingService.get();
 
 		vo.setGlobalFontSize(global.getFontSize());
 		vo.setGlobalLayoutType(global.getLayoutType());

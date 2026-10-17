@@ -43,4 +43,10 @@ public class MyPortalVO implements Serializable {
 
 	@Schema(name = "当前用户可见的全部门户页面（供多门户切换；已按授权过滤）")
 	private List<PortalPageBrief> visiblePages;
+
+	@Schema(name = "导航菜单源（1系统菜单blade_menu 2门户私有菜单blade_portal_menu；首页据此分流 /menu/system-tree 或 /menu/tree）")
+	private Integer menuSource;
+
+	@Schema(name = "是否允许页面维护者在查看页进入编辑布局（配置项 canPageMaintainerSettingInViewpage；按钮权限仍前置校验）")
+	private Integer canMaintainInViewpage;
 }

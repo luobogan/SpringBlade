@@ -24,6 +24,8 @@ import org.springblade.portal.mapper.PortalPageShareMapper;
 import org.springblade.portal.mapper.PortalPageStatMapper;
 import org.springblade.portal.mapper.PortalPageVisitorMapper;
 import org.springblade.portal.service.IPortalPageService;
+import org.springblade.portal.service.IPortalConfigService;
+import org.springblade.portal.service.IPortalSettingService;
 import org.springblade.portal.service.IPortalThemeService;
 import org.springblade.portal.service.IPortalUserDefaultService;
 import org.springblade.portal.service.IPortalUserLayoutService;
@@ -80,6 +82,8 @@ public class PortalPageServiceImpl implements IPortalPageService {
 	private final IPortalThemeService themeService;
 	private final IPortalUserDefaultService userDefaultService;
 	private final IPortalUserLayoutService userLayoutService;
+	private final IPortalSettingService settingService;
+	private final IPortalConfigService configService;
 
 	@Override
 	public List<PortalPage> list() {
@@ -157,15 +161,24 @@ public class PortalPageServiceImpl implements IPortalPageService {
 		recordView(target.getId(), tenantId, userId);
 		MyPortalVO vo = buildPortalVO(target, userId, tenantId);
 		vo.setVisiblePages(toBriefList(visible));
+		// 导航菜单源（方案一：同表分型 + 源可配置，V2026.10.16_007）：
+		// 首页据此分流 /menu/system-tree（系统菜单）或 /menu/tree（门户私有 front/top）
+		vo.setMenuSource(settingService.get().getMenuSource());
+		// 页面维护者前台编辑总开关（portalconfig 消费点，§16.6）：按钮权限之外的第二道闸
+		vo.setCanMaintainInViewpage(configService.isEnabled(PortalConstant.CONFIG_MAINTAINER_IN_VIEWPAGE) ? 1 : 0);
 		return vo;
 	}
 
 	/**
 	 * 访问埋点：累计热度(view_count) + 当日 PV(page_stat)原子 +1 + 独立访客(visitor)去重记录。
 	 * 失败仅记日志，绝不影响门户渲染。登录前门户 userId 为 null，不记 UV。
+	 * 受配置项 portalStatEnabled 控制（§16.6 消费点；关闭后不写统计）。
 	 */
 	private void recordView(Long pageId, String tenantId, Long userId) {
 		if (pageId == null) {
+			return;
+		}
+		if (!configService.isEnabled(PortalConstant.CONFIG_STAT_ENABLED)) {
 			return;
 		}
 		try {

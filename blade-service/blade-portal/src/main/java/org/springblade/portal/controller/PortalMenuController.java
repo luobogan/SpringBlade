@@ -39,9 +39,9 @@ public class PortalMenuController {
 
 	@GetMapping("/menu/tree")
 	@PreAuth(PortalConstant.HAS_AUTH)
-	@Operation(summary = "运行时菜单树", description = "当前用户可见的指定类型菜单（已按授权过滤，父子层级）")
+	@Operation(summary = "运行时菜单树", description = "当前用户可见的指定类型菜单（已按授权过滤，父子层级）。menuType 支持 front/top/toolbar/quick：front/top 为门户私有导航（需在门户应用设置把导航菜单源切为 2 才会被首页消费），toolbar/quick 为门户私有入口")
 	public R<List<PortalMenuNode>> tree(
-		@Parameter(description = "菜单类型：toolbar/quick 门户私有入口") @RequestParam String menuType) {
+		@Parameter(description = "菜单类型：front前端/top后端/toolbar工具栏/quick快捷入口") @RequestParam String menuType) {
 		return R.data(menuService.menuTree(menuType));
 	}
 

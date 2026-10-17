@@ -1,25 +1,37 @@
 package org.springblade.portal.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.portal.constant.PortalConstant;
 import org.springblade.portal.dto.PortalThemeSaveDTO;
+import org.springblade.portal.entity.BladeUserBrief;
 import org.springblade.portal.entity.PortalTheme;
 import org.springblade.portal.entity.PortalUserTheme;
+import org.springblade.portal.log.service.IPortalLogService;
+import org.springblade.portal.mapper.BladeUserMapper;
 import org.springblade.portal.mapper.PortalThemeMapper;
 import org.springblade.portal.mapper.PortalUserThemeMapper;
 import org.springblade.portal.service.IPortalThemeService;
+import org.springblade.portal.vo.ThemeUserVO;
 import org.springblade.portal.vo.ThemeVO;
+import org.springblade.portal.vo.UserThemeInfoVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * 门户主题服务实现（对标泛微 themestyle / themecenter）
@@ -34,6 +46,8 @@ public class PortalThemeServiceImpl implements IPortalThemeService {
 
 	private final PortalThemeMapper themeMapper;
 	private final PortalUserThemeMapper userThemeMapper;
+	private final BladeUserMapper bladeUserMapper;
+	private final IPortalLogService logService;
 
 	@Override
 	public List<PortalTheme> list() {
@@ -210,6 +224,165 @@ public class PortalThemeServiceImpl implements IPortalThemeService {
 			log.warn("[portal] 解析主题失败（主题表可能未初始化），降级无主题，msg={}", e.getMessage());
 			return null;
 		}
+	}
+
+	/* ==================== 批量指定（themeappoint §15.5 A3） ==================== */
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public int appointByScope(Long themeId, int scopeType, List<Long> scopeIds) {
+		if (themeId == null) {
+			return -1;
+		}
+		PortalTheme theme = themeMapper.selectById(themeId);
+		if (theme == null || Integer.valueOf(1).equals(theme.getIsDeleted())) {
+			return -1;
+		}
+		if (scopeType != PortalConstant.SHARE_ALL && scopeType != PortalConstant.SHARE_DEPT
+			&& scopeType != PortalConstant.SHARE_USER && scopeType != PortalConstant.SHARE_ROLE) {
+			return -1;
+		}
+		if (scopeType != PortalConstant.SHARE_ALL && (scopeIds == null || scopeIds.isEmpty())) {
+			return -1;
+		}
+		List<Long> userIds = bladeUserMapper.selectIdsByScope(theme.getTenantId(), scopeType, scopeIds);
+		if (userIds == null || userIds.isEmpty()) {
+			return 0;
+		}
+		int updated = 0;
+		for (Long uid : userIds) {
+			if (uid == null) {
+				continue;
+			}
+			if (upsertUserTheme(uid, themeId)) {
+				updated++;
+			}
+		}
+		logService.record(PortalConstant.LOG_THEME_APPOINT, "theme", String.valueOf(themeId),
+			theme.getThemeName(), "按范围批量指定主题「" + theme.getThemeName() + "」给 " + updated
+			+ " 个用户（scopeType=" + scopeType + "）", null, null);
+		return updated;
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public int migrateTheme(Long fromThemeId, Long toThemeId) {
+		if (fromThemeId == null || toThemeId == null || Objects.equals(fromThemeId, toThemeId)) {
+			return -1;
+		}
+		PortalTheme from = themeMapper.selectById(fromThemeId);
+		PortalTheme to = themeMapper.selectById(toThemeId);
+		if (from == null || to == null || Integer.valueOf(1).equals(to.getIsDeleted())) {
+			return -1;
+		}
+		List<PortalUserTheme> rows = userThemeMapper.selectList(new QueryWrapper<PortalUserTheme>()
+			.eq("theme_id", fromThemeId));
+		LocalDateTime now = LocalDateTime.now();
+		for (PortalUserTheme ut : rows) {
+			ut.setThemeId(toThemeId);
+			ut.setUpdateTime(now);
+			userThemeMapper.updateById(ut);
+		}
+		logService.record(PortalConstant.LOG_THEME_APPOINT, "theme", String.valueOf(toThemeId),
+			to.getThemeName(), "主题整体迁移：「" + from.getThemeName() + "」→「" + to.getThemeName()
+			+ "」，共 " + rows.size() + " 个用户", null, null);
+		return rows.size();
+	}
+
+	/* ==================== 使用查询（themesearch §15.5 A4） ==================== */
+
+	@Override
+	public IPage<ThemeUserVO> listThemeUsers(Long themeId, long current, long size) {
+		Page<ThemeUserVO> page = new Page<>(Math.max(current, 1), Math.min(Math.max(size, 1), 100));
+		if (themeId == null) {
+			return page;
+		}
+		List<PortalUserTheme> rows = userThemeMapper.selectList(new QueryWrapper<PortalUserTheme>()
+			.eq("theme_id", themeId).orderByAsc("id"));
+		long total = rows.size();
+		page.setTotal(total);
+		int from = (int) ((page.getCurrent() - 1) * page.getSize());
+		if (from >= total) {
+			return page;
+		}
+		int to = (int) Math.min(from + page.getSize(), total);
+		List<PortalUserTheme> slice = rows.subList(from, to);
+		List<Long> userIds = slice.stream().map(PortalUserTheme::getUserId).filter(Objects::nonNull).collect(Collectors.toList());
+		Map<Long, BladeUserBrief> userMap = new LinkedHashMap<>();
+		if (!userIds.isEmpty()) {
+			for (BladeUserBrief u : bladeUserMapper.selectBriefByIds(userIds)) {
+				if (u != null && u.getId() != null) {
+					userMap.put(u.getId(), u);
+				}
+			}
+		}
+		List<ThemeUserVO> vos = new ArrayList<>();
+		for (PortalUserTheme ut : slice) {
+			ThemeUserVO vo = new ThemeUserVO();
+			vo.setUserId(ut.getUserId());
+			vo.setUpdateTime(ut.getUpdateTime() == null ? null
+				: ut.getUpdateTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+			BladeUserBrief u = userMap.get(ut.getUserId());
+			if (u != null) {
+				vo.setAccount(u.getAccount());
+				vo.setRealName(u.getRealName());
+				vo.setDeptId(u.getDeptId());
+			}
+			vos.add(vo);
+		}
+		page.setRecords(vos);
+		return page;
+	}
+
+	@Override
+	public UserThemeInfoVO getUserThemeInfo(Long userId) {
+		UserThemeInfoVO vo = new UserThemeInfoVO();
+		if (userId == null) {
+			return vo;
+		}
+		vo.setUserId(userId);
+		BladeUserBrief u = bladeUserMapper.selectBriefById(userId);
+		if (u != null) {
+			vo.setAccount(u.getAccount());
+			vo.setRealName(u.getRealName());
+			vo.setDeptId(u.getDeptId());
+		}
+		PortalUserTheme ut = userThemeMapper.selectOne(new QueryWrapper<PortalUserTheme>().eq("user_id", userId));
+		if (ut != null && ut.getThemeId() != null) {
+			vo.setHasExplicit(true);
+			vo.setThemeId(ut.getThemeId());
+			PortalTheme t = themeMapper.selectById(ut.getThemeId());
+			if (t != null) {
+				vo.setThemeName(t.getThemeName());
+			}
+		} else {
+			vo.setHasExplicit(false);
+		}
+		// 生效主题（按 resolveTheme 优先级：偏好>定时>默认；页面维度不适用）
+		ThemeVO effective = resolveTheme(null, userId, tenantOf(SecureUtil.getUser()));
+		vo.setEffectiveThemeName(effective == null ? null : effective.getThemeName());
+		return vo;
+	}
+
+	/** upsert 用户主题偏好（供 setUserTheme/appointByScope 共用） */
+	private boolean upsertUserTheme(Long userId, Long themeId) {
+		LocalDateTime now = LocalDateTime.now();
+		PortalUserTheme ut = userThemeMapper.selectOne(new QueryWrapper<PortalUserTheme>().eq("user_id", userId));
+		if (ut == null) {
+			ut = new PortalUserTheme();
+			ut.setTenantId(tenantOf(SecureUtil.getUser()));
+			ut.setUserId(userId);
+			ut.setThemeId(themeId);
+			ut.setCreateTime(now);
+			ut.setUpdateTime(now);
+			return userThemeMapper.insert(ut) > 0;
+		}
+		if (Objects.equals(ut.getThemeId(), themeId)) {
+			return false; // 已指向目标主题，不重复计数
+		}
+		ut.setThemeId(themeId);
+		ut.setUpdateTime(now);
+		return userThemeMapper.updateById(ut) > 0;
 	}
 
 	/**

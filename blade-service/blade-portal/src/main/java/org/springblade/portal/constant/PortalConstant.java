@@ -143,6 +143,12 @@ public interface PortalConstant {
     String MENU_TYPE_TOOLBAR = "toolbar";
     /** 快捷入口菜单 */
     String MENU_TYPE_QUICK = "quick";
+    /**
+     * 报表菜单（对标 reportMenu §14.2 D）
+     * <p>「我的报表」报表类菜单，同表分型新增类型；不进首页顶部/左侧渲染，
+     * 供报表门户场景按 menuType=report 拉取（/menu/tree?menuType=report）。</p>
+     */
+    String MENU_TYPE_REPORT = "report";
 
     /* ==================== 门户菜单链接模式 ==================== */
 
@@ -183,6 +189,14 @@ public interface PortalConstant {
     String PERM_STYLE_LIB_MAINT = "portal_style_lib_maint";
     /** 门户素材库维护（对标 MATERIAL_LIB→MaterialLibrary:Maint） */
     String PERM_MATERIAL_MAINT = "portal_material_maint";
+    /** 特色门户（门户网格布局）维护（对标 tsportal §16.2） */
+    String PERM_GRID_LAYOUT_MAINT = "portal_ts_portal_maint";
+    /** 门户配置项维护（对标 portalconfig §16.6） */
+    String PERM_CONFIG_MAINT = "portal_config_maint";
+    /** 元素注册维护（对标 elementregister §15.3 B5） */
+    String PERM_ELEMENT_REGISTER_MAINT = "portal_element_register_maint";
+    /** 协同区维护（对标 synergy §15.7 C2，知识型延后） */
+    String PERM_SYNERGY_MAINT = "portal_synergy_maint";
     /** 门户审计日志查看 */
     String PERM_LOG_VIEW = "portal_log_view";
     /** 门户个人设置管理（对标 accountmore 管理侧） */
@@ -213,6 +227,23 @@ public interface PortalConstant {
     /** 布局：紧凑 */
     int LAYOUT_COMPACT = 3;
 
+    /* ---- 导航菜单源（本地化偏差处置：泛微两物理表 vs 本项目同表分型 + 源可配置） ---- */
+
+    /**
+     * 导航菜单源 = 系统菜单（blade_menu）
+     * <p>默认值；首页前端/后端菜单走 /menu/system-tree，按 blade_role_menu 授权过滤。</p>
+     */
+    int MENU_SOURCE_SYSTEM = 1;
+
+    /**
+     * 导航菜单源 = 门户私有菜单（blade_portal_menu.menu_type=front/top）
+     * <p>对标泛微 portalmenu leftmenu/topmenu 的“门户自有导航”语义；首页改走
+     * /menu/tree，按 blade_portal_menu_share 授权过滤。泛微为
+     * LEFTMenuInfo/MAINMenuInfo 两物理表，本项目同表分型不拆表，以本配置项
+     * 声明导航源（迁移 V2026.10.16_007）。</p>
+     */
+    int MENU_SOURCE_PORTAL = 2;
+
     /* ==================== 样式库/模板库/素材库枚举（对标 §14.2E/§15.3B/§15.4C） ==================== */
 
     /** 菜单样式：横向（对标 hpMenuStyle menuh） */
@@ -237,12 +268,26 @@ public interface PortalConstant {
     String PLUGIN_TYPE_CSS = "css";
     /** 插件类型：组件 */
     String PLUGIN_TYPE_COMPONENT = "component";
+    /** 特色门户网格布局类型：登录前门户（对标 hp_grid_layout layout_type=login） */
+    String GRID_LAYOUT_LOGIN = "login";
+    /** 特色门户网格布局类型：登录后门户（对标 hp_grid_layout layout_type=theme） */
+    String GRID_LAYOUT_THEME = "theme";
+
+    /* ---- 门户配置项编码（对标 portalconfig §16.6；均有真实消费点） ---- */
+
+    /** 菜单树进程内缓存开关（消费点 PortalMenuServiceImpl.menuTree/systemMenuTree） */
+    String CONFIG_MENU_CACHE = "isOpenMenuCache";
+    /** 页面维护者前台编辑总开关（消费点 MyPortalVO.canMaintainInViewpage → Home 编辑布局） */
+    String CONFIG_MAINTAINER_IN_VIEWPAGE = "canPageMaintainerSettingInViewpage";
+    /** 访问统计(PV/UV)开关（消费点 PortalPageServiceImpl.recordView） */
+    String CONFIG_STAT_ENABLED = "portalStatEnabled";
 
     /* ==================== 新增模块审计类型（对标 PortalLogInfo §13.4） ==================== */
 
     String LOG_SETTING_SAVE = "SETTING_SAVE";
     String LOG_SETTING_SYNC = "SETTING_SYNC";
     String LOG_ACCOUNT_SETTING = "ACCOUNT_SETTING";
+    String LOG_THEME_APPOINT = "THEME_APPOINT";
     String LOG_QUICK_SEARCH_SAVE = "QUICK_SEARCH_SAVE";
     String LOG_QUICK_SEARCH_DELETE = "QUICK_SEARCH_DELETE";
     String LOG_QUICK_SEARCH_SHARE = "QUICK_SEARCH_SHARE";
@@ -256,6 +301,13 @@ public interface PortalConstant {
     String LOG_ELEMENT_TEMPLATE_DELETE = "ELEMENT_TEMPLATE_DELETE";
     String LOG_MATERIAL_SAVE = "MATERIAL_SAVE";
     String LOG_MATERIAL_DELETE = "MATERIAL_DELETE";
+    String LOG_GRID_LAYOUT_SAVE = "GRID_LAYOUT_SAVE";
+    String LOG_GRID_LAYOUT_DELETE = "GRID_LAYOUT_DELETE";
+    String LOG_CONFIG_SAVE = "CONFIG_SAVE";
+    String LOG_ELEMENT_REGISTER_SAVE = "ELEMENT_REGISTER_SAVE";
+    String LOG_ELEMENT_REGISTER_DELETE = "ELEMENT_REGISTER_DELETE";
+    String LOG_SYNERGY_SAVE = "SYNERGY_SAVE";
+    String LOG_SYNERGY_DELETE = "SYNERGY_DELETE";
     String LOG_NEWS_TEMPLATE_SAVE = "NEWS_TEMPLATE_SAVE";
     String LOG_NEWS_TEMPLATE_DELETE = "NEWS_TEMPLATE_DELETE";
     String LOG_PAGE_IMPORT_FAIL = "PAGE_IMPORT_FAIL";

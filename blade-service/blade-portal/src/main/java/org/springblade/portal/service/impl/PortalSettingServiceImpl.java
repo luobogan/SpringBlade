@@ -166,6 +166,12 @@ public class PortalSettingServiceImpl implements IPortalSettingService {
 		if (dto.getFontSize() != null) {
 			target.setFontSize(dto.getFontSize());
 		}
+		Integer menuSource = dto.getMenuSource();
+		if (menuSource != null
+			&& (menuSource == PortalConstant.MENU_SOURCE_SYSTEM
+			|| menuSource == PortalConstant.MENU_SOURCE_PORTAL)) {
+			target.setMenuSource(menuSource);
+		}
 	}
 
 	private String currentTenant() {

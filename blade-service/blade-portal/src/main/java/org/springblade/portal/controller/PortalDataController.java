@@ -18,6 +18,7 @@ import org.springblade.portal.mapper.PortalDataMapper;
 import org.springblade.portal.mapper.PortalDeptMapper;
 import org.springblade.portal.provider.ElementDataProviderRegistry;
 import org.springblade.portal.provider.IPortalElementDataProvider;
+import org.springblade.portal.service.IPortalElementRegisterService;
 import org.springblade.portal.service.IPortalElementService;
 import org.springblade.portal.vo.ElementDataVO;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,6 +59,7 @@ public class PortalDataController {
 
 	private final ElementDataProviderRegistry registry;
 	private final IPortalElementService elementService;
+	private final IPortalElementRegisterService elementRegisterService;
 	private final PortalDataMapper dataMapper;
 	private final PortalDeptMapper deptMapper;
 
@@ -174,9 +176,16 @@ public class PortalDataController {
 
 	@GetMapping("/element-types")
 	@PreAuth(PortalConstant.HAS_AUTH)
-	@Operation(summary = "已支持的元素类型", description = "注册表已收集的元素类型，供设计器元素面板使用")
+	@Operation(summary = "已支持的元素类型", description = "内置 provider 类型 ∪ 元素注册中心已注册(启用)自定义类型；设计器按「后端已注册 ∩ 前端渲染器」交集呈现")
 	public R<List<String>> types() {
-		return R.data(new ArrayList<>(registry.types()));
+		// 内置 provider 类型 + 已注册自定义类型（去重合并；对标 hpBaseElement 聚合 §17.1）
+		List<String> all = new ArrayList<>(registry.types());
+		for (String registered : elementRegisterService.registeredTypes()) {
+			if (registered != null && !registered.isBlank() && !all.contains(registered)) {
+				all.add(registered);
+			}
+		}
+		return R.data(all);
 	}
 
 	/* ==================== 私有方法 ==================== */

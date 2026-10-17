@@ -1,5 +1,6 @@
 package org.springblade.portal.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -14,6 +15,8 @@ import org.springblade.portal.entity.PortalTheme;
 import org.springblade.portal.security.PortalAccessDeniedException;
 import org.springblade.portal.security.PortalRightUtil;
 import org.springblade.portal.service.IPortalThemeService;
+import org.springblade.portal.vo.ThemeUserVO;
+import org.springblade.portal.vo.UserThemeInfoVO;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -79,6 +82,50 @@ public class PortalThemeController {
 	public R<Boolean> remove(@RequestParam Long themeId) {
 		requireRight(PortalConstant.PERM_THEME_MAINT);
 		return R.data(themeService.remove(themeId));
+	}
+
+	/* ==================== 批量指定（themeappoint §15.5 A3） ==================== */
+
+	@PostMapping("/theme/appoint")
+	@PreAuth(PortalConstant.HAS_AUTH)
+	@Operation(summary = "按人员范围批量指定主题", description = "把主题写为范围内所有用户的显式偏好（覆盖自选/旧指定）；scopeType=1全员/2部门/3个人/4角色")
+	public R<Integer> appoint(
+		@Parameter(description = "主题ID") @RequestParam Long themeId,
+		@Parameter(description = "范围类型：1全员 2部门 3个人 4角色") @RequestParam int scopeType,
+		@RequestBody(required = false) List<Long> scopeIds) {
+		requireRight(PortalConstant.PERM_THEME_MAINT);
+		return R.data(themeService.appointByScope(themeId, scopeType, scopeIds));
+	}
+
+	@PostMapping("/theme/migrate")
+	@PreAuth(PortalConstant.HAS_AUTH)
+	@Operation(summary = "主题整体迁移", description = "把源主题的全部显式偏好用户迁移到目标主题")
+	public R<Integer> migrate(
+		@Parameter(description = "源主题ID") @RequestParam Long fromThemeId,
+		@Parameter(description = "目标主题ID") @RequestParam Long toThemeId) {
+		requireRight(PortalConstant.PERM_THEME_MAINT);
+		return R.data(themeService.migrateTheme(fromThemeId, toThemeId));
+	}
+
+	/* ==================== 使用查询（themesearch §15.5 A4） ==================== */
+
+	@GetMapping("/theme/users")
+	@PreAuth(PortalConstant.HAS_AUTH)
+	@Operation(summary = "反查主题使用人员", description = "分页返回显式偏好该主题的用户（对标 getAllHrmOfTheme）")
+	public R<IPage<ThemeUserVO>> themeUsers(
+		@Parameter(description = "主题ID") @RequestParam Long themeId,
+		@Parameter(description = "页码") @RequestParam(defaultValue = "1") long current,
+		@Parameter(description = "每页条数") @RequestParam(defaultValue = "15") long size) {
+		requireRight(PortalConstant.PERM_THEME_MAINT);
+		return R.data(themeService.listThemeUsers(themeId, current, size));
+	}
+
+	@GetMapping("/theme/user-info")
+	@PreAuth(PortalConstant.HAS_AUTH)
+	@Operation(summary = "查人员当前主题", description = "返回显式偏好 + 生效主题名称（对标 getAllThemesOfUserId）")
+	public R<UserThemeInfoVO> userThemeInfo(@Parameter(description = "用户ID") @RequestParam Long userId) {
+		requireRight(PortalConstant.PERM_THEME_MAINT);
+		return R.data(themeService.getUserThemeInfo(userId));
 	}
 
 	@GetMapping("/theme/user")
