@@ -53,11 +53,16 @@ public class MenuWrapper extends BaseEntityWrapper<Menu, MenuVO> {
 	@Override
 	public MenuVO entityVO(Menu menu) {
 		MenuVO menuVO = BeanUtil.copyProperties(menu, MenuVO.class);
-		if (Func.equals(menu.getParentId(), CommonConstant.TOP_PARENT_ID)) {
+		Long parentId = menu.getParentId();
+		if (Func.equals(parentId, CommonConstant.TOP_PARENT_ID)) {
+			menuVO.setParentName(CommonConstant.TOP_PARENT_NAME);
+		} else if (parentId == null) {
+			// 防御：parent_id 为空（脏数据）时不能拿去查库，按顶级节点展示
 			menuVO.setParentName(CommonConstant.TOP_PARENT_NAME);
 		} else {
-			Menu parent = menuService.getById(menu.getParentId());
-			menuVO.setParentName(parent.getName());
+			Menu parent = menuService.getById(parentId);
+			// 防御：父菜单可能已被删除/不存在，不能直接 parent.getName()（会 NPE）
+			menuVO.setParentName(parent == null ? CommonConstant.TOP_PARENT_NAME : parent.getName());
 		}
 		menuVO.setCategoryName(DictCache.getValue("menu_category", Func.toInt(menuVO.getCategory())));
 		menuVO.setActionName(DictCache.getValue("button_func", Func.toInt(menuVO.getAction())));
@@ -71,7 +76,16 @@ public class MenuWrapper extends BaseEntityWrapper<Menu, MenuVO> {
 
 
 	public List<MenuVO> listNodeVO(List<Menu> list) {
-		List<MenuVO> collect = list.stream().map(menu -> BeanUtil.copyProperties(menu, MenuVO.class)).collect(Collectors.toList());
+		List<MenuVO> collect = list.stream().map(menu -> {
+			MenuVO menuVO = BeanUtil.copyProperties(menu, MenuVO.class);
+			// 防御：parent_id 为空时 ForestNodeManager 建树会对每个节点取
+			// getParentId().longValue()，直接 NPE 导致接口 500（全站按钮权限为空）。
+			// 顶级节点约定用 CommonConstant.TOP_PARENT_ID(0)，这里把空值归一化过去。
+			if (menuVO.getParentId() == null) {
+				menuVO.setParentId(CommonConstant.TOP_PARENT_ID);
+			}
+			return menuVO;
+		}).collect(Collectors.toList());
 		return ForestNodeMerger.merge(collect);
 	}
 
