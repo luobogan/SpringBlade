@@ -17,12 +17,14 @@ import org.springblade.portal.mapper.PortalMenuMapper;
 import org.springblade.portal.mapper.PortalMenuShareMapper;
 import org.springblade.portal.service.IPortalConfigService;
 import org.springblade.portal.service.IPortalMenuService;
+import org.springblade.portal.vo.PortalDeptMenuVO;
 import org.springblade.portal.vo.PortalMenuNode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -460,6 +462,170 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 		return true;
 	}
 
+	@Override
+	public List<PortalDeptMenuVO> deptMenuShare(Long deptId, String menuType) {
+		if (deptId == null || isBlank(menuType)) {
+			return new ArrayList<>();
+		}
+		String type = menuType.trim();
+		List<PortalMenu> menus = menuMapper.selectList(new QueryWrapper<PortalMenu>()
+			.eq("menu_type", type).eq("is_deleted", 0)
+			.orderByAsc("sort_order").orderByAsc("id"));
+		List<PortalDeptMenuVO> out = new ArrayList<>();
+		if (menus.isEmpty()) {
+			return out;
+		}
+		List<Long> ids = new ArrayList<>();
+		for (PortalMenu m : menus) {
+			ids.add(m.getId());
+		}
+		Map<Long, List<PortalMenuShare>> byMenu = new HashMap<>();
+		for (PortalMenuShare s : shareMapper.selectList(
+			new QueryWrapper<PortalMenuShare>().in("menu_id", ids).eq("is_deleted", 0))) {
+			byMenu.computeIfAbsent(s.getMenuId(), k -> new ArrayList<>()).add(s);
+		}
+		String deptKey = String.valueOf(deptId).trim();
+
+		for (PortalMenu m : menus) {
+			List<PortalMenuShare> shares = byMenu.getOrDefault(m.getId(), Collections.emptyList());
+			int realCount = 0;
+			boolean deptHit = false;
+			boolean limited = !shares.isEmpty();
+			for (PortalMenuShare s : shares) {
+				int st = s.getShareType() == null ? 0 : s.getShareType();
+				if (st == PortalConstant.SHARE_LIMIT) {
+					continue;
+				}
+				realCount++;
+				if (st == PortalConstant.SHARE_ALL) {
+					deptHit = true;
+				} else if (st == PortalConstant.SHARE_DEPT
+					&& s.getShareId() != null && String.valueOf(s.getShareId()).equals(deptKey)) {
+					deptHit = true;
+				}
+			}
+			PortalDeptMenuVO vo = new PortalDeptMenuVO();
+			vo.setId(m.getId());
+			vo.setParentId(m.getParentId());
+			vo.setMenuName(m.getMenuName());
+			vo.setIcon(m.getIcon());
+			vo.setRouteUrl(m.getRouteUrl());
+			vo.setMenuType(m.getMenuType());
+			vo.setSortOrder(m.getSortOrder());
+			vo.setVisible(m.getVisible());
+			// 无授权记录=全员可见 → 该部门可见；已限定的菜单按是否命中本部门判定
+			vo.setChecked(!limited || deptHit);
+			vo.setLimited(limited);
+			vo.setShareCount(realCount);
+			out.add(vo);
+		}
+		return out;
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public boolean saveDeptShare(Long deptId, String menuType, List<Long> menuIds) {
+		if (deptId == null || isBlank(menuType)) {
+			return false;
+		}
+		String type = menuType.trim();
+		List<PortalMenu> menus = menuMapper.selectList(new QueryWrapper<PortalMenu>()
+			.eq("menu_type", type).eq("is_deleted", 0));
+		if (menus.isEmpty()) {
+			return false;
+		}
+		BladeUser user = SecureUtil.getUser();
+		Long userId = (user == null) ? null : user.getUserId();
+		String tenantId = (user != null && user.getTenantId() != null && !user.getTenantId().isBlank())
+			? user.getTenantId() : "000000";
+		LocalDateTime now = LocalDateTime.now();
+		Set<Long> target = new HashSet<>();
+		if (menuIds != null) {
+			for (Long id : menuIds) {
+				if (id != null) {
+					target.add(id);
+				}
+			}
+		}
+
+		List<Long> ids = new ArrayList<>();
+		for (PortalMenu m : menus) {
+			ids.add(m.getId());
+		}
+		Map<Long, List<PortalMenuShare>> byMenu = new HashMap<>();
+		for (PortalMenuShare s : shareMapper.selectList(
+			new QueryWrapper<PortalMenuShare>().in("menu_id", ids).eq("is_deleted", 0))) {
+			byMenu.computeIfAbsent(s.getMenuId(), k -> new ArrayList<>()).add(s);
+		}
+		String deptKey = String.valueOf(deptId).trim();
+
+		int added = 0;
+		int removed = 0;
+		int limited = 0;
+		for (PortalMenu m : menus) {
+			List<PortalMenuShare> shares = byMenu.getOrDefault(m.getId(), Collections.emptyList());
+			boolean want = target.contains(m.getId());
+			List<PortalMenuShare> deptRecs = new ArrayList<>();
+			boolean hasLimit = false;
+			int realCount = 0;
+			for (PortalMenuShare s : shares) {
+				int st = s.getShareType() == null ? 0 : s.getShareType();
+				if (st == PortalConstant.SHARE_LIMIT) {
+					hasLimit = true;
+					continue;
+				}
+				realCount++;
+				if (st == PortalConstant.SHARE_DEPT
+					&& s.getShareId() != null && String.valueOf(s.getShareId()).equals(deptKey)) {
+					deptRecs.add(s);
+				}
+			}
+			if (want) {
+				if (deptRecs.isEmpty()) {
+					shareMapper.insert(newShare(m.getId(), PortalConstant.SHARE_DEPT, deptId, tenantId, userId, now));
+					added++;
+				}
+			} else {
+				for (PortalMenuShare gone : deptRecs) {
+					PortalMenuShare off = new PortalMenuShare();
+					off.setIsDeleted(1);
+					off.setStatus(-1);
+					off.setUpdateUser(userId);
+					off.setUpdateTime(now);
+					shareMapper.update(off, new QueryWrapper<PortalMenuShare>().eq("id", gone.getId()));
+					removed++;
+				}
+				// 取消勾选必须落「限定标记」：否则 share 清空后菜单回落成全员可见，
+				// 管理员看到的「该部门不可见」根本不生效（见 PortalConstant.SHARE_LIMIT）
+				if (!hasLimit) {
+					shareMapper.insert(newShare(m.getId(), PortalConstant.SHARE_LIMIT, 0L, tenantId, userId, now));
+					limited++;
+				}
+			}
+		}
+		logService.record(PortalConstant.LOG_MENU_SHARE, "menu", "dept:" + deptId,
+			null, "按部门更新菜单权限：授权 " + target.size() + " 项，新增 " + added
+				+ " 条，移除 " + removed + " 条，限定标记 " + limited + " 个菜单", null, null);
+		clearMenuCache();
+		return true;
+	}
+
+	private PortalMenuShare newShare(Long menuId, Integer shareType, Long shareId,
+									 String tenantId, Long userId, LocalDateTime now) {
+		PortalMenuShare ns = new PortalMenuShare();
+		ns.setTenantId(tenantId);
+		ns.setMenuId(menuId);
+		ns.setShareType(shareType);
+		ns.setShareId(shareId);
+		ns.setIsDeleted(0);
+		ns.setStatus(1);
+		ns.setCreateUser(userId);
+		ns.setCreateTime(now);
+		ns.setUpdateUser(userId);
+		ns.setUpdateTime(now);
+		return ns;
+	}
+
 	/* ==================== 私有方法 ==================== */
 
 	private void collectDescendants(Long rootId, List<PortalMenu> all, Set<Long> out) {
@@ -491,6 +657,11 @@ public class PortalMenuServiceImpl implements IPortalMenuService {
 				continue;
 			}
 			int type = share.getShareType() == null ? 0 : share.getShareType();
+			// 限定标记哨兵：本身永不命中，只负责让 hasShare 为真
+			// （菜单从「全员可见」切换为「须命中才可见」，见 PortalConstant.SHARE_LIMIT）
+			if (type == PortalConstant.SHARE_LIMIT) {
+				continue;
+			}
 			if (type == PortalConstant.SHARE_ALL) {
 				return true;
 			}

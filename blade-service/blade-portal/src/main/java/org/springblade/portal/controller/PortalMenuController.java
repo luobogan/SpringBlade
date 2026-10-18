@@ -7,12 +7,14 @@ import lombok.RequiredArgsConstructor;
 import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.tool.api.R;
 import org.springblade.portal.constant.PortalConstant;
+import org.springblade.portal.dto.PortalMenuDeptShareDTO;
 import org.springblade.portal.dto.PortalMenuSaveDTO;
 import org.springblade.portal.entity.PortalMenu;
 import org.springblade.portal.entity.PortalMenuShare;
 import org.springblade.portal.security.PortalAccessDeniedException;
 import org.springblade.portal.security.PortalRightUtil;
 import org.springblade.portal.service.IPortalMenuService;
+import org.springblade.portal.vo.PortalDeptMenuVO;
 import org.springblade.portal.vo.PortalMenuNode;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -96,6 +98,33 @@ public class PortalMenuController {
 		@RequestBody(required = false) List<PortalMenuShare> shares) {
 		requireRight(PortalConstant.PERM_MENU_MAINT);
 		return R.status(menuService.saveShare(menuId, shares));
+	}
+
+	/**
+	 * 部门菜单权限反查：选中部门后可勾选的菜单列表（含当前可见状态）
+	 */
+	@GetMapping("/menu/dept/share")
+	@PreAuth(PortalConstant.HAS_AUTH)
+	@Operation(summary = "部门菜单权限列表", description = "按部门反查菜单可见状态；无授权记录的菜单=全员可见（checked=true）")
+	public R<List<PortalDeptMenuVO>> deptShare(
+		@Parameter(description = "部门ID", required = true) @RequestParam Long deptId,
+		@Parameter(description = "菜单类型：front前端/top后端") @RequestParam(defaultValue = "front") String menuType) {
+		requireRight(PortalConstant.PERM_MENU_MAINT);
+		return R.data(menuService.deptMenuShare(deptId, menuType));
+	}
+
+	/**
+	 * 部门菜单批量授权：一次性对齐某部门在该类型下的可见菜单集合
+	 */
+	@PostMapping("/menu/dept/share/set")
+	@PreAuth(PortalConstant.HAS_AUTH)
+	@Operation(summary = "部门菜单批量授权", description = "menuIds 内=授权可见；未勾选菜单补写限定标记，避免回落为全员可见")
+	public R<Boolean> deptShareSet(@RequestBody PortalMenuDeptShareDTO dto) {
+		requireRight(PortalConstant.PERM_MENU_MAINT);
+		if (dto == null || dto.getDeptId() == null) {
+			return R.status(false);
+		}
+		return R.status(menuService.saveDeptShare(dto.getDeptId(), dto.getMenuType(), dto.getMenuIds()));
 	}
 
 	private void requireRight(String permCode) {
