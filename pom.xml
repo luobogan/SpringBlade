@@ -274,6 +274,15 @@
                     <compilerArgs>
                         <arg>-parameters</arg>
                     </compilerArgs>
+                    <!-- Lombok 注解处理器：根 pom 仅以 provided 声明 lombok 依赖，注解处理器不会
+                         自动运行；不显式配置此处，各模块构建会报「变量 xxx 未在默认构造器中初始化」
+                         /「找不到符号」等 Lombok 未生效的症状（此前 blade-gateway / blade-message 已中招）。 -->
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
             <plugin>
