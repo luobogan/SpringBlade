@@ -123,16 +123,24 @@ public class BuiltinOfdConvertor implements IOdocFormatConvertor {
 				}
 				continue;
 			}
-			// 版头：红色发文机关标志，或发文字号
-			if (inHeader && (p.red || p.isDocNumber())) {
+			boolean docNumber = p.isDocNumber();
+			boolean isTitle = !titleEmitted && !docNumber && !p.endsWithColon()
+				&& !p.isHeading() && p.text.length() <= 40 && !endsWithPunct(p.text);
+
+			// 版头：发红字的发文机关标志 + 标题 + 发文字号 同属版头；
+			// 红色反线（版头/主体分隔线）画在版头结束处，即文号之后、正文之前（GB/T 9704-2012）。
+			if (inHeader && (p.red || docNumber || isTitle)) {
 				headerHadMark = true;
-				if (docNo.length() == 0 && p.isDocNumber()) {
+				if (p.red && author.length() == 0) {
+					author.append(p.text);
+				}
+				if (docNumber && docNo.length() == 0) {
 					java.util.regex.Matcher m = OdocPara.DOC_NUMBER.matcher(p.text);
 					if (m.find()) {
 						docNo.append(m.group());
 					}
 				}
-				int pt = p.red ? (p.first ? 20 : 16) : 16;
+				int pt = p.red ? (p.first ? 20 : 16) : (docNumber ? 16 : 22);
 				double fofd = pt * PT2UNIT;
 				double lineH = fofd * 1.5;
 				List<String> lines = wrap(p.text, fofd, 0);
@@ -145,13 +153,18 @@ public class BuiltinOfdConvertor implements IOdocFormatConvertor {
 					double lineW = lineWidth(line, fofd);
 					double x = CONTENT_LEFT + (CONTENT_WIDTH - lineW) / 2.0;
 					addText(cur, x, y, Math.max(lineW, 1), fofd, pt, fofd * 0.8, line, p.red);
-					if (author.length() == 0 && p.red) {
-						author.append(p.text);
-					}
 					y += lineH;
+				}
+				if (isTitle) {
+					titleEmitted = true;
+					if (title.length() == 0) {
+						title.append(p.text);
+					}
 				}
 				continue;
 			}
+
+			// 进入正文：结束版头，绘制红色反线（位于文号之后）
 			if (inHeader) {
 				inHeader = false;
 				if (headerHadMark) {
@@ -159,24 +172,16 @@ public class BuiltinOfdConvertor implements IOdocFormatConvertor {
 					y += 20;
 				}
 			}
-			if (docNo.length() == 0 && p.isDocNumber()) {
+
+			if (docNumber && docNo.length() == 0) {
 				java.util.regex.Matcher m = OdocPara.DOC_NUMBER.matcher(p.text);
 				if (m.find()) {
 					docNo.append(m.group());
 				}
 			}
-			boolean isTitle = !titleEmitted && !p.endsWithColon() && !p.isHeading()
-				&& !p.isDocNumber() && p.text.length() <= 40 && !endsWithPunct(p.text);
 			int pt;
 			boolean indentFirst;
-			if (isTitle) {
-				titleEmitted = true;
-				if (title.length() == 0) {
-					title.append(p.text);
-				}
-				pt = 22;
-				indentFirst = false;
-			} else if (p.isHeading()) {
+			if (p.isHeading()) {
 				pt = 16;
 				indentFirst = false;
 			} else if (p.endsWithColon() && p.text.length() <= 40) {

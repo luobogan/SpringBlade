@@ -12,7 +12,6 @@ import com.itextpdf.text.pdf.ColumnText;
 import com.itextpdf.text.pdf.PdfContentByte;
 import com.itextpdf.text.pdf.PdfPageEventHelper;
 import com.itextpdf.text.pdf.PdfWriter;
-import com.itextpdf.text.pdf.draw.LineSeparator;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.workflow.odoc.config.OdocProperties;
 import org.springblade.workflow.odoc.layout.support.OdocDocxParser;
@@ -122,7 +121,13 @@ public class BuiltinPdfConvertor implements IOdocFormatConvertor {
 					doc.add(new Paragraph(" "));
 					continue;
 				}
-				if (inHeader && (p.red || p.isDocNumber())) {
+				boolean docNumber = p.isDocNumber();
+				boolean isTitle = !titleEmitted && !docNumber && !p.endsWithColon()
+					&& !p.isHeading() && p.text.length() <= 40 && !endsWithPunct(p.text);
+
+				// 版头区域：发红文字的发文机关标志 + 标题 + 发文字号 同属版头；
+				// 红色反线（版头/主体分隔线）画在版头结束处，即文号之后、正文之前（GB/T 9704-2012）。
+				if (inHeader && (p.red || docNumber || isTitle)) {
 					headerHadMark = true;
 					if (p.red) {
 						if (author.length() == 0) {
@@ -133,42 +138,49 @@ public class BuiltinPdfConvertor implements IOdocFormatConvertor {
 						ph.setAlignment(Element.ALIGN_CENTER);
 						ph.setSpacingAfter(4f);
 						doc.add(ph);
-					} else {
+					} else if (docNumber) {
+						if (docNo.length() == 0) {
+							docNo.append(p.text);
+						}
 						Font nf = fangFont(SIZE_BODY);
 						Paragraph np = new Paragraph(p.text, nf);
 						np.setAlignment(Element.ALIGN_CENTER);
 						np.setSpacingAfter(4f);
 						doc.add(np);
+					} else {
+						titleEmitted = true;
+						if (title.length() == 0) {
+							title.append(p.text);
+						}
+						Font tf = songFont(SIZE_TITLE, Font.BOLD, BaseColor.BLACK);
+						Paragraph tp = new Paragraph(p.text, tf);
+						tp.setAlignment(Element.ALIGN_CENTER);
+						tp.setSpacingBefore(6f);
+						tp.setSpacingAfter(10f);
+						doc.add(tp);
 					}
 					continue;
 				}
+
+				// 进入正文：结束版头，绘制红色反线（显式定位，避免 LineSeparator 偏移造成的重叠）
 				if (inHeader) {
 					inHeader = false;
 					if (headerHadMark) {
-						doc.add(new LineSeparator(1.5f, 100f, BaseColor.RED, Element.ALIGN_CENTER, 8f));
+						float lineY = writer.getVerticalPosition(true) - 6f;
+						PdfContentByte cb = writer.getDirectContent();
+						cb.saveState();
+						cb.setColorStroke(BaseColor.RED);
+						cb.setLineWidth(1.5f);
+						cb.moveTo(doc.left() + 2f, lineY);
+						cb.lineTo(doc.right() - 2f, lineY);
+						cb.stroke();
+						cb.restoreState();
 						doc.add(new Paragraph(" "));
 					}
 				}
-				if (docNo.length() == 0) {
-					Matcher m = OdocPara.DOC_NUMBER.matcher(p.text);
-					if (m.find()) {
-						docNo.append(m.group());
-					}
-				}
-				boolean isTitle = !titleEmitted && !p.endsWithColon() && !p.isHeading()
-					&& !p.isDocNumber() && p.text.length() <= 40 && !endsWithPunct(p.text);
-				if (isTitle) {
-					titleEmitted = true;
-					if (title.length() == 0) {
-						title.append(p.text);
-					}
-					Font tf = songFont(SIZE_TITLE, Font.BOLD, BaseColor.BLACK);
-					Paragraph tp = new Paragraph(p.text, tf);
-					tp.setAlignment(Element.ALIGN_CENTER);
-					tp.setSpacingBefore(6f);
-					tp.setSpacingAfter(10f);
-					doc.add(tp);
-					continue;
+
+				if (docNumber && docNo.length() == 0) {
+					docNo.append(p.text);
 				}
 				doc.add(renderBody(p));
 			}
