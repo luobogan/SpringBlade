@@ -26,6 +26,9 @@ public class WfOdocNumber extends TenantEntity {
     @Schema(description = "机关代字,如 X政发")
     private String prefix;
 
+    @Schema(description = "归属机构代字(dict org_abbr id);便于追溯,取号仍以 prefix 文本为准")
+    private Long orgAbbrId;
+
     @Schema(description = "年份前缀,如 [")
     private String yearPre;
 
@@ -40,6 +43,12 @@ public class WfOdocNumber extends TenantEntity {
 
     @Schema(description = "当前流水号")
     private Integer serial;
+
+    @Schema(description = "流水所属年份(跨年归零基准；null 表示尚未取号)")
+    private Integer serialYear;
+
+    @Schema(description = "跨年流水是否归零：1=归零(进入新历年从1重计)；0=累计(跨年不重置)。默认1")
+    private Integer yearReset;
 
     @Schema(description = "流水位数")
     private Integer digit;

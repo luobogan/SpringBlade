@@ -32,6 +32,12 @@ public class WfOdocSetting extends TenantEntity {
 	@Schema(description = "新建流程默认是否必须电子签章 1是 0否")
 	private Integer defaultSealRequired;
 
+	@Schema(description = "新建流程默认红头模板ID(关联 wf_odoc_mould)，0/null 表示不默认")
+	private Long defaultTaohongMouldId;
+
+	@Schema(description = "默认流程定义ID(proc_def_id 或流程key)，新建公文默认带入；空表示不默认")
+	private String defaultProcessDefId;
+
 	@Schema(description = "备注")
 	private String remark;
 }

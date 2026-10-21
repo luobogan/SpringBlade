@@ -54,4 +54,10 @@ public class WfOdocSecretRuleController {
 	public R<String> check(@RequestParam String docSecretLevel, @RequestParam String receiveUnitIds) {
 		return R.data(secretRuleService.violationMessage(docSecretLevel, receiveUnitIds));
 	}
+
+	@GetMapping("/secret-rule/allowed-units")
+	@Operation(summary = "允许收发单位集合", description = "给定公文密级名，返回允许收发的收文单位 id 集合（供选单位前端前置过滤）")
+	public R<List<Long>> allowedUnits(@RequestParam(required = false) String docSecretLevel) {
+		return R.data(secretRuleService.allowedUnitIds(docSecretLevel));
+	}
 }

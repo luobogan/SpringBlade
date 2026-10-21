@@ -2,6 +2,7 @@ package org.springblade.system.feign;
 
 import org.springblade.core.launch.constant.AppConstant;
 import org.springblade.core.tool.api.R;
+import org.springblade.system.vo.DeptVO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -23,6 +24,16 @@ import java.util.List;
 public interface IDeptClient {
 
 	String API_PREFIX = "/dept";
+
+	/**
+	 * 取机构树（全量，含嵌套 children）。供 odoc 收文单位「组织」维度归并：把收文单位按
+	 * 其 {@code subcompanyId} 挂到对应机构（分部）节点下，形成「组织 → 层级」两级树。
+	 *
+	 * @param tenantId 租户ID；为空返回默认租户机构树
+	 * @return 机构树（DeptVO 嵌套 children）
+	 */
+	@GetMapping(API_PREFIX + "/tree")
+	R<List<DeptVO>> tree(@RequestParam(value = "tenantId", required = false) String tenantId);
 
 	/**
 	 * 取某组织节点所属「分部(division)」节点ID。

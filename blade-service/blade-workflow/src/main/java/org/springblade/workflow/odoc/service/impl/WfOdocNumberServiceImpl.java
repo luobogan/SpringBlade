@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.workflow.odoc.entity.WfOdocNumber;
 import org.springblade.workflow.odoc.mapper.WfOdocNumberMapper;
+import org.springblade.workflow.odoc.service.IWfOdocNumberReservedService;
 import org.springblade.workflow.odoc.service.IWfOdocNumberService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +15,7 @@ import java.time.Year;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -25,6 +27,7 @@ import java.util.stream.Collectors;
 public class WfOdocNumberServiceImpl implements IWfOdocNumberService {
 
 	private final WfOdocNumberMapper numberMapper;
+	private final IWfOdocNumberReservedService reservedService;
 
 	@Override
 	@Transactional(rollbackFor = Exception.class)
@@ -33,13 +36,26 @@ public class WfOdocNumberServiceImpl implements IWfOdocNumberService {
 		if (rule == null) {
 			throw new ServiceException("未找到可用的文号规则(defId=" + defId + ")");
 		}
-		// 行锁原子自增：UPDATE 持行锁至事务提交，串行化并发取号
+		int curYear = Year.now().getValue();
+		// 行锁原子更新：跨年归零（year_reset=1 且年份不符则归 1）或自增，并记录当前年份；
+		// UPDATE 持行锁至事务提交，串行化并发取号。year_reset=0 时跨年累计（不重置）。
 		numberMapper.update(null, Wrappers.<WfOdocNumber>lambdaUpdate()
 			.eq(WfOdocNumber::getId, rule.getId())
-			.setSql("serial = serial + 1"));
+			.setSql("serial = CASE WHEN serial_year IS NULL OR (serial_year <> " + curYear + " AND year_reset = 1)"
+				+ " THEN 1 ELSE serial + 1 END, serial_year = " + curYear));
 		WfOdocNumber fresh = numberMapper.selectById(rule.getId());
+		// 跳过「当前有效（未过期）」的保留号，避免发出被保留的流水
+		Set<Integer> reserved = reservedService.activeSerialSet(rule.getId());
+		int guard = 0;
+		while (reserved.contains(fresh.getSerial()) && guard < 100000) {
+			guard += 1;
+			numberMapper.update(null, Wrappers.<WfOdocNumber>lambdaUpdate()
+				.eq(WfOdocNumber::getId, rule.getId())
+				.setSql("serial = serial + 1"));
+			fresh = numberMapper.selectById(rule.getId());
+		}
 		String number = format(fresh, fresh.getSerial());
-		log.info("文号取号完成 defId={} ruleId={} serial={} number={}", defId, fresh.getId(), fresh.getSerial(), number);
+		log.info("文号取号完成 defId={} ruleId={} serial={} year={} number={}", defId, fresh.getId(), fresh.getSerial(), curYear, number);
 		return number;
 	}
 
@@ -49,8 +65,20 @@ public class WfOdocNumberServiceImpl implements IWfOdocNumberService {
 		if (rule == null) {
 			throw new ServiceException("未找到可用的文号规则(defId=" + defId + ")");
 		}
-		int cur = rule.getSerial() == null ? 0 : rule.getSerial();
-		return format(rule, cur + 1);
+		int curYear = Year.now().getValue();
+		// 预览下一号：跨年归零(yr_reset=1 且年份不符则归 1)或从当前+1，并跳过保留号（与 assign 对齐）
+		boolean resetOnYearChange = rule.getYearReset() == null || rule.getYearReset() == 1;
+		int next = (rule.getSerialYear() == null
+				|| (rule.getSerialYear() != curYear && resetOnYearChange))
+			? 1
+			: (rule.getSerial() == null ? 1 : rule.getSerial() + 1);
+		Set<Integer> reserved = reservedService.activeSerialSet(rule.getId());
+		int guard = 0;
+		while (reserved.contains(next) && guard < 100000) {
+			next += 1;
+			guard += 1;
+		}
+		return format(rule, next);
 	}
 
 	@Override

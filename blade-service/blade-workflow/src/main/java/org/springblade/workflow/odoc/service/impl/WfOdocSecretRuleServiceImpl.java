@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -163,6 +164,64 @@ public class WfOdocSecretRuleServiceImpl implements IWfOdocSecretRuleService {
 		int from = r.getSecLevelFrom() != null ? r.getSecLevelFrom() : 0;
 		int to = r.getSecLevelTo() != null ? r.getSecLevelTo() : 3;
 		return docLevel < from || docLevel > to;
+	}
+
+	@Override
+	public List<Long> allowedUnitIds(String docSecretLevel) {
+		// 密级名无法判定 → 不限制，返回全部单位 id
+		int docLevel = OdocSecretLevel.levelOf(docSecretLevel);
+		if (docLevel < 0) {
+			return allUnitIds();
+		}
+		Map<Long, WfOdocSecretRule> unitRules = new HashMap<>();
+		List<WfOdocSecretRule> groupRules = new ArrayList<>();
+		list().stream()
+			.filter(r -> r.getEnabled() != null && r.getEnabled() == 1 && r.getTargetId() != null)
+			.forEach(r -> {
+				if (r.getTargetType() != null && r.getTargetType() == WfOdocSecretRule.TARGET_GROUP) {
+					groupRules.add(r);
+				} else if (r.getTargetType() != null && r.getTargetType() == WfOdocSecretRule.TARGET_UNIT) {
+					unitRules.put(r.getTargetId(), r);
+				}
+			});
+
+		Set<Long> disallowed = new java.util.HashSet<>();
+		unitRules.forEach((uid, r) -> {
+			if (outOfRange(docLevel, r)) {
+				disallowed.add(uid);
+			}
+		});
+		if (!groupRules.isEmpty()) {
+			Map<Long, WfOdocReceiveGroup> groupById = new HashMap<>();
+			receiveGroupService.list().forEach(g -> {
+				if (g.getId() != null) {
+					groupById.put(g.getId(), g);
+				}
+			});
+			for (WfOdocSecretRule r : groupRules) {
+				WfOdocReceiveGroup g = groupById.get(r.getTargetId());
+				if (g == null) {
+					continue;
+				}
+				if (outOfRange(docLevel, r)) {
+					numericIds(g.getUnitIds()).forEach(disallowed::add);
+				}
+			}
+		}
+
+		List<Long> all = allUnitIds();
+		if (disallowed.isEmpty()) {
+			return all;
+		}
+		return all.stream().filter(id -> !disallowed.contains(id)).collect(Collectors.toList());
+	}
+
+	/** 全部收文单位 id（用于「无限制」场景与差集计算） */
+	private List<Long> allUnitIds() {
+		return unitMapper.selectList(Wrappers.<WfOdocReceiveUnit>lambdaQuery().select(WfOdocReceiveUnit::getId))
+			.stream()
+			.map(WfOdocReceiveUnit::getId)
+			.collect(Collectors.toList());
 	}
 
 	private static List<Long> numericIds(String csv) {

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springblade.core.log.exception.ServiceException;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.annotation.PreAuth;
@@ -17,6 +18,7 @@ import org.springblade.workflow.odoc.entity.WfOdocMouldBookmark;
 import org.springblade.workflow.odoc.entity.WfOdocLayoutFile;
 import org.springblade.workflow.odoc.entity.WfOdocMouldFieldMap;
 import org.springblade.workflow.odoc.entity.WfOdocNumber;
+import org.springblade.workflow.odoc.entity.WfOdocNumberReserved;
 import org.springblade.workflow.odoc.entity.WfOdocProcessSet;
 import org.springblade.workflow.odoc.entity.WfOdocSeal;
 import org.springblade.workflow.odoc.gbt.Gbt9704Profile;
@@ -25,6 +27,7 @@ import org.springblade.workflow.odoc.service.IWfOdocDocService;
 import org.springblade.workflow.odoc.service.IWfOdocFontService;
 import org.springblade.workflow.odoc.service.IWfOdocLayoutService;
 import org.springblade.workflow.odoc.service.IWfOdocMouldService;
+import org.springblade.workflow.odoc.service.IWfOdocNumberReservedService;
 import org.springblade.workflow.odoc.service.IWfOdocNumberService;
 import org.springblade.workflow.odoc.service.IWfOdocProcessSetService;
 import org.springblade.workflow.odoc.service.IWfOdocSealService;
@@ -50,10 +53,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * 公文正文控制器。
@@ -74,12 +80,17 @@ public class WfOdocController {
 	private final IWfOdocTaohongService taohongService;
 	private final IWfOdocProcessSetService processSetService;
 	private final IWfOdocNumberService numberService;
+	private final IWfOdocNumberReservedService reservedService;
 	private final IWfOdocAiService aiService;
 	private final IWfOdocLayoutService layoutService;
 	private final IWfOdocSealService sealService;
 	private final IWfOdocFontService fontService;
 	private final IOdocFileStore fileStore;
 	private final ObjectMapper objectMapper = new ObjectMapper();
+
+	/** 公文密级字段名（表单字段）。可在 Nacos 配 blade.workflow.odoc.secret-level-field 覆盖，缺省 mj */
+	@Value("${blade.workflow.odoc.secret-level-field:mj}")
+	private String secretLevelFieldName;
 
 	@PostMapping("/doc/init")
 	@Operation(summary = "获取或创建正文", description = "按流程实例返回文档+版本+在线编辑配置")
@@ -156,6 +167,33 @@ public class WfOdocController {
 	public R<Boolean> removeNumberRule(@PathVariable Long id) {
 		numberService.removeRule(id);
 		return R.data(true);
+	}
+
+	// ===================== 文号保留号 =====================
+
+	@GetMapping("/number-reserved/list")
+	@Operation(summary = "保留号列表", description = "按文号规则列出已保留流水")
+	public R<List<WfOdocNumberReserved>> listReserved(@RequestParam Long numberId) {
+		return R.data(reservedService.listByNumberId(numberId));
+	}
+
+	@PostMapping("/number-reserved")
+	@Operation(summary = "保留号段", description = "按 [startSerial,endSerial] 批量保留流水，自动跳过已存在的；expireTime 为空=永久保留")
+	public R<Integer> reserveNumber(@RequestParam Long numberId,
+								   @RequestParam Integer startSerial,
+								   @RequestParam Integer endSerial,
+								   @RequestParam(required = false) String expireTime) {
+		LocalDateTime exp = null;
+		if (expireTime != null && !expireTime.isBlank()) {
+			exp = LocalDateTime.parse(expireTime, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+		}
+		return R.data(reservedService.reserveRange(numberId, startSerial, endSerial, exp));
+	}
+
+	@DeleteMapping("/number-reserved/{id}")
+	@Operation(summary = "释放保留号")
+	public R<Boolean> releaseReserved(@PathVariable Long id) {
+		return R.data(reservedService.removeReserved(id));
 	}
 
 	// ===================== 文件上传/下载（本地存储） =====================
@@ -436,5 +474,16 @@ public class WfOdocController {
 			return Map.of("error", 1);
 		}
 		return Map.of("error", 0);
+	}
+
+	// ===================== 前端全局可配置项 =====================
+
+	@GetMapping("/config")
+	@Operation(summary = "公文前端全局配置", description = "返回前端可覆盖项（如密级字段名 secretLevelFieldName，缺省 mj）。" +
+		"管理员可在 Nacos 配 blade.workflow.odoc.secret-level-field 覆盖，无需改前端代码")
+	public R<Map<String, String>> config() {
+		Map<String, String> m = new HashMap<>(2);
+		m.put("secretLevelFieldName", secretLevelFieldName);
+		return R.data(m);
 	}
 }

@@ -3,7 +3,10 @@ package org.springblade.workflow.odoc.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
+import org.springblade.system.feign.IDeptClient;
+import org.springblade.system.vo.DeptVO;
 import org.springblade.workflow.odoc.entity.WfOdocReceiveUnit;
 import org.springblade.workflow.odoc.service.IWfOdocReceiveUnitService;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -29,6 +32,7 @@ import java.util.List;
 public class WfOdocReceiveUnitController {
 
 	private final IWfOdocReceiveUnitService unitService;
+	private final IDeptClient deptClient;
 
 	@GetMapping("/receive-unit/list")
 	@Operation(summary = "单位列表", description = "enabledOnly=true 仅启用")
@@ -59,5 +63,11 @@ public class WfOdocReceiveUnitController {
 	@Operation(summary = "删除单位")
 	public R<Boolean> remove(@PathVariable Long id) {
 		return R.data(unitService.remove(id));
+	}
+
+	@GetMapping("/receive-unit/org-tree")
+	@Operation(summary = "归属机构树", description = "代理 blade-system 机构树，供收文单位按「组织 → 层级」归并")
+	public R<List<DeptVO>> orgTree() {
+		return deptClient.tree(SecureUtil.getTenantId());
 	}
 }

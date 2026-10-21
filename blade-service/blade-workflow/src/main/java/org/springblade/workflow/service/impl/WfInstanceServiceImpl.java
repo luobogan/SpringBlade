@@ -981,10 +981,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 fromTo.computeIfAbsent(lk.getFromNodeKey(), k -> new ArrayList<>()).add(lk.getToNodeKey());
             }
             for (WfProcessNode n : loadNodes(inst.getDefId())) {
-                if (n.getNodeKey() != null) {
-                    nodeTypeMap.put(n.getNodeKey(), n.getNodeType());
-                    nodeMap.put(n.getNodeKey(), n);
+                if (n == null || n.getNodeKey() == null) {
+                    continue;
                 }
+                nodeTypeMap.put(n.getNodeKey(), n.getNodeType());
+                nodeMap.put(n.getNodeKey(), n);
             }
         }
         Long starter = (inst != null) ? inst.getStarter() : null;
@@ -1127,6 +1128,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         String archiveKey = null;
         String archiveName = null;
         for (WfProcessNode n : loadNodes(inst.getDefId())) {
+            if (n == null) {
+                continue;
+            }
             if (n.getNodeType() != null && n.getNodeType() == 3 && n.getNodeKey() != null) {
                 archiveKey = n.getNodeKey();
                 archiveName = (n.getNodeName() != null && !n.getNodeName().trim().isEmpty())

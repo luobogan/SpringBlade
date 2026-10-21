@@ -1,8 +1,10 @@
 package org.springblade.system.feign;
 
 import org.springblade.core.tool.api.R;
+import org.springblade.system.vo.DeptVO;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -15,6 +17,11 @@ import java.util.List;
  */
 @Component
 public class IDeptClientFallback implements IDeptClient {
+
+	@Override
+	public R<List<DeptVO>> tree(String tenantId) {
+		return R.data(Collections.emptyList());
+	}
 
 	@Override
 	public R<Long> divisionIdByDept(Long deptId) {

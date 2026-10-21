@@ -36,6 +36,9 @@ public class WfOdocReceiveUnit extends TenantEntity {
 	@Schema(description = "层级深度(冗余, 根=1)")
 	private Integer unitLevel;
 
+	@Schema(description = "归属机构ID(对应 blade_system 部门节点, deptType=1 分部)")
+	private Long subcompanyId;
+
 	@Schema(description = "单位类型 0内部 1外部")
 	private Integer companyType;
 
