@@ -16,6 +16,7 @@ import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springblade.workflow.vo.WfProgressView;
+import org.springblade.workflow.vo.WfInstanceResourceVO;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -97,6 +98,31 @@ public class WfInstanceController {
         @Parameter(description = "发起时间范围终点 ISO8601") @RequestParam(value = "endTime", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date endTime) {
         return R.data(instanceService.mine(current, pageSize, title, status, beginTime, endTime));
+    }
+
+    @GetMapping("/picker")
+    @Operation(summary = "流程实例选择器",
+        description = "表单「相关流程」浏览按钮(30/31/32)的数据源：当前租户下**全部可见实例**分页"
+            + "（排除测试实例与草稿，可按标题关键字检索，可排除指定实例避免自关联）。"
+            + "与 /mine 同源同构，但**不按发起人收口**——「关联流程」通常要能关联别人发起的单")
+    public R<IPage<InstanceVO>> picker(
+        @Parameter(description = "当前页，从 1 开始") @RequestParam(value = "current", required = false) Long current,
+        @Parameter(description = "每页条数，默认 20") @RequestParam(value = "pageSize", required = false) Long pageSize,
+        @Parameter(description = "流程标题关键字，模糊匹配") @RequestParam(value = "keyword", required = false) String keyword,
+        @Parameter(description = "排除的实例ID（通常传当前实例ID，避免把自己关联给自己）") @RequestParam(value = "excludeId", required = false) Long excludeId) {
+        return R.data(instanceService.picker(current, pageSize, keyword, excludeId));
+    }
+
+    @GetMapping("/{id}/resources")
+    @Operation(summary = "实例相关资源",
+        description = "对齐 ecology 请求页「相关资源」页签：**不建关联表**，运行时按「资源类表单字段」"
+            + "（相关流程 30/31/32、相关文档 24/26、附件上传 5）从业务数据抽取汇总，只读。"
+            + "type=0 全部 1 相关流程 2 相关文档 3 相关附件")
+    public R<List<WfInstanceResourceVO>> resources(
+        @Parameter(description = "实例ID") @PathVariable("id") Long id,
+        @Parameter(description = "资源类型 0全部 1相关流程 2相关文档 3相关附件")
+        @RequestParam(value = "type", defaultValue = "0") int type) {
+        return R.data(instanceService.resources(id, type));
     }
 
     @GetMapping("/by-biz")

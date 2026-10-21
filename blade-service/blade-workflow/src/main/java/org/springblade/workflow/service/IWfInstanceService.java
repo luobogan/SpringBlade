@@ -7,6 +7,7 @@ import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.WfInstanceResourceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springblade.workflow.vo.WfProgressView;
 
@@ -67,6 +68,30 @@ public interface IWfInstanceService {
      * @param endTime   发起时间范围终点（可空）
      */
     IPage<InstanceVO> mine(Long current, Long pageSize, String title, Integer status, Date beginTime, Date endTime);
+
+    /**
+     * 流程实例选择器数据源（表单「相关流程」浏览按钮 30/31/32 用）。
+     *
+     * <p>与 {@link #mine} 同源同构，但<u>不按发起人收口</u>：返回当前租户下全部可见实例
+     * （排除测试实例与草稿），供「关联流程」选择任意流程单。</p>
+     *
+     * @param current   当前页，从 1 开始
+     * @param pageSize  每页条数
+     * @param keyword   标题关键字（模糊匹配，可空）
+     * @param excludeId 排除的实例ID（通常传当前实例自身，避免把自己关联给自己；可空）
+     */
+    IPage<InstanceVO> picker(Long current, Long pageSize, String keyword, Long excludeId);
+
+    /**
+     * 实例「相关资源」（对齐 ecology 请求页「相关资源」页签）。
+     *
+     * <p><b>不建关联表</b>：与 ecology 同思路，运行时按「资源类表单字段」从业务数据抽取——
+     * 表单里填了相关流程(30/31/32)、相关文档(24/26)、附件上传(5)，本页签即汇总可见（只读）。</p>
+     *
+     * @param instId 流程实例ID
+     * @param type   资源类型：0=全部 1=相关流程 2=相关文档 3=相关附件
+     */
+    List<WfInstanceResourceVO> resources(Long instId, int type);
 
     /**
      * 按业务数据反查实例

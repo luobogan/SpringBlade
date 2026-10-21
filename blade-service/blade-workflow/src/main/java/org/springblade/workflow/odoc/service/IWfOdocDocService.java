@@ -1,5 +1,6 @@
 package org.springblade.workflow.odoc.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.workflow.odoc.entity.WfOdocDoc;
 import org.springblade.workflow.odoc.entity.WfOdocDocVersion;
 import org.springblade.workflow.odoc.vo.OdocDocInitVO;
@@ -28,6 +29,19 @@ public interface IWfOdocDocService {
 
 	/** 文档主记录 */
 	WfOdocDoc getDoc(Long docId);
+
+	/**
+	 * 公文文档选择器数据源（表单「相关文档」浏览按钮 24/26 用）。
+	 *
+	 * <p>按正文标题关键字检索公文正文文档分页（排除测试数据，可排除指定实例的文档，
+	 * 避免把本文档关联到自己）。</p>
+	 *
+	 * @param current            当前页，从 1 开始
+	 * @param pageSize           每页条数
+	 * @param keyword            正文标题关键字（模糊匹配，可空）
+	 * @param excludeInstanceId  排除的所属实例ID（通常传当前实例ID；可空）
+	 */
+	IPage<WfOdocDoc> picker(Long current, Long pageSize, String keyword, Long excludeInstanceId);
 
 	/** 版本历史（按版本号倒序） */
 	List<WfOdocDocVersion> listVersions(Long docId);

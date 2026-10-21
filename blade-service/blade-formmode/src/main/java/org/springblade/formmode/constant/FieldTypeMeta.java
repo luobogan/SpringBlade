@@ -59,6 +59,14 @@ public final class FieldTypeMeta {
 		BROWSER_TYPE_NAMES.put(164, "自定义浏览按钮");
 		BROWSER_TYPE_NAMES.put(256, "自定义树形单选");
 		BROWSER_TYPE_NAMES.put(257, "自定义树形多选");
+		// 公文扩展（与前端 fieldTypes.ts 的 BROWSER_TYPE_LABEL_MAP 保持同一登记表，避免漂移）
+		BROWSER_TYPE_NAMES.put(258, "收发文单位");
+		BROWSER_TYPE_NAMES.put(259, "多收发文单位");
+		BROWSER_TYPE_NAMES.put(260, "秘密等级");
+		BROWSER_TYPE_NAMES.put(261, "紧急程度");
+		BROWSER_TYPE_NAMES.put(262, "公文种类");
+		BROWSER_TYPE_NAMES.put(263, "主题分类");
+		BROWSER_TYPE_NAMES.put(264, "发文字号");
 	}
 
 	/** 非浏览按钮 htmlType -> (type -> 名称) */

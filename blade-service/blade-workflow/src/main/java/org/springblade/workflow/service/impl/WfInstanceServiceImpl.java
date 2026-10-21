@@ -18,6 +18,13 @@ import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.feign.IFormmodeClient;
+import org.springblade.formmode.dto.FieldDefinitionDTO;
+import org.springblade.formmode.vo.FormDataVO;
+import org.springblade.workflow.odoc.mapper.WfOdocDocMapper;
+import org.springblade.workflow.odoc.entity.WfOdocDoc;
+import org.springblade.workflow.vo.WfInstanceResourceVO;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import org.springblade.workflow.action.NodeActionExecutor;
 import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.StartProcessDTO;
@@ -142,6 +149,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfNodeOperatorMapper operatorMapper;
     private final NodeActionExecutor nodeActionExecutor;
     private final IFormmodeClient formmodeClient;
+    /** 公文正文 Mapper：解析「相关文档」资源条目的标题（与实例服务同模块，无循环依赖） */
+    private final WfOdocDocMapper odocDocMapper;
     /** 实例读源切换映射器：读源=act 时从此读原生 ACT_HI_PROCINST */
     private final ActHiProcinstMapper actProcinstMapper;
     /** 实例业务列双写收口器（去 wf_ 表写侧） */
@@ -841,6 +850,176 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             .le(endTime != null, WfInstance::getStartTime, endTime)
             .orderByDesc(WfInstance::getStartTime));
         return result.convert(this::toInstanceVO);
+    }
+
+    @Override
+    public IPage<InstanceVO> picker(Long current, Long pageSize, String keyword, Long excludeId) {
+        long cur = (current == null || current < 1) ? 1 : current;
+        long size = (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200);
+        if (actRead()) {
+            // 读源=act：与 mine 同构，唯一实质差异是**不按 starter 收口** → 全部可见实例
+            Page<ActHiProcinst> page = new Page<>(cur, size);
+            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+                .eq(ActHiProcinst::getIsTest, 0)
+                // 排除自身：businessId 即 wf_instance.id（双写保真），避免把自己关联给自己
+                .ne(excludeId != null, ActHiProcinst::getBusinessId, excludeId)
+                .like(keyword != null && !keyword.isBlank(), ActHiProcinst::getTitle, keyword)
+                .orderByDesc(ActHiProcinst::getStartTime));
+            return result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
+        }
+        Page<WfInstance> page = new Page<>(cur, size);
+        IPage<WfInstance> result = instanceMapper.selectPage(page, Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getIsTest, 0)
+            // 草稿不可被关联（从未真正发起，关联它没有意义）
+            .ne(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
+            .ne(excludeId != null, WfInstance::getId, excludeId)
+            .like(keyword != null && !keyword.isBlank(), WfInstance::getTitle, keyword)
+            .orderByDesc(WfInstance::getStartTime));
+        return result.convert(this::toInstanceVO);
+    }
+
+    @Override
+    public List<WfInstanceResourceVO> resources(Long instId, int type) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        // 未关联表单/业务行的实例（测试态、占位 dataId）无资源可抽
+        if (inst == null || inst.getFormId() == null || inst.getDataId() == null) {
+            return List.of();
+        }
+        Long formId = inst.getFormId();
+        Long dataId = inst.getDataId();
+
+        // ① 字段定义：识别哪些字段是「资源类字段」
+        List<FieldDefinitionDTO> fields = List.of();
+        try {
+            R<List<FieldDefinitionDTO>> fr = formmodeClient.getBillFields(formId);
+            if (fr != null && fr.isSuccess() && fr.getData() != null) {
+                fields = fr.getData();
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 读取字段定义失败，相关资源为空. formId={}", formId, e);
+        }
+
+        // ② 业务数据行：字段名 → 值
+        Map<String, Object> values = new HashMap<>();
+        try {
+            R<FormDataVO> dr = formmodeClient.getBusinessData(formId, dataId);
+            if (dr != null && dr.isSuccess() && dr.getData() != null && dr.getData().getFieldValues() != null) {
+                values = dr.getData().getFieldValues();
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 读取业务数据失败，相关资源为空. instId={} formId={} dataId={}",
+                instId, formId, dataId, e);
+        }
+
+        // ③ 按资源类型收集 ID（E9 数据格式：id 逗号串；多选字段本身也是逗号串）
+        Map<Integer, LinkedHashSet<String>> byType = new LinkedHashMap<>();
+        for (FieldDefinitionDTO f : fields) {
+            Integer rt = resourceTypeOf(f);
+            if (rt == null) {
+                continue;
+            }
+            String key = (f.getFielddbname() != null && !f.getFielddbname().isBlank())
+                ? f.getFielddbname() : f.getFieldname();
+            Object v = key == null ? null : values.get(key);
+            if (v == null) {
+                continue;
+            }
+            for (String part : String.valueOf(v).split("[,，]")) {
+                String id = part.trim();
+                // 只接受纯数字 ID：库中存在把审计列（create_time / update_time）标成
+                // 「附件上传(5,2)」的字段定义，其值形如 2026-10-21 10:30:00，
+                // 若不校验就会被当成附件资源输出脏数据。
+                if (!id.isEmpty() && id.matches("\\d+")) {
+                    byType.computeIfAbsent(rt, k -> new LinkedHashSet<>()).add(id);
+                }
+            }
+        }
+
+        // ④ 组装（type=0 全部；否则只出该类型）并解析名称
+        List<WfInstanceResourceVO> out = new ArrayList<>();
+        for (Map.Entry<Integer, LinkedHashSet<String>> e : byType.entrySet()) {
+            int rt = e.getKey();
+            if (type != 0 && type != rt) {
+                continue;
+            }
+            for (String id : e.getValue()) {
+                WfInstanceResourceVO vo = new WfInstanceResourceVO();
+                vo.setResType(rt);
+                vo.setResId(id);
+                vo.setExtraId(id);
+                fillResourceName(vo, rt, id);
+                out.add(vo);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 判定字段是否为「资源类字段」：1=相关流程 2=相关文档 3=相关附件；非资源字段返回 null。
+     *
+     * <p>浏览按钮类型（{@code browtype}，ecology 35+ 编号空间）优先；其次按
+     * {@code fieldhtmltype=3 且 fieldtype} 判定；附件上传字段为 {@code fieldhtmltype=5}。</p>
+     */
+    private Integer resourceTypeOf(FieldDefinitionDTO f) {
+        Integer bt = f.getBrowtype();
+        if (bt != null) {
+            if (bt == 30 || bt == 31 || bt == 32) {
+                return 1; // 流程 / 多流程 / 归档流程
+            }
+            if (bt == 24 || bt == 26) {
+                return 2; // 文档 / 多文档
+            }
+            if (bt == 57) {
+                return 3; // 附件
+            }
+        }
+        Integer ht = f.getFieldhtmltype();
+        Integer ft = f.getFieldtype();
+        if (ht != null && ht == 3 && ft != null) {
+            if (ft == 30 || ft == 31 || ft == 32) {
+                return 1;
+            }
+            if (ft == 24 || ft == 26) {
+                return 2;
+            }
+            if (ft == 57) {
+                return 3;
+            }
+        }
+        // 附件上传字段
+        if (ht != null && ht == 5) {
+            return 3;
+        }
+        return null;
+    }
+
+    /** 填充资源名称/创建人/创建时间；取不到时降级用 id，保证条目不丢 */
+    private void fillResourceName(WfInstanceResourceVO vo, int rt, String id) {
+        try {
+            if (rt == 1) {
+                WfInstance rel = instanceMapper.selectById(Long.valueOf(id));
+                if (rel != null) {
+                    vo.setResName(rel.getTitle());
+                    vo.setCreator(rel.getStarter() == null ? null : String.valueOf(rel.getStarter()));
+                    vo.setCreateTime(rel.getStartTime() == null ? null : String.valueOf(rel.getStartTime()));
+                    return;
+                }
+            } else if (rt == 2) {
+                WfOdocDoc doc = odocDocMapper.selectById(Long.valueOf(id));
+                if (doc != null) {
+                    vo.setResName(doc.getTitle());
+                    vo.setCreateTime(doc.getCreateTime() == null ? null : String.valueOf(doc.getCreateTime()));
+                    return;
+                }
+            }
+            // 附件（rt==3）：文件名需经文件服务解析，暂以 id 兜底（TODO 接入 blade-file 解析文件名）
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 解析相关资源名称失败 resType={} resId={}", rt, id, e);
+        }
+        if (vo.getResName() == null || vo.getResName().isBlank()) {
+            vo.setResName(id);
+        }
     }
 
     @Override

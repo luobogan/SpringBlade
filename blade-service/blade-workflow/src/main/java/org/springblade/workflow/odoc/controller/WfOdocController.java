@@ -3,6 +3,7 @@ package org.springblade.workflow.odoc.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import org.springblade.core.log.exception.ServiceException;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -54,6 +55,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.annotation.Value;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 
 import java.util.HashMap;
 import java.util.List;
@@ -111,6 +113,18 @@ public class WfOdocController {
 	@Operation(summary = "版本历史")
 	public R<List<WfOdocDocVersion>> versions(@PathVariable Long docId) {
 		return R.data(docService.listVersions(docId));
+	}
+
+	@GetMapping("/doc/picker")
+	@Operation(summary = "公文文档选择器",
+		description = "表单「相关文档」浏览按钮(24/26)的数据源：按正文标题关键字检索公文正文文档分页"
+			+ "（排除测试数据；可传 excludeInstanceId 排除当前实例自身的文档，避免自关联）")
+	public R<IPage<WfOdocDoc>> docPicker(
+		@Parameter(description = "当前页，从 1 开始") @RequestParam(value = "current", required = false) Long current,
+		@Parameter(description = "每页条数，默认 20") @RequestParam(value = "pageSize", required = false) Long pageSize,
+		@Parameter(description = "正文标题关键字，模糊匹配") @RequestParam(value = "keyword", required = false) String keyword,
+		@Parameter(description = "排除的所属实例ID（通常传当前实例ID）") @RequestParam(value = "excludeInstanceId", required = false) Long excludeInstanceId) {
+		return R.data(docService.picker(current, pageSize, keyword, excludeInstanceId));
 	}
 
 	@PostMapping("/doc/version/save")

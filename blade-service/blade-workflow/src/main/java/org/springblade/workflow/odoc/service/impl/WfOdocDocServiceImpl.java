@@ -1,5 +1,7 @@
 package org.springblade.workflow.odoc.service.impl;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -71,6 +73,20 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 	@Override
 	public WfOdocDoc getDoc(Long docId) {
 		return docMapper.selectById(docId);
+	}
+
+	@Override
+	public IPage<WfOdocDoc> picker(Long current, Long pageSize, String keyword, Long excludeInstanceId) {
+		Page<WfOdocDoc> page = new Page<>(
+			(current == null || current < 1) ? 1 : current,
+			(pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200));
+		return docMapper.selectPage(page, Wrappers.<WfOdocDoc>lambdaQuery()
+			// 测试流程产生的文档不进选择器
+			.eq(WfOdocDoc::getIsTest, 0)
+			// 排除当前实例自身的文档：避免把本文档关联给自己
+			.ne(excludeInstanceId != null, WfOdocDoc::getInstanceId, excludeInstanceId)
+			.like(keyword != null && !keyword.isBlank(), WfOdocDoc::getTitle, keyword)
+			.orderByDesc(WfOdocDoc::getCreateTime));
 	}
 
 	@Override
