@@ -46,7 +46,8 @@ public class FieldDefinition extends Model<FieldDefinition> {
     private String fieldDbName;
 
     @TableField("fieldhtmltype")
-    @Schema(name = "字段HTML类型（唯一权威编码：1文本字段 2多行文本 3浏览按钮 4选择框 5附件上传 6复选框 7特殊字段 8布局组件）")
+    @Schema(name = "字段HTML类型（对齐前端 fieldTypes.ts 与 constant.FieldTypeMeta：" +
+        "1文本 2多行文本 3浏览按钮 4选择框 5附件上传 6复选框 7特殊字段 8布局组件 9正文 10位置[预留]）")
     private Integer fieldHtmlType;
 
     @TableField("fieldtype")

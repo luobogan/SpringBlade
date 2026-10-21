@@ -10,3 +10,13 @@ blade:
   api:
     name: formmode
     version: 1.0.0
+  # 表单建模业务配置
+  formmode:
+    # 模块权限校验（非流程场景，对标 E9 moderightinfo 的 7 种 righttype）
+    # 说明：checkRight 在「该模块未配置任何权限」时放行，因此默认开启对无配置模块零影响；
+    #       灰度时可临时置 false 全量放行（回滚开关）。
+    right-check:
+      # 写操作（新建/编辑/删除）是否强制校验
+      enforce: true
+      # 读操作（详情/分页）是否强制校验；默认 false = 仅告警不阻断（观察期）
+      enforce-read: false

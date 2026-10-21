@@ -53,10 +53,10 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
                 "`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '数据ID'," +
                 // request_id 存流程实例ID（wf_instance.id，19 位雪花）→ 必须 BIGINT，INT 装不下会溢出/截断
                 "`request_id` BIGINT DEFAULT NULL COMMENT '关联流程实例ID（wf_instance.id，雪花）'," +
-                "`modedatacreator` INT DEFAULT NULL," +
+                "`modedatacreator` BIGINT DEFAULT NULL COMMENT '创建人'," +
                 "`modedatacreatedate` VARCHAR(10) DEFAULT NULL," +
                 "`modedatacreatetime` VARCHAR(8) DEFAULT NULL," +
-                "`modedatamodifier` INT DEFAULT NULL," +
+                "`modedatamodifier` BIGINT DEFAULT NULL COMMENT '修改人'," +
                 "`modedatamodifydate` VARCHAR(10) DEFAULT NULL," +
                 "`modedatamodifytime` VARCHAR(8) DEFAULT NULL," +
                 "`mode_uuid` VARCHAR(100) DEFAULT NULL," +
@@ -85,7 +85,7 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
     }
 
     @Override
-    public boolean createDetailTable(Integer billId, int detailIndex) {
+    public boolean createDetailTable(Long billId, int detailIndex) {
         String tableName = getDetailTableName(billId.longValue(), detailIndex);
         return createDetailTable(tableName);
     }
@@ -319,10 +319,10 @@ public class DynamicTableServiceImpl implements IDynamicTableService {
             sql.append("`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '数据ID',");
             // request_id 存流程实例ID（雪花）→ BIGINT
             sql.append("`request_id` BIGINT DEFAULT NULL COMMENT '关联流程实例ID（wf_instance.id，雪花）',");
-            sql.append("`modedatacreator` INT DEFAULT NULL,");
+            sql.append("`modedatacreator` BIGINT DEFAULT NULL COMMENT '创建人',");
             sql.append("`modedatacreatedate` VARCHAR(10) DEFAULT NULL,");
             sql.append("`modedatacreatetime` VARCHAR(8) DEFAULT NULL,");
-            sql.append("`modedatamodifier` INT DEFAULT NULL,");
+            sql.append("`modedatamodifier` BIGINT DEFAULT NULL COMMENT '修改人',");
             sql.append("`modedatamodifydate` VARCHAR(10) DEFAULT NULL,");
             sql.append("`modedatamodifytime` VARCHAR(8) DEFAULT NULL,");
             sql.append("`mode_uuid` VARCHAR(100) DEFAULT NULL,");

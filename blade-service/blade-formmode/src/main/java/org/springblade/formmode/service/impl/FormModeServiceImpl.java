@@ -43,7 +43,8 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
         // 2. 创建表单定义（workflow_bill）
         String mainTableName = "formtable_main_" + billId;
         WorkflowBill bill = new WorkflowBill();
-        bill.setId(Long.valueOf(billId));
+        // WorkflowBill.id 与 DDL（bigint AUTO_INCREMENT）对齐：自建为负数、迁移表单为雪花ID
+        bill.setId(billId.longValue());
         bill.setFormName(formModeDTO.getBillname());
         bill.setTableName(mainTableName);
         bill.setStatus(0);
@@ -56,7 +57,7 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
             int order = 0;
             for (FieldDefinitionDTO fieldDTO : formModeDTO.getFields()) {
                 WorkflowBillField field = new WorkflowBillField();
-                field.setBillid(billId);
+                field.setBillid(billId.longValue());
                 field.setFieldname(fieldDTO.getFieldname());
                 field.setFielddbname("field" + String.format("%04d", ++order));
                 field.setFieldhtmltype(fieldDTO.getFieldhtmltype());
@@ -76,7 +77,9 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
         ModeInfo modeInfo = new ModeInfo();
         modeInfo.setModename(formModeDTO.getModename());
         modeInfo.setModedescription(formModeDTO.getModedescription());
-        modeInfo.setBillid(billId);
+        // billId 由 generateBillId() 产生（负数 int，自建表单机制）；
+        // modeinfo.billid 已对齐 bigint，此处显式拓宽
+        modeInfo.setBillid(billId.longValue());
         modeInfo.setModetype(0);
         modeInfo.setStatus(formModeDTO.getStatus() != null ? formModeDTO.getStatus() : 1);
         if (formModeDTO.getModeTreeField() != null) {
@@ -85,7 +88,7 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
         save(modeInfo);
 
         // 5. 动态创建数据表
-        createDynamicTable(billId, fieldEntities);
+        createDynamicTable(billId.longValue(), fieldEntities);
 
         // 返回详情
         return getFormModeDetail(modeInfo.getId());
@@ -140,7 +143,8 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
             return false;
         }
 
-        Integer billId = modeInfo.getBillid();
+        // modeinfo.billid 已对齐 bigint（V2026.10.20_003），直接取 Long
+        Long billId = modeInfo.getBillid();
 
         // 删除相关配置
         if (billId != null) {
@@ -153,7 +157,7 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
 
         // 删除权限
         modeRightInfoMapper.delete(
-            new LambdaQueryWrapper<ModeRightInfo>().eq(ModeRightInfo::getModeid, modeId.intValue())
+            new LambdaQueryWrapper<ModeRightInfo>().eq(ModeRightInfo::getModeid, modeId)
         );
 
         // 删除自定义搜索/树
@@ -245,7 +249,7 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean createDynamicTable(Integer billId, List<WorkflowBillField> fields) {
+    public boolean createDynamicTable(Long billId, List<WorkflowBillField> fields) {
         String tableName = "formtable_main_" + billId;
 
         // 构建建表SQL
@@ -254,10 +258,10 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
         sql.append("`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '数据ID',");
         // 关联流程实例ID（wf_instance.id，19 位雪花）→ 必须 BIGINT
         sql.append("`requestId` BIGINT DEFAULT NULL COMMENT '关联流程实例ID（雪花）',");
-        sql.append("`modedatacreater` INT DEFAULT NULL COMMENT '创建人',");
+        sql.append("`modedatacreater` BIGINT DEFAULT NULL COMMENT '创建人',");
         sql.append("`modedatacreatedate` VARCHAR(10) DEFAULT NULL COMMENT '创建日期',");
         sql.append("`modedatacreatetime` VARCHAR(8) DEFAULT NULL COMMENT '创建时间',");
-        sql.append("`modedatamodifier` INT DEFAULT NULL COMMENT '修改人',");
+        sql.append("`modedatamodifier` BIGINT DEFAULT NULL COMMENT '修改人',");
         sql.append("`modedatamodifydate` VARCHAR(10) DEFAULT NULL COMMENT '修改日期',");
         sql.append("`modedatamodifytime` VARCHAR(8) DEFAULT NULL COMMENT '修改时间',");
         sql.append("`MODEUUID` VARCHAR(100) DEFAULT NULL COMMENT '模块UUID',");
@@ -280,7 +284,7 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
     }
 
     @Override
-    public boolean dropDynamicTable(Integer billId) {
+    public boolean dropDynamicTable(Long billId) {
         String tableName = "formtable_main_" + billId;
         jdbcTemplate.execute("DROP TABLE IF EXISTS `" + tableName + "`");
         return true;
@@ -288,11 +292,14 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
 
     @Override
     public synchronized Integer generateBillId() {
-        // 从 workflow_bill 表中找到最小ID（负数），然后减1
-        Integer minId = jdbcTemplate.queryForObject(
-            "SELECT MIN(id) FROM workflow_bill", Integer.class
+        // 从 workflow_bill 表中找到最小ID（负数），然后减1。
+        // ⚠️ workflow_bill.id 是 bigint：既有迁移数据（雪花ID，正数）也可能存在
+        // 负数自建ID（ecology 机制）。必须用 Long 读取，否则雪花ID 会超出 Integer 范围
+        // 触发 "Value 'xxx' is outside of valid range for type java.lang.Integer" 导致创建模块 500。
+        Long minId = jdbcTemplate.queryForObject(
+            "SELECT COALESCE(MIN(id), 0) FROM workflow_bill", Long.class
         );
-        int newId = (minId != null && minId < 0) ? minId - 1 : -2;
+        int newId = (minId != null && minId < 0) ? (int) (minId - 1) : -2;
         return newId;
     }
 

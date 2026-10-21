@@ -16,6 +16,6 @@ public interface WorkflowBillFieldMapper extends BaseMapper<WorkflowBillField> {
      * 根据表单ID查询字段列表，按排序顺序
      */
     @Select("SELECT * FROM workflow_billfield WHERE billid = #{billId} ORDER BY dsporder ASC")
-    List<WorkflowBillField> selectByBillId(@Param("billId") Integer billId);
+    List<WorkflowBillField> selectByBillId(@Param("billId") Long billId);
 
 }

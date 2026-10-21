@@ -44,7 +44,9 @@ public class FormLayout implements Serializable {
     private String layoutConfig;
 
     @TableField("layout_type")
-    @Schema(name = "布局类型：0编辑(默认) 1显示 3监控 4打印（对齐 ecology layouttype）")
+    @Schema(name = "布局类型（本项目自有值：0编辑(默认) 1显示 3监控 4打印）。" +
+        "注意：与泛微 E9 layouttype(0显示 1新建 2编辑 3监控 4打印) 不是同一套编码（同为 0 时语义相反），" +
+        "互转统一走 utils.E9LayoutTypeMapper，禁止按数字直接等同")
     private Integer layoutType;
 
     @TableField("node_key")

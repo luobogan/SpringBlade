@@ -49,9 +49,10 @@ import java.util.regex.Pattern;
 public class WorkflowBillServiceImpl extends ServiceImpl<WorkflowBillMapper, WorkflowBill> implements IWorkflowBillService {
 
     /**
-     * 动态表名白名单：仅允许字母/数字/下划线，避免拼接 SQL 时被注入。
+     * 动态表名白名单：允许字母/数字/下划线/负号（表单表名形如 formtable_main_{-N}，A 方案负数 billid 带负号）。
+     * 表名均反引号包裹，'-' 非 SQL 元字符，放开无注入风险。
      */
-    private static final Pattern SAFE_TABLE_NAME = Pattern.compile("^[A-Za-z0-9_]+$");
+    private static final Pattern SAFE_TABLE_NAME = Pattern.compile("^[A-Za-z0-9_-]+$");
 
     private final FieldDefinitionMapper fieldDefinitionMapper;
     private final FormLayoutMapper formLayoutMapper;

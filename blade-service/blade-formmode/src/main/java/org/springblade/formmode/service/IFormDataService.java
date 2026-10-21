@@ -62,4 +62,19 @@ public interface IFormDataService {
      */
     boolean batchDeleteFormData(Long modeId, List<Long> dataIds);
 
+    /**
+     * 按「表单ID + 数据ID」读取<b>明细表数据</b>（与 {@link #saveBusinessData} 同口径）。
+     *
+     * <p>补齐此前最大缺口：明细数据只存在于流程快照 JSON，物理明细表
+     * ({@code {主表名}_dtN}) 无读取入口，导致明细无法查询 / 统计 / 关联。</p>
+     *
+     * <p>实现：由 {@code workflow_bill.table_name} 得主表名 → 从 information_schema 找出
+     * 该主表的所有明细物理表 → 逐表按关联列（优先 {@code main_id}，兼容 {@code mainid}）取行。</p>
+     *
+     * @param formId 表单定义ID（workflow_bill.id）
+     * @param dataId 主表数据ID
+     * @return 明细表名 → 行列表；无明细或无表时返回空 Map（不返回 null）
+     */
+    Map<String, List<Map<String, Object>>> getDetailData(Long formId, Long dataId);
+
 }

@@ -34,6 +34,7 @@ import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.vo.DetailFilterVO;
 import org.springblade.workflow.vo.DetailPermVO;
 import org.springblade.workflow.vo.FieldPermVO;
+import org.springblade.workflow.vo.FieldErrorVO;
 import org.springblade.workflow.vo.FormRenderVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.config.WfRetirementProperties;
@@ -181,13 +182,22 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         // 节点信息 → 运行时消费：签字意见显示设置（节点意见页签的「意见显示设置」）
         vo.setOpinionDisplay(WfNodeSettingsUtil.opinionDisplay(node));
 
-        // 布局：跨服务读取（按节点取布局：优先节点级，回退表单级；布局类型默认 0=编辑）
+        // 布局：跨服务读取（按节点取布局：优先节点级，回退表单级）
+        // 布局类型：可办（可编辑）→ 编辑布局(0)；只读（不可办 / 已办查看）→ 优先显示布局(1)，取不到回退编辑布局(0)。
+        // 说明：此前恒取 0，导致「显示布局」虽已配置却从不生效（P1-2 修复）。
+        // 校验类读取（layoutFieldNames / collectLayoutRequired）仍固定用编辑布局 0，不受此处影响。
         try {
+            boolean editable = !Boolean.TRUE.equals(vo.getReadonly());
             R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
-                formmodeClient.getFormLayout(inst.getFormId(), 0, nodeKey);
+                formmodeClient.getFormLayout(inst.getFormId(), editable ? 0 : 1, nodeKey);
+            // 只读态未配「显示布局」时回退编辑布局，保证不空白（fail-safe）
+            if (!editable && (layoutResult == null || !layoutResult.isSuccess() || layoutResult.getData() == null)) {
+                layoutResult = formmodeClient.getFormLayout(inst.getFormId(), 0, nodeKey);
+            }
             if (layoutResult != null && layoutResult.isSuccess() && layoutResult.getData() != null) {
                 vo.setLayoutId(layoutResult.getData().getId());
                 vo.setLayoutJson(layoutResult.getData().getLayoutJson());
+                vo.setLayoutType(editable ? 0 : 1);
             }
         } catch (Exception e) {
             log.warn("[blade-workflow] 读取表单布局失败，渲染包将不含布局. formId={}", inst.getFormId(), e);
@@ -266,13 +276,19 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         }
 
         // 布局：跨服务读取（与 render 同口径，按节点取布局：优先节点级，回退表单级）
+        // 预览恒为只读（vo.setReadonly(true)），故优先取「显示布局(1)」，取不到回退「编辑布局(0)」。
         if (formId != null && nodeKey != null && !nodeKey.isEmpty()) {
             try {
                 R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
-                    formmodeClient.getFormLayout(formId, 0, nodeKey);
+                    formmodeClient.getFormLayout(formId, 1, nodeKey);
+                // 未配显示布局时回退编辑布局，保证预览不空白（fail-safe）
+                if (layoutResult == null || !layoutResult.isSuccess() || layoutResult.getData() == null) {
+                    layoutResult = formmodeClient.getFormLayout(formId, 0, nodeKey);
+                }
                 if (layoutResult != null && layoutResult.isSuccess() && layoutResult.getData() != null) {
                     vo.setLayoutId(layoutResult.getData().getId());
                     vo.setLayoutJson(layoutResult.getData().getLayoutJson());
+                    vo.setLayoutType(1);
                 }
             } catch (Exception e) {
                 log.warn("[blade-workflow] 预览读取表单布局失败. formId={}, nodeKey={}", formId, nodeKey, e);
@@ -410,6 +426,39 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
 
     @Override
     public boolean validate(ValidateDTO dto) {
+        List<FieldErrorVO> errors = validateFields(dto);
+        if (!errors.isEmpty()) {
+            // 兼容既有前端：仍按「拼串」抛出（前端据此提示）；
+            // 结构化明细（可按字段标红）见 validateFields 的返回值。
+            StringBuilder sb = new StringBuilder("以下字段为必填： ");
+            for (int i = 0; i < errors.size(); i++) {
+                if (i > 0) {
+                    sb.append("、");
+                }
+                sb.append(errors.get(i).getFieldName());
+            }
+            throw new ServiceException(sb.toString());
+        }
+        return true;
+    }
+
+    /**
+     * 必填校验（<b>结构化、不抛异常</b>）：汇总三个来源的缺失项。
+     *
+     * <p>来源：</p>
+     * <ol>
+     *   <li>节点字段权限矩阵 {@code required}（含「幽灵字段」过滤）</li>
+     *   <li>明细表「必须至少一条」</li>
+     *   <li><b>布局级必填</b>（{@code fieldMeta.fieldAttr==3} 或 {@code required==true}）
+     *       —— 此前 {@link #collectLayoutRequired} 是<b>死代码、从未接线</b>，
+     *       导致「布局标了必填但节点矩阵没配」的字段服务端放行（前端虽拦，存在绕过风险），
+     *       P1-3 修复</li>
+     * </ol>
+     *
+     * @return 缺失项结构化列表（含 {@code source}，便于前端按字段标红）；无缺失返回空列表
+     */
+    public List<FieldErrorVO> validateFields(ValidateDTO dto) {
+        List<FieldErrorVO> errors = new ArrayList<>();
         if (dto == null || dto.getFormData() == null) {
             throw new ServiceException("待校验表单数据不能为空");
         }
@@ -444,7 +493,6 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         }
 
         // 1. 节点必填字段校验
-        List<String> missing = new ArrayList<>();
         // 测试域（dto.draftRead=true）按草稿 BPMN 判定：设计器改动落在草稿上，
         // 按 proc_def_id 部署读会「改了必填仍报必填」，逼用户每次先发布。
         List<FieldPermVO> perms = Boolean.TRUE.equals(dto.getDraftRead())
@@ -468,7 +516,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                     continue;
                 }
                 if (isEmpty(dto.getFormData().get(fieldName))) {
-                    missing.add(fieldName);
+                    errors.add(FieldErrorVO.of(fieldName, "该字段为必填", "node"));
                 }
             }
         }
@@ -481,15 +529,29 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                 boolean hasRow = dto.getFormData().keySet().stream()
                     .anyMatch(k -> k != null && k.startsWith(prefix));
                 if (!hasRow) {
-                    missing.add("明细表" + d.getDtIndex() + "（必须至少一条）");
+                    errors.add(FieldErrorVO.of("明细表" + d.getDtIndex() + "（必须至少一条）",
+                        "该明细表必须至少有一条数据", "detail"));
                 }
             }
         }
 
-        if (!missing.isEmpty()) {
-            throw new ServiceException("以下字段为必填： " + String.join("、", missing));
+        // 3. 布局级必填（P1-3 接线）：此前 collectLayoutRequired 无调用点，布局必填形同虚设
+        List<String> layoutMissing = new ArrayList<>();
+        collectLayoutRequired(resolveFormIdQuiet(defId), nodeKey, dto.getFormData(), layoutMissing);
+        for (String f : layoutMissing) {
+            // 与节点必填去重：已报过的不再重复（保留 node 来源，信息更完整）
+            boolean dup = false;
+            for (FieldErrorVO e : errors) {
+                if (f.equals(e.getFieldName())) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                errors.add(FieldErrorVO.of(f, "该字段为必填（布局配置）", "layout"));
+            }
         }
-        return true;
+        return errors;
     }
 
     /** 解析定义关联的表单ID（读不到返回 null，不抛异常） */

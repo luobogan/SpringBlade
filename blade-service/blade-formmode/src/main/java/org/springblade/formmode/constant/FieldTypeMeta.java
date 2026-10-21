@@ -1,5 +1,7 @@
 package org.springblade.formmode.constant;
 
+import org.springblade.formmode.utils.E9FieldTypeMapper;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -153,6 +155,12 @@ public final class FieldTypeMeta {
 		m.put("type", type);
 		m.put("name", name);
 		m.put("dbType", dbType(htmlType, type));
+		// 新增：E9 原生编码对照（供前端 / 对接方直接消费，避免各处自行换算产生第二套解释）。
+		// 纯增量字段，不影响既有 htmlType/type/name/dbType 的含义与取值。
+		E9FieldTypeMapper.E9Type e9 = E9FieldTypeMapper.toE9(
+			htmlType, type, htmlType == E9FieldTypeMapper.HTML_BROWSER ? type : null);
+		m.put("e9HtmlType", e9.e9HtmlType);
+		m.put("e9FieldType", e9.e9FieldType);
 		return m;
 	}
 }

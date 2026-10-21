@@ -30,7 +30,7 @@ public interface IDynamicTableService {
     /**
      * 创建明细表（兼容旧接口）
      */
-    boolean createDetailTable(Integer billId, int detailIndex);
+    boolean createDetailTable(Long billId, int detailIndex);
 
     /**
      * 向动态表添加字段列

@@ -2,7 +2,10 @@ package org.springblade.workflow.service;
 
 import org.springblade.workflow.dto.FormSaveDTO;
 import org.springblade.workflow.dto.ValidateDTO;
+import org.springblade.workflow.vo.FieldErrorVO;
 import org.springblade.workflow.vo.FormRenderVO;
+
+import java.util.List;
 
 /**
  * 审批态渲染服务
@@ -47,6 +50,17 @@ public interface IWfFormRenderService {
      * @return 校验通过返回 true；失败则抛出携带缺失字段信息的异常
      */
     boolean validate(ValidateDTO dto);
+
+    /**
+     * 必填校验（<b>结构化、不抛异常</b>）：节点权限矩阵 + 明细必须新增 + <b>布局级必填</b>三来源汇总。
+     *
+     * <p>与 {@link #validate} 的区别：本方法返回结构化错误列表（可按字段标红、区分来源），
+     * 不抛异常；{@link #validate} 保持「拼串异常」以兼容既有前端提示。</p>
+     *
+     * @param dto 校验入参（同 {@link #validate}）
+     * @return 缺失项结构化列表；无缺失返回空列表（参数/实例非法仍抛异常）
+     */
+    List<FieldErrorVO> validateFields(ValidateDTO dto);
 
     /**
      * 保存表单（<b>只存不流转</b>）：对齐 ecology「操作菜单 → 保存」。

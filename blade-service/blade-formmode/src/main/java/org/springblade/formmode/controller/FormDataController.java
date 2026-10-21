@@ -3,16 +3,22 @@ package org.springblade.formmode.controller;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.boot.ctrl.BladeController;
 import org.springblade.core.secure.annotation.PreAuth;
+import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
 import org.springblade.formmode.dto.FormDataDTO;
 import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.service.IFormDataService;
+import org.springblade.formmode.enums.RightType;
 import org.springblade.formmode.service.IFormModeService;
+import org.springblade.formmode.service.IFormRightService;
 import org.springblade.formmode.vo.FormDataVO;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
@@ -33,10 +39,55 @@ import java.util.Map;
 @RequestMapping({"/api/blade-formmode/form/data", "/api/blade-formmode/form-data", "/form/data", "/form-data"})
 @Tag(name = "表单数据", description = "表单数据的增删改查")
 @RequiredArgsConstructor
+@Slf4j
 public class FormDataController extends BladeController {
 
     private final IFormDataService formDataService;
     private final IFormModeService formModeService;
+    private final IFormRightService formRightService;
+
+    // ── 模块权限校验开关（非流程场景，对标 E9 moderightinfo 的 7 种 righttype）──
+    // 写操作默认强制：checkRight 在「该模块未配置任何权限」时放行，故默认开启对无配置模块零影响；
+    /** 写操作（新建/编辑/删除）是否强制模块权限校验 */
+    @Value("${blade.formmode.right-check.enforce:true}")
+    private boolean writeRightEnforce;
+    /** 读操作（详情/分页）是否强制模块权限校验；默认 false（先 warn 观察，灰度后再开） */
+    @Value("${blade.formmode.right-check.enforce-read:false}")
+    private boolean readRightEnforce;
+
+    /**
+     * 模块操作权限校验（非流程场景）。
+     *
+     * <p>语义（{@link IFormRightService#checkRight}）：该模块<b>未配置任何权限时放行</b>；
+     * 配置了但当前用户（角色/部门/人员，objid=0 表示全部）未命中则拒绝。</p>
+     *
+     * <p>兜底策略：解析不到 modeId（表单未建模块 / 数据模型 int 溢出）时放行；
+     * 校验过程异常也降级为放行 + 告警——权限链路故障不应阻断业务主流程。</p>
+     *
+     * @param modeId  模块ID（modeinfo.id）
+     * @param type    权限类型
+     * @param enforce true=未通过则抛异常拒绝；false=仅告警（灰度观察模式）
+     */
+    private void assertModeRight(Long modeId, RightType type, boolean enforce) {
+        if (modeId == null) {
+            return;
+        }
+        boolean ok;
+        try {
+            ok = formRightService.checkRight(modeId, type.getCode(), SecureUtil.getUserId());
+        } catch (Exception e) {
+            log.warn("[formmode] 模块权限校验异常，按放行处理. modeId={}, type={}, err={}", modeId, type, e.getMessage());
+            return;
+        }
+        if (ok) {
+            return;
+        }
+        if (enforce) {
+            throw new ServiceException("无权执行该操作（" + type.getName() + "不足）");
+        }
+        log.warn("[formmode] 模块权限校验未通过（观察模式，未阻断）. modeId={}, type={}, user={}",
+            modeId, type, SecureUtil.getUserId());
+    }
 
     /**
      * 保存表单数据（新建/编辑）
@@ -82,6 +133,7 @@ public class FormDataController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Long> createByForm(@PathVariable Long formId,
                                 @RequestBody Map<String, Object> fieldValues) {
+        assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.CREATE, writeRightEnforce);
         FormDataSaveDTO dto = new FormDataSaveDTO();
         dto.setFormId(formId);
         dto.setFieldValues(fieldValues);
@@ -100,6 +152,7 @@ public class FormDataController extends BladeController {
     public R<Long> updateByForm(@PathVariable Long formId,
                                 @PathVariable Long dataId,
                                 @RequestBody Map<String, Object> fieldValues) {
+        assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.EDIT, writeRightEnforce);
         FormDataSaveDTO dto = new FormDataSaveDTO();
         dto.setFormId(formId);
         dto.setDataId(dataId);
@@ -118,6 +171,7 @@ public class FormDataController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Boolean> batchDeleteByForm(@PathVariable Long formId,
                                         @RequestBody List<Long> dataIds) {
+        assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.DELETE, writeRightEnforce);
         if (dataIds == null || dataIds.isEmpty()) {
             return R.success("批量删除成功");
         }
@@ -133,6 +187,7 @@ public class FormDataController extends BladeController {
     @GetMapping("/{modeId}/{dataId}")
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<FormDataVO> detail(@PathVariable Long modeId, @PathVariable Long dataId) {
+        assertModeRight(modeId, RightType.DETAIL, readRightEnforce);
         FormDataVO result = formDataService.getFormDataById(modeId, dataId);
         return result != null ? R.data(result) : R.fail("数据不存在");
     }
@@ -146,6 +201,7 @@ public class FormDataController extends BladeController {
                                               @RequestParam(defaultValue = "1") long current,
                                               @RequestParam(defaultValue = "10") long size,
                                               @RequestBody(required = false) Map<String, Object> params) {
+        assertModeRight(modeId, RightType.VIEW, readRightEnforce);
         Page<?> page = new Page<>(current, size);
         Page<Map<String, Object>> result = formDataService.pageFormData(modeId, page, params);
         return R.data(result);
@@ -189,6 +245,23 @@ public class FormDataController extends BladeController {
                                    @RequestParam("dataId") Long dataId) {
         FormDataVO result = formDataService.getFormDataById(formId, dataId);
         return result != null ? R.data(result) : R.fail("数据不存在");
+    }
+
+    /**
+     * 按「表单ID + 数据ID」读取<b>明细表数据</b>（补齐明细持久化缺口）。
+     *
+     * <p>明细物理表（{@code {主表名}_dtN}）此前无读取入口，导致明细只存在于流程快照 JSON，
+     * 无法查询 / 统计 / 关联。本端点按 {@code workflow_bill.table_name} 定位主表，再从
+     * information_schema 动态发现其明细表并逐表取行。</p>
+     *
+     * <p>返回 {@code 明细表名 → 行列表}；该表单无明细时返回空对象（不报错）。
+     * 鉴权同 {@code /by-form}——仅要求已登录（Feign 透传 token）。</p>
+     */
+    @GetMapping("/by-form/detail")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    public R<Map<String, List<Map<String, Object>>>> getDetailByForm(@RequestParam("formId") Long formId,
+                                                                     @RequestParam("dataId") Long dataId) {
+        return R.data(formDataService.getDetailData(formId, dataId));
     }
 
     /**

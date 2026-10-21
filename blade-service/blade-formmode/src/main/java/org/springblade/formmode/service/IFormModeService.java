@@ -45,12 +45,12 @@ public interface IFormModeService extends IService<ModeInfo> {
     /**
      * 动态创建数据表（formtable_main_{billid}）
      */
-    boolean createDynamicTable(Integer billId, List<WorkflowBillField> fields);
+    boolean createDynamicTable(Long billId, List<WorkflowBillField> fields);
 
     /**
      * 动态删除数据表
      */
-    boolean dropDynamicTable(Integer billId);
+    boolean dropDynamicTable(Long billId);
 
     /**
      * 生成新的表单ID（负数自减）
