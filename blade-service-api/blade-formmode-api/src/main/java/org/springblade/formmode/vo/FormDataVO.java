@@ -1,5 +1,7 @@
 package org.springblade.formmode.vo;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -18,10 +20,14 @@ public class FormDataVO implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    @Schema(description = "数据ID")
+    /** 字符串序列化：19 位雪花 ID 在前端 JS 解析会丢精度 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Schema(description = "数据ID（雪花）")
     private Long id;
 
-    @Schema(description = "模块ID")
+    /** 字符串序列化：19 位雪花 ID 在前端 JS 解析会丢精度 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Schema(description = "模块ID（workflow_bill.id，雪花）")
     private Long modeid;
 
     @Schema(description = "主表字段值 key=fielddbname, value=字段值（含显示值）")
@@ -30,8 +36,10 @@ public class FormDataVO implements Serializable {
     @Schema(description = "明细表数据")
     private Map<String, List<Map<String, Object>>> detailTables;
 
-    @Schema(description = "创建人")
-    private Integer creater;
+    /** 创建人是雪花用户ID：改 Long 避免 int 截断，且字符串序列化防 JS 丢精度 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Schema(description = "创建人（雪花用户ID）")
+    private Long creater;
 
     @Schema(description = "创建人名称")
     private String createrName;
@@ -42,8 +50,10 @@ public class FormDataVO implements Serializable {
     @Schema(description = "创建时间")
     private String createtime;
 
-    @Schema(description = "最后修改人")
-    private Integer modifier;
+    /** 修改人是雪花用户ID：改 Long 避免 int 截断，且字符串序列化防 JS 丢精度 */
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Schema(description = "最后修改人（雪花用户ID）")
+    private Long modifier;
 
     @Schema(description = "最后修改日期")
     private String modifydate;

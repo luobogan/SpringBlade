@@ -21,8 +21,14 @@ public class FormDataDTO implements Serializable {
     @Schema(description = "模块ID")
     private Long modeid;
 
-    @Schema(description = "表单ID (billid)")
-    private Integer billid;
+    /**
+     * 表单ID (billid)
+     *
+     * <p><b>类型修正（2026-10-20）</b>：对应 {@code workflow_bill.id}（DDL bigint）。
+     * 原为 {@code Integer} 无法承载 ecology 迁移表单的 19 位雪花 ID。</p>
+     */
+    @Schema(description = "表单ID (billid, workflow_bill.id)")
+    private Long billid;
 
     @Schema(description = "数据ID（编辑时传，新建不传）")
     private Long dataid;

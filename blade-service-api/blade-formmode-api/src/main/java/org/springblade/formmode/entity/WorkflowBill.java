@@ -20,8 +20,8 @@ public class WorkflowBill implements Serializable {
     private static final long serialVersionUID = 1L;
 
     @TableId(value = "id", type = IdType.INPUT)
-    @Schema(description = "表单ID（负数）")
-    private Integer id;
+    @Schema(description = "表单ID（自建为负数；ecology 迁移表单为19位雪花ID）")
+    private Long id;
 
     @Schema(description = "表单名称")
     private String billname;

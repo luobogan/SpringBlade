@@ -22,8 +22,16 @@ public class WorkflowBillField implements Serializable {
     @Schema(description = "字段ID（表单关联用负数）")
     private Integer id;
 
-    @Schema(description = "所属表单ID（workflow_bill.id）")
-    private Integer billid;
+    /**
+     * 所属表单ID（workflow_bill.id）
+     *
+     * <p><b>类型修正（2026-10-20）</b>：DDL {@code workflow_billfield.billid} 本就是
+     * {@code bigint}（blade.sql L11834），但实体误用 {@code Integer} —— 导致 ecology
+     * 迁移表单的 19 位雪花 ID 在存取时溢出/丢失（自建表单的负数 ID 不受影响）。
+     * 现与 DDL 对齐为 {@code Long}。</p>
+     */
+    @Schema(description = "所属表单ID（workflow_bill.id，bigint）")
+    private Long billid;
 
     @Schema(description = "字段名")
     private String fieldname;

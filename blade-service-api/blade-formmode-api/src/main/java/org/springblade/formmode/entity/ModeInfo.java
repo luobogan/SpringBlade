@@ -29,8 +29,15 @@ public class ModeInfo implements Serializable {
     @Schema(description = "模块描述")
     private String modedescription;
 
-    @Schema(description = "关联表单ID")
-    private Integer billid;
+    /**
+     * 关联表单ID（workflow_bill.id）
+     *
+     * <p><b>类型修正（2026-10-20）</b>：ecology 迁移表单的 workflow_bill.id 是 19 位
+     * 雪花 Long，原 int 列存不下，导致「按表单反查模块」对迁移表单永远失败。
+     * DDL 已由 V2026.10.20_003 改 bigint，实体同步对齐为 {@code Long}。</p>
+     */
+    @Schema(description = "关联表单ID（workflow_bill.id，bigint）")
+    private Long billid;
 
     @Schema(description = "模块类型")
     private Integer modetype;

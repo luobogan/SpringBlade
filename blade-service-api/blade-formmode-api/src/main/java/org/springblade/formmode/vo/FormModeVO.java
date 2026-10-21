@@ -29,8 +29,9 @@ public class FormModeVO implements Serializable {
     @Schema(description = "模块描述")
     private String modedescription;
 
+    /** 表单ID（workflow_bill.id，bigint：自建为负数 / ecology 迁移为雪花ID） */
     @Schema(description = "表单ID")
-    private Integer billid;
+    private Long billid;
 
     @Schema(description = "物理表名")
     private String tablename;

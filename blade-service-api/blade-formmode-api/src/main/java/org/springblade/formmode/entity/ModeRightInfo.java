@@ -22,8 +22,15 @@ public class ModeRightInfo implements Serializable {
     @Schema(description = "权限ID")
     private Long id;
 
-    @Schema(description = "模块ID")
-    private Integer modeid;
+    /**
+     * 模块ID（modeinfo.id）
+     *
+     * <p><b>类型修正（2026-10-20）</b>：modeinfo.id 是 19 位雪花 Long，原 int 列存不下，
+     * 导致模块权限对自建模块/迁移表单完全失效。DDL 已由 V2026.10.20_003 改 bigint，
+     * 实体同步对齐为 {@code Long}。</p>
+     */
+    @Schema(description = "模块ID（modeinfo.id，bigint）")
+    private Long modeid;
 
     @Schema(description = "权限类型：1可见 2新建 3编辑 4删除 5详情 6导入 7导出")
     private Integer righttype;

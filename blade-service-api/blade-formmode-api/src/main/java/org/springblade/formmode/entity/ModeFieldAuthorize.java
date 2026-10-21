@@ -22,8 +22,15 @@ public class ModeFieldAuthorize implements Serializable {
     @Schema(description = "授权ID")
     private Long id;
 
-    @Schema(description = "模块ID")
-    private Integer modeid;
+    /**
+     * 模块ID（modeinfo.id）
+     *
+     * <p><b>类型修正（2026-10-20）</b>：modeinfo.id 是 19 位雪花 Long，原 int 列存不下，
+     * 导致字段授权对自建模块/迁移表单完全失效。DDL 已由 V2026.10.20_003 改 bigint，
+     * 实体同步对齐为 {@code Long}。</p>
+     */
+    @Schema(description = "模块ID（modeinfo.id，bigint）")
+    private Long modeid;
 
     @Schema(description = "字段ID（workflow_billfield.id）")
     private Integer fieldid;

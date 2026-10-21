@@ -61,6 +61,19 @@ public class FormRenderVO implements Serializable {
     @Schema(description = "布局 JSON（Univer 结构：sheetOrder/sheets/detailTables）")
     private String layoutJson;
 
+    /**
+     * 本次渲染<b>实际使用</b>的布局类型（自有值：0编辑(默认) 1显示 3监控 4打印）。
+     *
+     * <p>⚠️ 与泛微 E9 layouttype（0显示/1新建/2编辑/3监控/4打印）<b>不是同一套编码</b>：
+     * 同为「0」时本项目是「编辑」、E9 是「显示」，语义相反；互转见 formmode 侧
+     * {@code E9LayoutTypeMapper}，禁止按数字直接等同。</p>
+     *
+     * <p>用途：只读态（不可办 / 预览 / 已办查看）优先取「显示布局(1)」，取不到回退「编辑布局(0)」；
+     * 本字段回显实际命中值，便于前端适配与问题排查（<b>不改变</b>既有取布局的回退语义）。</p>
+     */
+    @Schema(description = "实际使用的布局类型（0编辑 1显示 3监控 4打印）")
+    private Integer layoutType;
+
     @Schema(description = "业务数据（主表 + 明细表，key 沿用 {sheetId}__{row}__{col} / dt{idx}__r{n}__...）")
     private Map<String, Object> dataJson;
 

@@ -5,6 +5,7 @@ import org.springblade.formmode.constant.FormmodeConstant;
 import org.springblade.formmode.dto.FormDataDTO;
 import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
+import org.springblade.formmode.vo.FieldPermVO;
 import org.springblade.formmode.vo.FormLayoutVO;
 import org.springblade.formmode.vo.FormModeVO;
 import org.springblade.formmode.vo.FormDataVO;
@@ -12,6 +13,7 @@ import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 表单建模 Feign 客户端接口
@@ -108,5 +110,27 @@ public interface IFormmodeClient {
     @GetMapping("/form-data/by-form")
     R<FormDataVO> getBusinessData(@RequestParam("formId") Long formId,
                                   @RequestParam("dataId") Long dataId);
+
+    /**
+     * 按「表单ID + 数据ID」读取<b>明细表数据</b>（与 {@link #getBusinessData} 同口径）。
+     *
+     * <p>返回 {@code 明细表名 → 行列表}。供 blade-workflow 渲染包 / 公文套红读取业务明细
+     * （此前明细只活在快照 JSON，物理明细表无读取入口）。Feign 直连、不带 /api 前缀。</p>
+     */
+    @GetMapping("/form-data/by-form/detail")
+    R<Map<String, List<Map<String, Object>>>> getDetailData(@RequestParam("formId") Long formId,
+                                                            @RequestParam("dataId") Long dataId);
+
+    /**
+     * 查询「当前用户」在某模块下的字段级权限（非流程场景运行期消费）。
+     *
+     * <p>与 {@link #getDetailData} 同口径：按模块维度（modeinfo.id）查询，
+     * 返回空列表表示未配置字段授权（调用方按字段定义默认渲染，fail-open）。</p>
+     *
+     * <p>VO 与 blade-workflow 侧的 {@code FieldPermVO} 字段完全对齐，
+     * 前端 {@code NodePermissionResolver} 可无差别消费两侧数据。</p>
+     */
+    @GetMapping("/right/field-perm/{modeId}")
+    R<List<FieldPermVO>> listFieldPerm(@PathVariable("modeId") Long modeId);
 
 }
