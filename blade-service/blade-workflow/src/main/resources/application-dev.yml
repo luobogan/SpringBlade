@@ -21,3 +21,9 @@ blade:
     task-act-write:
       enabled: true
 
+# 公文内容/回调 URL 签名密钥（加固 DOC-P0-4 可枚举下载，见 OdocUrlSigner）
+# 生产必须通过 Nacos 配置中心覆盖为高熵值：odoc.url-sign-secret
+odoc:
+  url-sign-secret: odoc-dev-secret-change-me
+  url-sign-ttl-seconds: 300
+

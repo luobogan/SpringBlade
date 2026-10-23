@@ -2,6 +2,7 @@ package org.springblade.workflow.odoc.store;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.workflow.odoc.OdocUrlSigner;
 import org.springblade.workflow.odoc.config.OdocProperties;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -27,10 +28,12 @@ import java.util.stream.Stream;
 public class LocalOdocFileStore implements IOdocFileStore {
 
 	private final OdocProperties properties;
+	private final OdocUrlSigner signer;
 	private final RestTemplate restTemplate = new RestTemplate();
 
-	public LocalOdocFileStore(OdocProperties properties) {
+	public LocalOdocFileStore(OdocProperties properties, OdocUrlSigner signer) {
 		this.properties = properties;
+		this.signer = signer;
 	}
 
 	private Path dir() {
@@ -85,7 +88,8 @@ public class LocalOdocFileStore implements IOdocFileStore {
 	@Override
 	public String getDownloadUrl(Long fileId) {
 		// 预览/下载统一走 blade-workflow 的 content 端点（内部转 fileStore.download）
-		return "/odoc/file/" + fileId + "/content";
+		// 签名 token 防未授权枚举下载（E9 DOC-P0-4 同款）
+		return "/odoc/file/" + fileId + "/content?token=" + signer.sign(String.valueOf(fileId));
 	}
 
 	@Override

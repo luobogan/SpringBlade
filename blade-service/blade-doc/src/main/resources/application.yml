@@ -1,0 +1,44 @@
+# 内容引擎服务配置（DocEngine）
+# 服务注册：@BladeCloudApplication 经 Nacos 自动注册（应用名 blade-doc）
+# 数据源：由 Nacos blade-doc-{env}.yaml 提供 spring.datasource.*（标准 Druid 自动配置）
+# 网关路由：/blade-doc/** -> lb://blade-doc（配于 Nacos blade-gateway-{env}.yaml）
+
+blade:
+  doc:
+    # 上传大小限制（MB），对齐 E9 SecCategoryComInfo 缺省 5MB（后续按目录级 maxUploadFileSize 覆盖）
+    max-upload-size: 5
+    # 内容/回调 URL 签名（加固 DOC-P0-4，见 DocUrlSigner）；生产必须由 Nacos 覆盖为高熵值
+    url-sign-secret: doc-dev-secret-change-me
+    url-sign-ttl-seconds: 300
+    # WPS 在线编辑 SDK（kdocs jssdk / WPS 文档中台）：仅当 app-id/app-secret 均配置时才启用 WPS 编辑方案
+    # 默认值已填入开放平台下发的密钥；生产建议改用 Nacos/密钥管理覆盖，避免明文入库。
+    wps:
+      app-id: ${WPS_APP_ID:SX20261023ZYNJCZ}
+      app-secret: ${WPS_APP_SECRET:UquMoKZlDLGqbfnZUxNxFYMQglHvLIRY}
+      jssdk-url: https://wwo.wps.cn/office/jssdk/jssdk.js
+  # DataScope：显式排除框架 FlowMapper，避免无数据权限配置时 DataScopeCache 对 null 调 getResourceCode() NPE
+  data-scope:
+    mapper-exclude:
+      - FlowMapper
+  # 租户隔离：doc_* 表白名单（对齐 blade-system 的 blade.tenant.tables 机制；缺此配置则 tenant_id 不被填充/过滤）
+  tenant:
+    column: tenant_id
+    tables:
+      - doc_detail
+      - doc_sec_category
+      - doc_image_file
+      - doc_detail_content
+      - doc_share
+      - doc_dummy_detail
+      - doc_detail_log
+      - download_log
+      - doc_recycle
+      - doc_custom_field
+      - doc_custom_field_value
+      - doc_mould
+      - doc_sec_category_coder
+      - doc_sec_category_doc_property
+      - doc_sec_category_approve_wf_detail
+      - doc_reply
+      - doc_praise
+      - doc_score

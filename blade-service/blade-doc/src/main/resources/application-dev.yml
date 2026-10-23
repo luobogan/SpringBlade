@@ -1,0 +1,14 @@
+#服务器端口（避开既有：blade-auth 8100 / blade-log 8103 / blade-desk 8105 / blade-system 8106 / blade-workflow 8111）
+server:
+  port: 8120
+
+#数据源配置（从 Nacos blade-doc-dev.yaml 读取；dev 与 blade-workflow 共用 blade 库，doc_* 表由本模块 DDL 建）
+spring:
+  datasource:
+    url: ${blade.datasource.dev.url}
+    username: ${blade.datasource.dev.username}
+    password: ${blade.datasource.dev.password}
+
+blade:
+  doc:
+    max-upload-size: 5

@@ -24,6 +24,7 @@
         <module>blade-order</module>
         <module>blade-pay</module>
         <module>blade-formmode</module>
+        <module>blade-doc</module>
         <module>blade-portal</module>
         <module>blade-workflow</module>
         <module>blade-workflow-odoc-layout</module>

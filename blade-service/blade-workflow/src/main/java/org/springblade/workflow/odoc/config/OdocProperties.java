@@ -42,4 +42,13 @@ public class OdocProperties {
 	 * （Windows C:/Windows/Fonts、Linux /usr/share/fonts 等）。
 	 */
 	private String pdfFontPath = "";
+
+	/**
+	 * 内容/回调 URL 签名密钥（加固 OnlyOffice / 浏览器直连的 content/callback 端点）。
+	 * 生产须显式配置高熵值（Nacos: odoc.url-sign-secret）；缺省仅用于本地开发。
+	 */
+	private String urlSignSecret = "odoc-dev-secret-change-me";
+
+	/** URL 签名有效期（秒），默认 5 分钟 */
+	private int urlSignTtlSeconds = 300;
 }

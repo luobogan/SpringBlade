@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.workflow.odoc.OdocUrlSigner;
 import org.springblade.workflow.odoc.config.OdocProperties;
 import org.springblade.workflow.odoc.entity.WfOdocDoc;
 import org.springblade.workflow.odoc.entity.WfOdocDocVersion;
@@ -33,6 +34,7 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 	private final WfOdocDocVersionMapper versionMapper;
 	private final IOdocFileStore fileStore;
 	private final OdocProperties properties;
+	private final OdocUrlSigner signer;
 
 	private static final Integer DOC_STATUS_DRAFT = 9;
 
@@ -156,13 +158,14 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 		document.setKey(docId + "_" + versionId);
 		document.setTitle(version.getFileName());
 		document.setUrl(stripTrailingSlash(properties.getPublicBaseUrl())
-			+ "/odoc/doc/version/" + versionId + "/content");
+			+ "/odoc/doc/version/" + versionId + "/content?token=" + signer.sign(String.valueOf(versionId)));
 		document.getPermissions().setEdit(editable);
 		vo.setDocument(document);
 
 		OdocEditorConfigVO.EditorConfig ec = new OdocEditorConfigVO.EditorConfig();
 		ec.setCallbackUrl(stripTrailingSlash(properties.getPublicBaseUrl())
-			+ "/odoc/doc/callback?docId=" + docId + "&versionId=" + versionId);
+			+ "/odoc/doc/callback?docId=" + docId + "&versionId=" + versionId
+			+ "&token=" + signer.sign(docId + ":" + versionId));
 		ec.setLang(properties.getLang());
 		ec.setMode(editable ? "edit" : "view");
 		ec.getUser().setId(String.valueOf(SecureUtil.getUserId()));

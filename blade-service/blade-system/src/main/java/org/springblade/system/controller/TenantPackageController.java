@@ -108,7 +108,7 @@ public class TenantPackageController extends BladeController {
 	/**
 	 * 删除产品包
 	 */
-	@GetMapping("/remove")
+	@PostMapping("/remove")
 	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
 	@Operation(summary = "删除产品包", description = "删除产品包")
 	public R remove(Long id) {

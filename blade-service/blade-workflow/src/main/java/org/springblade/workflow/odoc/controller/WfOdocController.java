@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.annotation.PreAuth;
+import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.workflow.odoc.entity.WfOdocDoc;
@@ -33,6 +34,7 @@ import org.springblade.workflow.odoc.service.IWfOdocNumberService;
 import org.springblade.workflow.odoc.service.IWfOdocProcessSetService;
 import org.springblade.workflow.odoc.service.IWfOdocSealService;
 import org.springblade.workflow.odoc.service.IWfOdocTaohongService;
+import org.springblade.workflow.odoc.OdocUrlSigner;
 import org.springblade.workflow.odoc.store.IOdocFileStore;
 import org.springblade.workflow.spi.OdocSealRequest;
 import org.springframework.web.multipart.MultipartFile;
@@ -88,6 +90,7 @@ public class WfOdocController {
 	private final IWfOdocSealService sealService;
 	private final IWfOdocFontService fontService;
 	private final IOdocFileStore fileStore;
+	private final OdocUrlSigner signer;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	/** 公文密级字段名（表单字段）。可在 Nacos 配 blade.workflow.odoc.secret-level-field 覆盖，缺省 mj */
@@ -231,8 +234,12 @@ public class WfOdocController {
 
 	@PreAuth("permitAll()")
 	@GetMapping("/file/{fileId}/content")
-	@Operation(summary = "按 fileId 取文件内容", description = "本地存储文件下载；生产应改 URL 签名 + 内网隔离")
-	public ResponseEntity<byte[]> fileContent(@PathVariable Long fileId) {
+	@Operation(summary = "按 fileId 取文件内容", description = "签名 token 或已登录会话任一通过（闭合 DOC-P0-4 可枚举下载）")
+	public ResponseEntity<byte[]> fileContent(@PathVariable Long fileId,
+											  @RequestParam(required = false) String token) {
+		if (!authorized(String.valueOf(fileId), token)) {
+			throw new ServiceException("无权限访问该文件内容");
+		}
 		byte[] bytes = fileStore.download(fileId);
 		HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
@@ -275,8 +282,12 @@ public class WfOdocController {
 
 	@PreAuth("permitAll()")
 	@GetMapping("/layout/{layoutFileId}/content")
-	@Operation(summary = "版式文件内容", description = "供前端预览/下载；生产应改 URL 签名 + 内网隔离")
-	public ResponseEntity<byte[]> layoutContent(@PathVariable Long layoutFileId) {
+	@Operation(summary = "版式文件内容", description = "签名 token 或已登录会话任一通过（闭合 DOC-P0-4 可枚举下载）")
+	public ResponseEntity<byte[]> layoutContent(@PathVariable Long layoutFileId,
+												@RequestParam(required = false) String token) {
+		if (!authorized(String.valueOf(layoutFileId), token)) {
+			throw new ServiceException("无权限访问该版式文件内容");
+		}
 		byte[] bytes = layoutService.content(layoutFileId);
 		HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
@@ -447,8 +458,12 @@ public class WfOdocController {
 	 */
 	@PreAuth("permitAll()")
 	@GetMapping("/doc/version/{versionId}/content")
-	@Operation(summary = "版本内容（字节代理）", description = "供 OnlyOffice document.url 与前端预览下载")
-	public ResponseEntity<byte[]> content(@PathVariable Long versionId) {
+	@Operation(summary = "版本内容（字节代理）", description = "OnlyOffice document.url 与前端均走签名 token（闭合 DOC-P0-4）")
+	public ResponseEntity<byte[]> content(@PathVariable Long versionId,
+										 @RequestParam(required = false) String token) {
+		if (!authorized(String.valueOf(versionId), token)) {
+			throw new ServiceException("无权限访问该版本内容");
+		}
 		byte[] bytes = docService.content(versionId);
 		HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
@@ -460,16 +475,63 @@ public class WfOdocController {
 		return ResponseEntity.ok().headers(headers).body(bytes);
 	}
 
+	/** 签名 token 或已登录会话任一通过；闭合 DOC-P0-4 可枚举下载 */
+	private boolean authorized(String resource, String token) {
+		return signer.verify(resource, token) || SecureUtil.getUser() != null;
+	}
+
+	/**
+	 * 签发内容/回调签名 URL：浏览器/前端先经此（已登录）换取带 token 的下载地址。
+	 * 注意：当前仅做「已登录 + 签名」，细粒度归属校验（canDownload）为后续加固项。
+	 */
+	@GetMapping("/sign-url")
+	@PreAuth(WorkflowConstant.HAS_AUTH)
+	@Operation(summary = "签发内容/回调签名 URL", description = "闭合 DOC-P0-4：下载须持签名 token 或已登录会话")
+	public R<String> signUrl(@RequestParam String type,
+							 @RequestParam(required = false) Long id,
+							 @RequestParam(required = false) Long docId,
+							 @RequestParam(required = false) Long versionId) {
+		String path;
+		String resource;
+		switch (type) {
+			case "file":
+				path = "/odoc/file/" + id + "/content";
+				resource = String.valueOf(id);
+				break;
+			case "layout":
+				path = "/odoc/layout/" + id + "/content";
+				resource = String.valueOf(id);
+				break;
+			case "version":
+				path = "/odoc/doc/version/" + id + "/content";
+				resource = String.valueOf(id);
+				break;
+			case "callback":
+				path = "/odoc/doc/callback?docId=" + docId + "&versionId=" + versionId;
+				resource = docId + ":" + versionId;
+				break;
+			default:
+				throw new ServiceException("未知签名类型: " + type);
+		}
+		return R.data(path + "?token=" + signer.sign(resource));
+	}
+
 	/**
 	 * OnlyOffice 保存回调。服务器直连、不带鉴权头，放行 permitAll。
 	 * OnlyOffice 要求返回 {"error":0}。
 	 */
 	@PreAuth("permitAll()")
 	@PostMapping("/doc/callback")
-	@Operation(summary = "OnlyOffice 保存回调", description = "OnlyOffice 编辑保存后回写新版本")
+	@Operation(summary = "OnlyOffice 保存回调", description = "OnlyOffice 编辑保存后回写新版本；校验回调签名 token")
 	public Map<String, Object> callback(@RequestParam Long docId,
 										@RequestParam Long versionId,
+										@RequestParam(required = false) String token,
 										@RequestBody(required = false) String body) {
+		if (!signer.verify(docId + ":" + versionId, token)) {
+			java.util.Map<String, Object> fail = new java.util.HashMap<>();
+			fail.put("error", 1);
+			return fail;
+		}
 		try {
 			int status = 0;
 			String url = null;
