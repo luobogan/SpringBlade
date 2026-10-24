@@ -8,6 +8,7 @@ import org.springblade.core.tool.api.R;
 import org.springblade.doc.constant.DocConstant;
 import org.springblade.doc.entity.DocImageFile;
 import org.springblade.doc.service.IDocAttachmentService;
+import org.springblade.doc.service.IDocEngineSettingService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,6 +32,8 @@ import java.util.List;
 public class DocAttachmentController {
 
     private final IDocAttachmentService attachmentService;
+
+    private final IDocEngineSettingService settingService;
 
     @PreAuth(DocConstant.HAS_AUTH)
     @GetMapping("/list")
@@ -76,7 +79,11 @@ public class DocAttachmentController {
     @PostMapping("/delete")
     @Operation(summary = "删除附件", description = "canManage 校验；physical=false 时只删记录、保留物理文件")
     public R<Boolean> delete(@RequestParam Long id,
-                             @RequestParam(required = false, defaultValue = "true") boolean physical) {
-        return R.data(attachmentService.delete(id, physical));
+                             @RequestParam(required = false) Boolean physical) {
+        // 未显式传 physical 时，取引擎设置 attach_delete_physical（默认 1=同时删物理文件，0=只删记录保留文件）
+        boolean del = physical != null
+            ? physical
+            : !"0".equals(settingService.get("attach_delete_physical", "1"));
+        return R.data(attachmentService.delete(id, del));
     }
 }
