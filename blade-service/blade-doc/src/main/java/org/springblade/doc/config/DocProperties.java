@@ -53,8 +53,11 @@ public class DocProperties {
         private String appId = "";
         /** WPS 开放平台应用密钥（用于服务端签名） */
         private String appSecret = "";
-        /** kdocs jssdk 脚本地址（可经 Nacos 覆盖为私有化地址） */
-        private String jssdkUrl = "https://wwo.wps.cn/office/jssdk/jssdk.js";
+        /** WebOffice umd.js 地址（默认前端 public 本地部署；可经 Nacos 覆盖为 CDN/私有化地址） */
+        private String jssdkUrl = "/web-office-sdk-solution.umd.js";
+
+        /** 公网访问 base（用于拼 download/upload 回调绝对 URL，如 https://www.zwymding.top；留空则按请求推断） */
+        private String publicBase = "";
     }
 
     private Wps wps = new Wps();

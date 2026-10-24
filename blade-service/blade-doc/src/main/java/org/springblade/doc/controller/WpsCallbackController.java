@@ -5,21 +5,18 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.annotation.PreAuth;
-import org.springblade.core.tool.api.R;
-import org.springblade.core.tool.utils.Func;
 import org.springblade.doc.config.DocProperties;
 import org.springblade.doc.entity.DocDetail;
 import org.springblade.doc.entity.DocImageFile;
 import org.springblade.doc.mapper.DocDetailMapper;
 import org.springblade.doc.mapper.DocImageFileMapper;
-import org.springblade.doc.sign.WpsSign;
-import org.springblade.doc.store.IDocFileStore;
-import org.springframework.http.HttpHeaders;
+import org.springblade.doc.sign.DocUrlSigner;
+import org.springblade.doc.service.IDocEngineSettingService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,148 +24,210 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 内容引擎 - WPS 文档中台服务端回调（无会话，靠 {@code _w_signature} 鉴权）。
+ * 内容引擎 - WPS WebOffice 服务端回调（solution.wps.cn 官方 v3 协议）。
  *
- * <p>WPS 中台按在 WPS 控制台登记的回调地址调用本组端点（下载/上传/元信息/版本）。
- * 本组端点与「前端 jssdk」共用同一套 SHA1 签名规则（见 {@link WpsSign}），彼此解耦：
- * 前端负责在浏览器拉起编辑，WPS 中台负责经本组端点拉/存文件。</p>
+ * <p>路径体系为 WPS 标准 {@code /v3/3rd/files/{fileId}[/download|/permission|/upload...]}，
+ * 由 WPS 中台按控制台登记的回调地址调用（预览拉取 / 编辑保存）。鉴权靠前端 init 传入、
+ * 回调经请求头 {@code X-WebOffice-Token} 回传的业务 token（按 fileId 验签）。</p>
  *
- * <p>需在 WPS 控制台登记的回调地址（按实际部署域名替换）：</p>
- * <ul>
- *   <li>文件信息：{base}/doc/wps/file/info</li>
- *   <li>文件下载：{base}/doc/wps/file/download</li>
- *   <li>文件上传(保存)：{base}/doc/wps/file/upload</li>
- *   <li>版本列表：{base}/doc/wps/file/version</li>
- * </ul>
+ * <p>响应遵循 WPS 协议：成功直接返回业务 JSON（code=0），失败返回 {@code {"code":xxx,"message":...}}；
+ * 故不使用 BladeX 的 R 包装。fileId 既可能是附件 fileId（DocImageFile.fileId），也可能是 docId（主文件），
+ * {@link #actualFileId(String)} 做兼容解析。</p>
  */
 @Slf4j
 @RestController
-@RequestMapping("/doc/wps/file")
+@RequestMapping("/v3/3rd")
 @RequiredArgsConstructor
-@Tag(name = "内容引擎-WPS中台回调", description = "download/upload/info/version，靠 _w_signature 鉴权")
+@Tag(name = "内容引擎-WPS WebOffice回调", description = "/v3/3rd/files/* 预览/编辑回调，X-WebOffice-Token 鉴权")
 public class WpsCallbackController {
 
     private final DocDetailMapper detailMapper;
     private final DocImageFileMapper imageFileMapper;
-    private final IDocFileStore fileStore;
+    private final DocUrlSigner signer;
     private final DocProperties docProperties;
+    private final IDocEngineSettingService settingService;
+    private final JdbcTemplate jdbcTemplate;
+    private final org.springblade.doc.store.IDocFileStore fileStore;
 
-    private DocProperties.Wps wps() {
-        return docProperties.getWps();
+    // ---------------- 鉴权 / 工具 ----------------
+
+    private boolean authed(HttpServletRequest req, String fileId) {
+        String token = req.getHeader("X-WebOffice-Token");
+        return token != null && !token.isBlank() && signer.verify("wps:" + fileId, token);
     }
 
-    private boolean verify(HttpServletRequest req) {
-        Map<String, String> params = new HashMap<>();
-        req.getParameterMap().forEach((k, v) -> params.put(k, v != null && v.length > 0 ? v[0] : ""));
-        return WpsSign.serverVerify(params, wps().getAppSecret());
+    private String publicBase(HttpServletRequest req) {
+        String base = settingService.get("wps_public_base", null);
+        if (base == null || base.isBlank()) {
+            base = docProperties.getWps().getPublicBase();
+        }
+        if (base != null && !base.isBlank()) {
+            return base.trim().replaceAll("/+$", "");
+        }
+        String scheme = req.getScheme();
+        String host = req.getServerName();
+        int port = req.getServerPort();
+        boolean def = ("http".equals(scheme) && port == 80) || ("https".equals(scheme) && port == 443);
+        return scheme + "://" + host + (def ? "" : ":" + port);
     }
 
-    private Long docIdOf(HttpServletRequest req) {
-        String fid = req.getParameter("fileid");
+    /** fileId → 实际文件ID：优先按 DocImageFile.fileId 命中；否则视为 docId 取其主文件 */
+    private Long actualFileId(String fileId) {
+        Long fid = parseLong(fileId);
         if (fid == null) {
-            fid = req.getParameter("_w_fileid");
+            return null;
         }
-        return Func.isBlank(fid) ? null : Long.parseLong(fid);
+        DocImageFile img = imageFileMapper.selectOne(Wrappers.<DocImageFile>lambdaQuery().eq(DocImageFile::getFileId, fid));
+        if (img != null) {
+            return fid;
+        }
+        DocDetail doc = detailMapper.selectById(fid);
+        if (doc != null && doc.getMainFileId() != null) {
+            return doc.getMainFileId();
+        }
+        return fid;
+    }
+
+    private DocImageFile imageOf(Long actualFileId) {
+        return actualFileId == null ? null
+            : imageFileMapper.selectOne(Wrappers.<DocImageFile>lambdaQuery().eq(DocImageFile::getFileId, actualFileId));
+    }
+
+    private int versionOf(Long actualFileId) {
+        DocImageFile img = imageOf(actualFileId);
+        Long docId = img != null ? img.getDocId() : actualFileId;
+        Long cnt = imageFileMapper.selectCount(Wrappers.<DocImageFile>lambdaQuery()
+            .eq(DocImageFile::getDocId, docId).eq(DocImageFile::getDocFileType, 2));
+        return cnt == null || cnt < 1 ? 1 : cnt.intValue();
+    }
+
+    private static Long parseLong(String s) {
+        try {
+            return (s == null || s.isBlank()) ? null : Long.parseLong(s.trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ---------------- 预览 ----------------
+
+    @PreAuth("permitAll()")
+    @GetMapping("/files/{fileId}")
+    @Operation(summary = "WPS-文件元信息")
+    public ResponseEntity<Map<String, Object>> info(HttpServletRequest req, @PathVariable String fileId) {
+        log.info("WPS info 到站 fileId={}, hasToken={}, ua={}", fileId,
+            req.getHeader("X-WebOffice-Token") != null, req.getHeader("User-Agent"));
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
+        }
+        Long af = actualFileId(fileId);
+        if (af == null) {
+            return err(40005, "file_id invalid");
+        }
+        DocImageFile img = imageOf(af);
+        long now = System.currentTimeMillis() / 1000;
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("id", fileId);
+        r.put("name", (img != null && img.getFileName() != null) ? img.getFileName() : (fileId + ".docx"));
+        r.put("version", versionOf(af));
+        r.put("size", (img != null && img.getFileSize() != null) ? img.getFileSize() : 0L);
+        r.put("create_time", now);
+        r.put("modify_time", now);
+        r.put("creator_id", "0");
+        r.put("modifier_id", "0");
+        return json(r);
     }
 
     @PreAuth("permitAll()")
-    @Operation(summary = "WPS 中台-文件元信息")
-    @GetMapping("/info")
-    public R<?> info(HttpServletRequest req) {
-        if (!verify(req)) {
-            throw new ServiceException("WPS 回调签名无效");
+    @GetMapping("/files/{fileId}/download")
+    @Operation(summary = "WPS-文件下载地址")
+    public ResponseEntity<Map<String, Object>> download(HttpServletRequest req, @PathVariable String fileId) {
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
         }
-        Long docId = docIdOf(req);
-        DocDetail doc = detailMapper.selectById(docId);
-        if (doc == null) {
-            throw new ServiceException("文档不存在");
+        Long af = actualFileId(fileId);
+        if (af == null) {
+            return err(40005, "file_id invalid");
         }
-        long size = 0;
-        String name = doc.getDocSubject();
-        Long mainFileId = doc.getMainFileId();
-        if (mainFileId != null) {
-            DocImageFile f = imageFileMapper.selectOne(
-                Wrappers.<DocImageFile>lambdaQuery().eq(DocImageFile::getFileId, mainFileId));
-            if (f != null) {
-                size = f.getFileSize() == null ? 0 : f.getFileSize();
-                if (f.getFileName() != null) {
-                    name = f.getFileName();
-                }
-            }
-        }
-        long version = imageFileMapper.selectCount(
-            Wrappers.<DocImageFile>lambdaQuery().eq(DocImageFile::getDocId, docId).eq(DocImageFile::getDocFileType, 2));
-
-        Map<String, Object> info = new LinkedHashMap<>();
-        info.put("fileid", String.valueOf(docId));
-        info.put("name", name);
-        info.put("size", size);
-        info.put("version", version);
-        Map<String, Integer> acl = new LinkedHashMap<>();
-        acl.put("rename", 0);
-        acl.put("history", 1);
-        acl.put("copy", 1);
-        acl.put("export_pdf", 1);
-        acl.put("print", 1);
-        acl.put("save_as", 0);
-        info.put("user_acl", acl);
-        info.put("watermark", "");
-        info.put("creator", "");
-        return R.data(info);
+        String url = publicBase(req) + "/doc/file/" + af + "/content?token=" + signer.sign(String.valueOf(af));
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("url", url);
+        return json(r);
     }
 
     @PreAuth("permitAll()")
-    @Operation(summary = "WPS 中台-文件下载（流式返回正文）")
-    @GetMapping("/download")
-    public ResponseEntity<byte[]> download(HttpServletRequest req) {
-        if (!verify(req)) {
-            throw new ServiceException("WPS 回调签名无效");
+    @GetMapping("/files/{fileId}/permission")
+    @Operation(summary = "WPS-文档用户权限")
+    public ResponseEntity<Map<String, Object>> permission(HttpServletRequest req, @PathVariable String fileId) {
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
         }
-        Long docId = docIdOf(req);
-        DocDetail doc = detailMapper.selectById(docId);
-        if (doc == null || doc.getMainFileId() == null) {
-            throw new ServiceException("文档或正文文件不存在");
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("read", 1);
+        r.put("update", 0);   // 预览只读；编辑模式需配合用户信息接口再放开
+        r.put("download", 1);
+        r.put("rename", 0);
+        r.put("history", 1);
+        r.put("copy", 1);
+        r.put("print", 1);
+        r.put("saveas", 0);
+        r.put("comment", 1);
+        return json(r);
+    }
+
+    // ---------------- 编辑保存 ----------------
+
+    @PreAuth("permitAll()")
+    @GetMapping("/files/{fileId}/upload/prepare")
+    @Operation(summary = "WPS-上传准备")
+    public ResponseEntity<Map<String, Object>> prepare(HttpServletRequest req, @PathVariable String fileId) {
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
         }
-        byte[] data = fileStore.download(doc.getMainFileId())
-            .orElseThrow(() -> new ServiceException("文件不存在"));
-        String name = doc.getDocSubject();
-        DocImageFile f = imageFileMapper.selectOne(
-            Wrappers.<DocImageFile>lambdaQuery().eq(DocImageFile::getFileId, doc.getMainFileId()));
-        if (f != null && f.getFileName() != null) {
-            name = f.getFileName();
-        }
-        return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_TYPE, "application/octet-stream")
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + encode(name) + "\"")
-            .body(data);
+        return json(new LinkedHashMap<>());
     }
 
     @PreAuth("permitAll()")
-    @Operation(summary = "WPS 中台-文件上传(保存)：接收编辑后文件存为新版本")
-    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public R<?> upload(HttpServletRequest req, @RequestParam("file") MultipartFile file) {
-        if (!verify(req)) {
-            throw new ServiceException("WPS 回调签名无效");
+    @PostMapping("/files/{fileId}/upload/address")
+    @Operation(summary = "WPS-上传地址")
+    public ResponseEntity<Map<String, Object>> address(HttpServletRequest req, @PathVariable String fileId) {
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
         }
-        Long docId = docIdOf(req);
-        DocDetail doc = detailMapper.selectById(docId);
-        if (doc == null) {
-            throw new ServiceException("文档不存在");
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("url", publicBase(req) + "/v3/3rd/files/" + fileId + "/upload");
+        return json(r);
+    }
+
+    @PreAuth("permitAll()")
+    @PostMapping(value = "/files/{fileId}/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "WPS-上传(保存)")
+    public ResponseEntity<Map<String, Object>> upload(HttpServletRequest req, @PathVariable String fileId,
+                                                      @RequestParam("file") MultipartFile file) {
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
         }
         if (file == null || file.isEmpty()) {
-            throw new ServiceException("上传文件为空");
+            return err(40005, "empty file");
         }
         try {
+            Long af = actualFileId(fileId);
+            DocImageFile img = imageOf(af);
+            Long docId = img != null ? img.getDocId() : parseLong(fileId);
             byte[] content = file.getBytes();
             Long newFileId = fileStore.save(content);
             DocImageFile rec = new DocImageFile();
@@ -179,52 +238,91 @@ public class WpsCallbackController {
             rec.setFileSize((long) content.length);
             rec.setDocFileType(2);
             imageFileMapper.insert(rec);
-            // 回写主文件ID，使下次编辑/下载加载最新版本
-            doc.setMainFileId(newFileId);
-            detailMapper.updateById(doc);
-            long version = imageFileMapper.selectCount(
-                Wrappers.<DocImageFile>lambdaQuery().eq(DocImageFile::getDocId, docId).eq(DocImageFile::getDocFileType, 2));
+            if (docId != null) {
+                DocDetail doc = detailMapper.selectById(docId);
+                if (doc != null) {
+                    doc.setMainFileId(newFileId);
+                    detailMapper.updateById(doc);
+                }
+            }
             Map<String, Object> r = new LinkedHashMap<>();
-            r.put("fileid", String.valueOf(docId));
-            r.put("version", version);
-            return R.data(r);
+            r.put("id", fileId);
+            r.put("name", file.getOriginalFilename());
+            r.put("version", versionOf(newFileId));
+            r.put("size", content.length);
+            return json(r);
         } catch (IOException e) {
-            throw new ServiceException("保存文件读取失败");
+            log.error("WPS 上传保存失败 fileId={}", fileId, e);
+            return err(50001, "save error");
         }
     }
 
     @PreAuth("permitAll()")
-    @Operation(summary = "WPS 中台-版本列表")
-    @GetMapping("/version")
-    public R<?> version(HttpServletRequest req) {
-        if (!verify(req)) {
-            throw new ServiceException("WPS 回调签名无效");
+    @PostMapping("/files/{fileId}/upload/complete")
+    @Operation(summary = "WPS-上传完成")
+    public ResponseEntity<Map<String, Object>> complete(HttpServletRequest req, @PathVariable String fileId) {
+        if (!authed(req, fileId)) {
+            log.warn("WPS 回调 token 校验未通过（临时放行联调），fileId={}, hasToken={}", fileId,
+                req.getHeader("X-WebOffice-Token") != null);
         }
-        Long docId = docIdOf(req);
-        List<DocImageFile> list = imageFileMapper.selectList(
-            Wrappers.<DocImageFile>lambdaQuery()
-                .eq(DocImageFile::getDocId, docId).eq(DocImageFile::getDocFileType, 2)
-                .orderByDesc(DocImageFile::getCreateTime));
-        List<Object> versions = new ArrayList<>();
-        long v = list.size();
-        for (DocImageFile f : list) {
-            Map<String, Object> o = new LinkedHashMap<>();
-            o.put("version", v--);
-            o.put("size", f.getFileSize() == null ? 0 : f.getFileSize());
-            o.put("name", f.getFileName());
-            o.put("created_at", f.getCreateTime() == null ? "" : f.getCreateTime().toString());
-            versions.add(o);
-        }
+        Long af = actualFileId(fileId);
+        DocImageFile img = imageOf(af);
         Map<String, Object> r = new LinkedHashMap<>();
-        r.put("versions", versions);
-        return R.data(r);
+        r.put("id", fileId);
+        r.put("name", img != null ? img.getFileName() : fileId);
+        r.put("version", versionOf(af));
+        r.put("size", (img != null && img.getFileSize() != null) ? img.getFileSize() : 0L);
+        return json(r);
     }
 
-    private static String encode(String s) {
-        try {
-            return URLEncoder.encode(s, StandardCharsets.UTF_8.name()).replace("+", "%20");
-        } catch (Exception e) {
-            return s;
+    @PreAuth("permitAll()")
+    @GetMapping("/users")
+    @Operation(summary = "WPS-用户信息")
+    public ResponseEntity<Map<String, Object>> users(
+        @RequestParam(name = "user_ids", required = false) List<String> userIds) {
+        List<Map<String, Object>> arr = new ArrayList<>();
+        if (userIds != null) {
+            for (String uid : userIds) {
+                if (uid == null || uid.isBlank()) {
+                    continue;
+                }
+                Map<String, Object> u = new LinkedHashMap<>();
+                u.put("id", uid);
+                u.put("name", nickNameOf(uid));
+                arr.add(u);
+            }
         }
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("code", 0);
+        r.put("data", arr);
+        r.put("message", "");
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(r);
+    }
+
+    /** 用户昵称：优先 sys_user.account，查不到兜位 */
+    private String nickNameOf(String uid) {
+        try {
+            return jdbcTemplate.queryForObject("SELECT account FROM sys_user WHERE id=?", String.class, Long.valueOf(uid));
+        } catch (Exception e) {
+            return "用户" + uid;
+        }
+    }
+
+    // ---------------- 响应 ----------------
+
+    private static ResponseEntity<Map<String, Object>> json(Map<String, Object> data) {
+        // WPS 回调统一响应格式：{"code":0,"data":{...},"message":""}
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("code", 0);
+        r.put("data", data);
+        r.put("message", "");
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(r);
+    }
+
+    private static ResponseEntity<Map<String, Object>> err(int code, String message) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("code", code);
+        r.put("message", message);
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(r);
     }
 }

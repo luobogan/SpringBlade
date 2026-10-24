@@ -64,6 +64,8 @@ public class WpsDocOnlineEditor implements IDocOnlineEditor {
         eff.setAppSecret(appSecret == null ? src.getAppSecret() : appSecret);
         String jssdkUrl = settingService.get("wps_jssdk_url", null);
         eff.setJssdkUrl(jssdkUrl == null ? src.getJssdkUrl() : jssdkUrl);
+        String publicBase = settingService.get("wps_public_base", null);
+        eff.setPublicBase(publicBase == null ? src.getPublicBase() : publicBase);
         return eff;
     }
 
@@ -109,7 +111,7 @@ public class WpsDocOnlineEditor implements IDocOnlineEditor {
         cfg.setWpsPermission(permission);
         cfg.setWpsUserId(uid);
         cfg.setWpsTimestamp(ts);
-        cfg.setWpsSignature(WpsSign.clientSign(wps.getAppId(), String.valueOf(docId), ts, permission, fileName, uid, wps.getAppSecret()));
+        cfg.setWpsToken(signer.sign("wps:" + docId));
         cfg.setWpsJsSdkUrl(wps.getJssdkUrl());
         // 我方自有加载/保存（jssdk 之外的回退/自有保存回调，签名 token 鉴权）
         if (fileId != null) {
@@ -168,7 +170,7 @@ public class WpsDocOnlineEditor implements IDocOnlineEditor {
         cfg.setWpsPermission(permission);
         cfg.setWpsUserId(uid);
         cfg.setWpsTimestamp(ts);
-        cfg.setWpsSignature(WpsSign.clientSign(wps.getAppId(), String.valueOf(fileId), ts, permission, fileName, uid, wps.getAppSecret()));
+        cfg.setWpsToken(signer.sign("wps:" + fileId));
         cfg.setWpsJsSdkUrl(wps.getJssdkUrl());
         String contentUrl = "/doc/file/" + fileId + "/content?token=" + signer.sign(String.valueOf(fileId));
         cfg.setDocumentUrl(contentUrl);

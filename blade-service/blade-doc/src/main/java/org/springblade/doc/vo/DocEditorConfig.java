@@ -80,6 +80,9 @@ public class DocEditorConfig {
     /** kdocs jssdk 脚本地址 */
     private String wpsJsSdkUrl;
 
+    /** 业务 token（透传 WebOfficeSDK.init，回调经 X-WebOffice-Token 带回鉴权） */
+    private String wpsToken;
+
     // ───────────── PDF.js 专属 ─────────────
     /** 是否为只读预览（pdfjs 为 true） */
     private Boolean preview;
