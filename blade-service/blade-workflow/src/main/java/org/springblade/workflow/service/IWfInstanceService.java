@@ -7,6 +7,8 @@ import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.vo.ApprovalLogVO;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
+import org.springblade.workflow.vo.MonitorInstanceQuery;
+import org.springblade.workflow.vo.MonitorBatchResult;
 import org.springblade.workflow.vo.WfInstanceResourceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springblade.workflow.vo.WfProgressView;
@@ -251,5 +253,61 @@ public interface IWfInstanceService {
      * @param opinion 意见/说明
      */
     void recordLog(Long instId, String nodeKey, Long operator, String logType, String opinion);
+
+    /**
+     * 流程监控：管理员视角的全租户实例分页检索（复用 InstanceView + actRead() 读源切换）。
+     *
+     * <p>筛选维度见 {@link MonitorInstanceQuery}；超时走 wf_task 过期子查、异常走 L3 自检列。
+     * 返回 InstanceVO（已含 defName / L3 三列 / isTest，并补 overdue / anomalyTags）。</p>
+     */
+    IPage<InstanceVO> monitorList(Long current, Long pageSize, MonitorInstanceQuery q);
+
+    /**
+     * 强制归档(强制办结)：复用 {@code WfWriteHelper.terminate(inst, APPROVED, ...)}，
+     * 由引擎事件反写终态并关闭残留待办，保留历史。
+     */
+    boolean forceArchive(Long instId, String opinion);
+
+    /**
+     * 强制删除实例：先逻辑删 wf_instance / wf_task / wf_approval_log（使方案C 投影器回写 no-op），
+     * 再清引擎运行态 + 历史（ACT_HI_*）。
+     */
+    boolean forceDelete(Long instId);
+
+    /**
+     * 强制收回(收回重填)：默认原地回退到「创建/申请人填单」节点（方案 A）。
+     *
+     * @see #forceRecallTo(Long, String, String)
+     */
+    boolean forceRecall(Long instId, String opinion);
+
+    /**
+     * 强制收回（方案A 原地回退）：把引擎 token 从当前节点移回目标节点（缺省=创建节点），
+     * 实例不终止、ID 不变、业务数据与流转历史全部保留，并为目标节点重建待办
+     * （创建节点办理人=发起人，即「收回重填」）。
+     *
+     * <p>区别于方案B（terminate CANCELED + 发起人重新发起）：历史连续、无需重发。
+     * 引擎侧走与 {@code WfTaskServiceImpl#reject} 同一条链路：moveActivity + advance(REJECT)。</p>
+     *
+     * @param instId        实例ID
+     * @param targetNodeKey 收回目标节点Key；为空则取流程的「创建」节点
+     * @param opinion       办理意见
+     */
+    boolean forceRecallTo(Long instId, String targetNodeKey, String opinion);
+
+    /**
+     * 批量监管动作（stop / resume / archive / recall / delete），逐条隔离，返回成功/失败汇总。
+     */
+    MonitorBatchResult batchMonitorAction(List<Long> ids, String action);
+
+    /**
+     * 流程监控「异常」聚合计数（异常 Tab 数据源）。
+     *
+     * <p>按实例维度统计：超时（存在已过期未办任务）、L3 自检三类异常、测试态实例数量。
+     * 引擎对账差异（ledger-shadow，内存计数）由控制器层合并，避免服务层依赖投影器。</p>
+     *
+     * @return key → 计数：overdue / businessRowMissing / requestIdUnbound / deploymentDrift / testInstances
+     */
+    Map<String, Object> monitorAnomalySummary();
 
 }

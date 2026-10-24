@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.log.exception.ServiceException;
+import org.springblade.workflow.odoc.entity.WfOdocDict;
 import org.springblade.workflow.odoc.entity.WfOdocNumber;
+import org.springblade.workflow.odoc.mapper.WfOdocDictMapper;
 import org.springblade.workflow.odoc.mapper.WfOdocNumberMapper;
 import org.springblade.workflow.odoc.service.IWfOdocNumberReservedService;
 import org.springblade.workflow.odoc.service.IWfOdocNumberService;
@@ -28,6 +30,7 @@ public class WfOdocNumberServiceImpl implements IWfOdocNumberService {
 
 	private final WfOdocNumberMapper numberMapper;
 	private final IWfOdocNumberReservedService reservedService;
+	private final WfOdocDictMapper dictMapper;
 
 	@Override
 	@Transactional(rollbackFor = Exception.class)
@@ -145,8 +148,9 @@ public class WfOdocNumberServiceImpl implements IWfOdocNumberService {
 	/** 格式化：prefix + [年份] + serialPre + 补零流水 */
 	private String format(WfOdocNumber rule, int serial) {
 		StringBuilder sb = new StringBuilder();
-		if (notBlank(rule.getPrefix())) {
-			sb.append(rule.getPrefix());
+		String prefix = resolvePrefix(rule);
+		if (notBlank(prefix)) {
+			sb.append(prefix);
 		}
 		if (Objects.equals(rule.getShowYear(), 1)) {
 			sb.append(rule.getYearPre() == null ? "" : rule.getYearPre());
@@ -165,6 +169,22 @@ public class WfOdocNumberServiceImpl implements IWfOdocNumberService {
 			return String.format("%0" + digit + "d", serial);
 		}
 		return String.valueOf(serial);
+	}
+
+	/**
+	 * 解析文号代字：优先用 {@code orgAbbrId} 关联的机构代字字典（`wf_odoc_dict.org_abbr` 的 name），
+	 * 实现「机构代字独立建模」——代字由字典维护而非散落于规则自由文本；未关联或字典缺失时
+	 * 回退到规则自身的 {@code prefix} 自由文本，保证历史规则向后兼容。
+	 */
+	private String resolvePrefix(WfOdocNumber rule) {
+		Long orgAbbrId = rule.getOrgAbbrId();
+		if (orgAbbrId != null) {
+			WfOdocDict abbr = dictMapper.selectById(orgAbbrId);
+			if (abbr != null && notBlank(abbr.getName())) {
+				return abbr.getName();
+			}
+		}
+		return rule.getPrefix();
 	}
 
 	private boolean notBlank(String s) {

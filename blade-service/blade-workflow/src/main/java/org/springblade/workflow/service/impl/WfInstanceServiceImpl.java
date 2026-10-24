@@ -3,8 +3,13 @@ package org.springblade.workflow.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.util.Set;
+import java.util.HashSet;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -39,6 +44,7 @@ import org.springblade.workflow.entity.WfProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.history.HistoricActivityInstance;
 import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.HistoryService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.ActHiProcinst;
@@ -71,7 +77,12 @@ import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.config.WfRetirementProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springblade.workflow.service.IWfInstanceService;
+import org.springblade.workflow.service.IWfMonitorScopeService;
 import org.springblade.workflow.vo.ApprovalLogVO;
+import org.springblade.workflow.vo.MonitorInstanceQuery;
+import org.springblade.workflow.vo.MonitorBatchResult;
+import org.springblade.workflow.vo.MonitorScopeView;
+import org.springblade.system.user.feign.IUserClient;
 import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.TaskVO;
@@ -182,6 +193,18 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Lazy
     @Autowired
     private IWfTimeoutService timeoutService;
+
+    /** Flowable 历史服务：强制删除实例时清 ACT_HI_*（运行态由 processService 清） */
+    @Autowired
+    private HistoryService historyService;
+
+    /** 用户中心：监控列表按发起人ID换真实姓名（Feign 失败降级为空，不阻塞列表） */
+    @Autowired
+    private IUserClient userClient;
+
+    /** 监控委托范围：把「运维级全租户可见」按部门/分部/人员委托给指定用户（设计文档 §1.3） */
+    @Autowired
+    private IWfMonitorScopeService monitorScopeService;
 
     /** 或签：任一人处理即推进引擎 */
     private static final int SIGN_ANY = 0;
@@ -1663,6 +1686,509 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return terminate(instId, WfInstance.STATUS_CANCELED, opinion, "撤销");
     }
 
+    // ------------------------------------------------------------------ 流程监控（管理员视角）
+
+    /**
+     * 流程监控列表：管理员全租户检索。
+     *
+     * <p>复用 {@link #picker} 同构的读源切换（{@link #actRead()}），默认读 {@code wf_instance} 业务镜像
+     * （列齐备，可直接筛 defId/starter/status/时间/L3 异常）；act 读源走 {@code ACT_HI_PROCINST}。
+     * 超时与异常维度分别经 {@code wf_task} 过期子查与 L3 自检列过滤，结果 {@link InstanceVO} 已带
+     * {@code defName}/L3 三列/{@code isTest}，并补 {@code overdue}/{@code anomalyTags}。</p>
+     */
+    @Override
+    public IPage<InstanceVO> monitorList(Long current, Long pageSize, MonitorInstanceQuery condition) {
+        long cur = (current == null || current < 1) ? 1 : current;
+        long size = (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200);
+        final MonitorInstanceQuery q = (condition == null) ? new MonitorInstanceQuery() : condition;
+
+        // §1.3 委托监控：管理员看全租户；委托人（被授权用户）只看授权范围；无委托的普通用户返回空。
+        // 数据范围由 wf_monitor_scope 解析得到（发起人集合 + 流程定义集合），服务层兜底，避免越权。
+        Long me = WfAuthUtil.userId();
+        boolean admin = WfAuthUtil.isAdmin();
+        MonitorScopeView scope = admin ? null : monitorScopeService.resolve(me);
+        if (!admin && (scope == null || !scope.isHasAny())) {
+            return new Page<InstanceVO>(cur, size);
+        }
+
+        if (actRead()) {
+            // 读源=act：与 picker 同构，仅叠加可表达的筛选；defName/starter/currentNodeKey/anomaly 在 act 模式下做后置过滤
+            Page<ActHiProcinst> page = new Page<>(cur, size);
+            List<String> statusCodes = (q.getStatuses() != null && !q.getStatuses().isEmpty())
+                ? q.getStatuses().stream().map(ActHiProcinst::statusCodeName).collect(Collectors.toList()) : null;
+            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, Wrappers.<ActHiProcinst>lambdaQuery()
+                .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+                .eq(q.getIsTest() != null, ActHiProcinst::getIsTest, q.getIsTest())
+                .in(statusCodes != null && !statusCodes.isEmpty(), ActHiProcinst::getBusinessStatus, statusCodes)
+                .like(q.getKeyword() != null && !q.getKeyword().isBlank(), ActHiProcinst::getTitle, q.getKeyword())
+                .ge(q.getBeginTime() != null, ActHiProcinst::getStartTime, q.getBeginTime())
+                .le(q.getEndTime() != null, ActHiProcinst::getStartTime, q.getEndTime())
+                .orderByDesc(ActHiProcinst::getStartTime));
+            IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
+            postFilterMonitor(voPage, q);
+            enrichMonitor(voPage);
+            if (q.getOverdue() != null || (q.getAnomalyTypes() != null && !q.getAnomalyTypes().isEmpty())) {
+                voPage.setRecords(voPage.getRecords().stream()
+                    .filter(v -> (q.getOverdue() == null || Boolean.TRUE.equals(v.getOverdue()))
+                        && (q.getAnomalyTypes() == null || !Collections.disjoint(anomalyCodes(v), q.getAnomalyTypes())))
+                    .collect(Collectors.toList()));
+                voPage.setTotal(voPage.getRecords().size());
+            }
+            // 委托范围后置裁剪（act 读源无法在 SQL 内 join 跨库用户表，故在此按范围过滤）
+            if (scope != null) {
+                voPage.setRecords(voPage.getRecords().stream()
+                    .filter(v -> (scope.isAllDefs() || (v.getDefId() != null && scope.getDefIds().contains(v.getDefId())))
+                        && v.getStarter() != null && scope.getStarterIds().contains(v.getStarter()))
+                    .collect(Collectors.toList()));
+                voPage.setTotal((long) voPage.getRecords().size());
+            }
+            return voPage;
+        }
+
+        // 读源=wf（默认）：直接查 wf_instance，所有筛选列齐备
+        List<Long> idRestriction = computeMonitorIdRestriction(q);
+        if (idRestriction != null && idRestriction.isEmpty()) {
+            return new Page<InstanceVO>(cur, size);
+        }
+        Long defIdFilter = resolveMonitorDefId(q);
+        if (defIdFilter != null && defIdFilter < 0) {
+            return new Page<InstanceVO>(cur, size);
+        }
+        LambdaQueryWrapper<WfInstance> wq = Wrappers.<WfInstance>lambdaQuery()
+            .eq(q.getIsTest() != null, WfInstance::getIsTest, q.getIsTest())
+            .eq(q.getCurrentNodeKey() != null && !q.getCurrentNodeKey().isBlank(), WfInstance::getCurrentNodeKey, q.getCurrentNodeKey())
+            .in(q.getStatuses() != null && !q.getStatuses().isEmpty(), WfInstance::getStatus, q.getStatuses())
+            .like(q.getKeyword() != null && !q.getKeyword().isBlank(), WfInstance::getTitle, q.getKeyword())
+            .eq(q.getUrgent() != null, WfInstance::getUrgency, q.getUrgent())
+            .ge(q.getBeginTime() != null, WfInstance::getStartTime, q.getBeginTime())
+            .le(q.getEndTime() != null, WfInstance::getStartTime, q.getEndTime())
+            .in(idRestriction != null, WfInstance::getId, idRestriction);
+        if (scope != null) {
+            // 委托人：范围覆盖所有定义则不限制 defId；否则限定到授权定义集合；并限定发起人集合
+            if (!scope.isAllDefs()) {
+                wq.in(WfInstance::getDefId, scope.getDefIds());
+            }
+            wq.in(WfInstance::getStarter, scope.getStarterIds());
+        } else {
+            wq.eq(defIdFilter != null, WfInstance::getDefId, defIdFilter)
+                .eq(q.getStarter() != null, WfInstance::getStarter, q.getStarter());
+        }
+        Page<WfInstance> page = new Page<>(cur, size);
+        IPage<WfInstance> result = instanceMapper.selectPage(page, wq);
+        IPage<InstanceVO> voPage = result.convert(this::toInstanceVO);
+        enrichMonitor(voPage);
+        return voPage;
+    }
+
+    /** 计算「超时 + 异常」交叠后的实例ID约束（用于 wf 读源主查询）；无约束返回 null */
+    private List<Long> computeMonitorIdRestriction(MonitorInstanceQuery q) {
+        List<Long> result = null;
+        if (q.getAnomalyTypes() != null && !q.getAnomalyTypes().isEmpty()) {
+            List<Integer> at = q.getAnomalyTypes();
+            List<Long> ids = instanceMapper.selectObjs(Wrappers.<WfInstance>lambdaQuery()
+                .select(WfInstance::getId)
+                .and(w -> {
+                    boolean first = true;
+                    if (at.contains(1)) { w.eq(WfInstance::getBusinessRowReady, 0); first = false; }
+                    if (at.contains(2)) { if (!first) { w.or(); } w.eq(WfInstance::getRequestIdBound, 0); first = false; }
+                    if (at.contains(3)) { if (!first) { w.or(); } w.eq(WfInstance::getEngineDeploymentMatched, 0); }
+                })).stream().map(this::toLong).collect(Collectors.toList());
+            result = intersectIds(result, ids);
+        }
+        if (Boolean.TRUE.equals(q.getOverdue())) {
+            List<Long> ids = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+                .select(WfTask::getInstId)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .lt(WfTask::getDueTime, new Date())
+                .groupBy(WfTask::getInstId)).stream().map(this::toLong).collect(Collectors.toList());
+            result = intersectIds(result, ids);
+        }
+        return result;
+    }
+
+    /**
+     * MyBatis-Plus {@code selectObjs} 对 MySQL BIGINT 常返回 {@link java.math.BigInteger}
+     * （直接强转 Long 会抛 ClassCastException），统一按字符串解析为 Long。
+     */
+    private Long toLong(Object o) {
+        return o == null ? null : Long.valueOf(o.toString());
+    }
+
+    private List<Long> intersectIds(List<Long> a, List<Long> b) {
+        if (a == null) {
+            return b;
+        }
+        if (b == null) {
+            return a;
+        }
+        Set<Long> set = new HashSet<>(b);
+        return a.stream().filter(set::contains).collect(Collectors.toList());
+    }
+
+    /** 流程定义名称模糊 → 定位 defId（取首个匹配；定义名通常唯一） */
+    private Long resolveMonitorDefId(MonitorInstanceQuery q) {
+        if (q.getDefName() != null && !q.getDefName().isBlank()) {
+            List<Long> ids = defMapper.selectObjs(Wrappers.<WfProcessDefinition>lambdaQuery()
+                .select(WfProcessDefinition::getId)
+                .like(WfProcessDefinition::getName, q.getDefName()))
+                .stream().map(this::toLong).collect(Collectors.toList());
+            if (ids.isEmpty()) {
+                return -1L;
+            }
+            if (q.getDefId() != null) {
+                return ids.contains(q.getDefId()) ? q.getDefId() : -1L;
+            }
+            return ids.get(0);
+        }
+        return q.getDefId();
+    }
+
+    /** 批量补 overdue（wf_task 过期）与 anomalyTags（L3 自检列） */
+    private void enrichMonitor(IPage<InstanceVO> voPage) {
+        List<InstanceVO> records = voPage.getRecords();
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        List<Long> ids = records.stream().map(InstanceVO::getId).collect(Collectors.toList());
+        for (InstanceVO vo : records) {
+            List<String> tags = new ArrayList<>();
+            if (vo.getBusinessRowReady() != null && vo.getBusinessRowReady() == 0) {
+                tags.add("业务行缺失");
+            }
+            if (vo.getRequestIdBound() != null && vo.getRequestIdBound() == 0) {
+                tags.add("requestId未回填");
+            }
+            if (vo.getEngineDeploymentMatched() != null && vo.getEngineDeploymentMatched() == 0) {
+                tags.add("部署漂移");
+            }
+            vo.setAnomalyTags(tags.isEmpty() ? null : tags);
+        }
+        // 发起人姓名：页内按ID去重后逐个查（与「谁批的」同源；失败降级为空，不阻塞列表）
+        Map<Long, String> nameCache = new LinkedHashMap<>();
+        for (InstanceVO vo : records) {
+            Long starter = vo.getStarter();
+            if (starter == null || starter <= 0) {
+                continue;
+            }
+            if (!nameCache.containsKey(starter)) {
+                nameCache.put(starter, fetchUserName(starter));
+            }
+            vo.setStarterName(nameCache.get(starter));
+        }
+        List<Long> overdueIds = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+            .select(WfTask::getInstId)
+            .in(WfTask::getInstId, ids)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .lt(WfTask::getDueTime, new Date())
+            .groupBy(WfTask::getInstId)).stream().map(this::toLong).collect(Collectors.toList());
+        Set<Long> ov = new HashSet<>(overdueIds);
+        for (InstanceVO vo : records) {
+            vo.setOverdue(ov.contains(vo.getId()));
+        }
+        // 当前待办任务ID：供任务级监管动作（转办 /task/{id}/forward、催办 /task/{id}/urge）使用。
+        // 会签等多待办场景取最小 ID 的一条，保证「有唯一可操作目标」。
+        Map<Long, Long> taskIdMap = new LinkedHashMap<>();
+        List<WfTask> pending = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .select(WfTask::getId, WfTask::getInstId)
+            .in(WfTask::getInstId, ids)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .orderByAsc(WfTask::getId));
+        for (WfTask t : pending) {
+            if (t.getInstId() != null && !taskIdMap.containsKey(t.getInstId())) {
+                taskIdMap.put(t.getInstId(), t.getId());
+            }
+        }
+        for (InstanceVO vo : records) {
+            vo.setTaskId(taskIdMap.get(vo.getId()));
+        }
+    }
+
+    /** 按用户ID换真实姓名（失败降级为 null，不抛异常阻塞列表） */
+    private String fetchUserName(Long id) {
+        try {
+            org.springblade.core.tool.api.R<org.springblade.system.user.entity.UserInfo> r = userClient.userInfo(id);
+            if (r != null && r.getData() != null && r.getData().getUser() != null) {
+                String n = r.getData().getUser().getRealName();
+                return n != null ? n : null;
+            }
+        } catch (Exception ignore) {
+            // 单个用户查询失败不影响整列展示
+        }
+        return null;
+    }
+
+    /** act 读源下的后置过滤（defName/starter/currentNodeKey 等非 act 列；超时/异常已在调用方处理） */
+    private void postFilterMonitor(IPage<InstanceVO> voPage, MonitorInstanceQuery q) {
+        if (q.getDefName() == null && q.getStarter() == null && q.getCurrentNodeKey() == null) {
+            return;
+        }
+        List<InstanceVO> kept = voPage.getRecords().stream().filter(v -> {
+            if (q.getDefName() != null && (v.getDefName() == null || !v.getDefName().contains(q.getDefName()))) {
+                return false;
+            }
+            if (q.getStarter() != null && !q.getStarter().equals(v.getStarter())) {
+                return false;
+            }
+            if (q.getCurrentNodeKey() != null && !q.getCurrentNodeKey().equals(v.getCurrentNodeKey())) {
+                return false;
+            }
+            return true;
+        }).collect(Collectors.toList());
+        voPage.setRecords(kept);
+        voPage.setTotal(kept.size());
+    }
+
+    /** L3 异常类型集合（与 anomalyTypes 编码 1/2/3 对应） */
+    private List<Integer> anomalyCodes(InstanceVO v) {
+        List<Integer> codes = new ArrayList<>();
+        if (v.getBusinessRowReady() != null && v.getBusinessRowReady() == 0) {
+            codes.add(1);
+        }
+        if (v.getRequestIdBound() != null && v.getRequestIdBound() == 0) {
+            codes.add(2);
+        }
+        if (v.getEngineDeploymentMatched() != null && v.getEngineDeploymentMatched() == 0) {
+            codes.add(3);
+        }
+        return codes;
+    }
+
+    /**
+     * 强制归档(强制办结)：复用 {@code terminate}(intent=APPROVED)，由引擎事件反写终态并关闭残留待办，保留历史。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean forceArchive(Long instId, String opinion) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        if (WfInstance.STATUS_APPROVED == inst.getStatus()) {
+            return true;
+        }
+        return terminate(instId, WfInstance.STATUS_APPROVED, opinion, "强制归档");
+    }
+
+    /**
+     * 强制删除实例：先逻辑删 wf_instance/wf_task/wf_approval_log（使方案C 投影器回写 no-op），
+     * 再清引擎运行态 + 历史（ACT_HI_*）。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean forceDelete(Long instId) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            return false;
+        }
+        // ① 先逻辑删业务行（@TableLogic：投影器 findInstance 自动过滤 → 回写 no-op）
+        instanceMapper.deleteById(instId);
+        taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, instId));
+        logMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, instId));
+        // ② 清引擎运行态；③ 清历史
+        if (inst.getEngineInstId() != null) {
+            processService.deleteProcessInstance(inst.getEngineInstId(), "强制删除");
+            try {
+                historyService.deleteHistoricProcessInstance(inst.getEngineInstId());
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 删除历史实例失败（可能已无）. engineInstId={}", inst.getEngineInstId(), e);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 强制收回(收回重填)：默认原地回退到「创建/申请人填单」节点（方案 A）。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean forceRecall(Long instId, String opinion) {
+        return forceRecallTo(instId, null, opinion);
+    }
+
+    /**
+     * 强制收回（方案A 原地回退）：把引擎 token 从当前节点移回目标节点（缺省=创建节点），
+     * 实例保持运行、ID 与流转历史连续，为目标节点重建待办（创建节点办理人=发起人）。
+     *
+     * <p>引擎侧与 {@code WfTaskServiceImpl#reject} 同一链路：先关闭当前未办任务并留痕，
+     * 再 moveActivity 把 token 移回目标节点，最后 advance(REJECT) 按引擎当前活动任务重建待办。
+     * 创建节点在新模型下已是 UserTask（nodeType=0），引擎可停在等待态并派发真实待办。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean forceRecallTo(Long instId, String targetNodeKey, String opinion) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        if (inst.getStatus() != WfInstance.STATUS_RUNNING && inst.getStatus() != WfInstance.STATUS_SUSPENDED) {
+            throw new ServiceException("仅运行中或暂停中的实例可强制收回");
+        }
+        if (inst.getEngineInstId() == null) {
+            throw new ServiceException("实例无引擎运行态，无法原地回退");
+        }
+        // 暂停态先恢复运行态：引擎挂起时 moveActivity 无法推进
+        if (inst.getStatus() == WfInstance.STATUS_SUSPENDED) {
+            writeHelper.activate(inst);
+        }
+
+        String currentNodeKey = resolveCurrentNodeKey(inst);
+        String target = (targetNodeKey == null || targetNodeKey.isBlank())
+            ? resolveCreateNodeKey(inst.getDefId()) : targetNodeKey;
+        if (target == null || target.isBlank()) {
+            throw new ServiceException("未找到收回目标节点：流程缺少「创建」节点且未指定 targetNodeKey");
+        }
+        if (target.equals(currentNodeKey)) {
+            throw new ServiceException("目标节点与当前节点相同，无需收回");
+        }
+
+        Long admin = WfAuthUtil.userId();
+        // ① 关闭当前节点未办任务（收回即强制办结当前待办），同步 ACT_HI_TASKINST
+        Date now = new Date();
+        List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+        for (WfTask t : todos) {
+            t.setStatus(WfTask.STATUS_DONE);
+            t.setOperateTime(now);
+            taskMapper.updateById(t);
+            taskActWriter.sync(t);
+        }
+        // ② 留痕：无独立「收回」日志类型，复用退回(3)，意见前缀标注为管理员强制收回
+        recordLog(instId, currentNodeKey, admin, WfApprovalLog.LOG_REJECT,
+            "[强制收回]" + (opinion == null ? "" : opinion));
+        // ③ 引擎回退：token 移回目标节点，实例不终止
+        Map<String, Object> vars = new LinkedHashMap<>();
+        processService.moveActivity(inst.getEngineInstId(), currentNodeKey, target, vars);
+        // ④ 按引擎当前活动任务同步 wf_task / 当前节点，为目标节点生成待办
+        //    REJECT 语义：收回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理」）
+        advance(instId, inst.getStarter() != null ? inst.getStarter() : admin, null, null, AdvanceSrc.REJECT);
+        return true;
+    }
+
+    /**
+     * 流程监控「异常」聚合计数。
+     *
+     * <p>全部走 {@code COUNT}（不拉实体），其中超时按去重后的实例数统计（同一实例多待办只算一次）。
+     * L3 三列用 {@code =0} 精确匹配：{@code NULL} 是「存量未自检」，按 §11.6 不算异常。</p>
+     */
+    @Override
+    public Map<String, Object> monitorAnomalySummary() {
+        // §1.3 委托监控：委托人只看授权范围的异常计数
+        Long me = WfAuthUtil.userId();
+        MonitorScopeView scope = WfAuthUtil.isAdmin() ? null : monitorScopeService.resolve(me);
+        List<Long> scopedIds = null;
+        if (scope != null) {
+            if (!scope.isHasAny()) {
+                Map<String, Object> empty = new LinkedHashMap<>();
+                empty.put("overdue", 0L);
+                empty.put("businessRowMissing", 0L);
+                empty.put("requestIdUnbound", 0L);
+                empty.put("deploymentDrift", 0L);
+                empty.put("testInstances", 0L);
+                return empty;
+            }
+            LambdaQueryWrapper<WfInstance> sq = Wrappers.<WfInstance>lambdaQuery();
+            if (!scope.isAllDefs()) {
+                sq.in(WfInstance::getDefId, scope.getDefIds());
+            }
+            sq.in(WfInstance::getStarter, scope.getStarterIds());
+            scopedIds = instanceMapper.selectObjs(sq.select(WfInstance::getId)).stream()
+                .map(this::toLong).collect(Collectors.toList());
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        long overdue = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+            .select(WfTask::getInstId)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .lt(WfTask::getDueTime, new Date())
+            .in(scopedIds != null, WfTask::getInstId, scopedIds)
+            .groupBy(WfTask::getInstId)).size();
+        data.put("overdue", overdue);
+        data.put("businessRowMissing", instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getBusinessRowReady, 0)
+            .in(scopedIds != null, WfInstance::getId, scopedIds)));
+        data.put("requestIdUnbound", instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getRequestIdBound, 0)
+            .in(scopedIds != null, WfInstance::getId, scopedIds)));
+        data.put("deploymentDrift", instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getEngineDeploymentMatched, 0)
+            .in(scopedIds != null, WfInstance::getId, scopedIds)));
+        data.put("testInstances", instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
+            .eq(WfInstance::getIsTest, 1)
+            .in(scopedIds != null, WfInstance::getId, scopedIds)));
+        return data;
+    }
+
+    /** 当前节点Key：优先取未办任务所在节点，回退实例表当前节点 */
+    private String resolveCurrentNodeKey(WfInstance inst) {
+        List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, inst.getId())
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+        if (!todos.isEmpty() && todos.get(0).getNodeKey() != null && !todos.get(0).getNodeKey().isBlank()) {
+            return todos.get(0).getNodeKey();
+        }
+        return inst.getCurrentNodeKey();
+    }
+
+    /** 创建/申请人填单节点Key（nodeType=0）：「收回重填」的默认落点 */
+    private String resolveCreateNodeKey(Long defId) {
+        List<WfProcessNode> nodes = loadNodes(defId);
+        if (nodes != null) {
+            for (WfProcessNode n : nodes) {
+                if (n.getNodeType() != null && n.getNodeType() == 0) {
+                    return n.getNodeKey();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 批量监管动作（stop/resume/archive/recall/delete）：逐条隔离，返回成功/失败汇总。
+     *
+     * <p>不包整批事务：单条失败仅计入 failed，不影响其余；每条动作自身带事务边界。</p>
+     */
+    @Override
+    public MonitorBatchResult batchMonitorAction(List<Long> ids, String action) {
+        MonitorBatchResult r = new MonitorBatchResult();
+        List<String> success = new ArrayList<>();
+        Map<String, String> failed = new LinkedHashMap<>();
+        if (ids == null || ids.isEmpty()) {
+            r.setSuccess(success);
+            r.setFailed(failed);
+            return r;
+        }
+        for (Long id : ids) {
+            try {
+                switch (action) {
+                    case "stop":
+                        stop(id);
+                        break;
+                    case "resume":
+                        resume(id);
+                        break;
+                    case "archive":
+                        forceArchive(id, "批量强制归档");
+                        break;
+                    case "recall":
+                        forceRecall(id, "批量强制收回");
+                        break;
+                    case "delete":
+                        forceDelete(id);
+                        break;
+                    default:
+                        throw new ServiceException("未知批量动作: " + action);
+                }
+                success.add(String.valueOf(id));
+            } catch (Exception e) {
+                failed.put(String.valueOf(id), e.getMessage());
+            }
+        }
+        r.setSuccess(success);
+        r.setFailed(failed);
+        return r;
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void advance(Long instId) {
@@ -2341,10 +2867,29 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (me == null) {
             return false;
         }
+        // §1.3 委托监控：被授权用户可见其授权范围内的实例（即使非发起/办理人）
+        if (isInMonitorScope(me, inst.getDefId(), inst.getStarter())) {
+            return true;
+        }
         Long count = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, inst.getId())
             .eq(WfTask::getAssignee, me));
         return count != null && count > 0;
+    }
+
+    /** §1.3：当前用户是否被授权监控该实例（按 wf_monitor_scope 的范围判定） */
+    private boolean isInMonitorScope(Long userId, Long defId, Long starter) {
+        if (monitorScopeService == null || userId == null || starter == null) {
+            return false;
+        }
+        MonitorScopeView sv = monitorScopeService.resolve(userId);
+        if (sv == null || !sv.isHasAny()) {
+            return false;
+        }
+        if (!sv.isAllDefs() && (defId == null || !sv.getDefIds().contains(defId))) {
+            return false;
+        }
+        return sv.getStarterIds().contains(starter);
     }
 
     /**

@@ -71,6 +71,17 @@ public class InstanceVO implements Serializable {
     @Schema(description = "紧急程度 0/1/2")
     private Integer urgency;
 
+    /**
+     * 当前待办任务ID（仅流程监控列表填充，其余接口为 null）。
+     *
+     * <p>转办({@code /task/{id}/forward})与催办({@code /task/{id}/urge})是<b>任务级</b>动作，
+     * 必须有当前待办任务ID 才能发起；监控列表管理者视角不暴露任务列表，故在此随实例一并返回。
+     * 多实例/会签存在多个待办时取 ID 最小的一条；无待办则为 null。</p>
+     */
+    @Schema(description = "当前待办任务ID（监控列表填充；转办/催办用）")
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long taskId;
+
     // ------------------------------------------------------------------ L3 运行时自检标志
     //
     // 目的：发起时的「自检结果」随实例一起返回前端（规范 §2-L3），
@@ -106,5 +117,11 @@ public class InstanceVO implements Serializable {
      */
     @Schema(description = "是否测试态 1=流程测试 0=正式")
     private Integer isTest;
+
+    @Schema(description = "是否超时（运行中且存在已过期未办任务）")
+    private Boolean overdue;
+
+    @Schema(description = "异常标记（L3 自检异常类型：业务行缺失 / requestId未回填 / 部署漂移）")
+    private java.util.List<String> anomalyTags;
 
 }
