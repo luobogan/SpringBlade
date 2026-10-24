@@ -3,6 +3,7 @@ package org.springblade.mall.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import org.springblade.core.boot.file.service.IFileStorageService;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tenant.TenantUtil;
 import org.springblade.core.tool.utils.Func;
@@ -71,6 +72,9 @@ public class ProductServiceImpl implements ProductService {
 
     @Autowired
     private ProductAttributeValueMapper productAttributeValueMapper;
+
+    @Autowired
+    private IFileStorageService fileStorageService;
 
     @Autowired
     private ProductParamMapper productParamMapper;
@@ -1019,19 +1023,18 @@ public class ProductServiceImpl implements ProductService {
         // 查询主图完整信息
         if (product.getMainImageId() != null) {
             try {
-                ImageFile imageFile = imageFileMapper.selectById(product.getMainImageId());
-                if (imageFile != null) {
+                fileStorageService.metadata(product.getMainImageId()).ifPresent(meta -> {
                     ProductVO.ImageFileInfo info = new ProductVO.ImageFileInfo();
-                    info.setId(imageFile.getImagefileid());
-                    info.setFilename(imageFile.getImagefilename());
-                    info.setUrl(buildFileDownloadUrl(imageFile.getImagefileid()));
-                    info.setFilesize(imageFile.getFilesize());
-                    info.setFiletype(imageFile.getImagefiletype());
-                    info.setIszip(imageFile.getIszip());
-                    info.setEncrypt(imageFile.getIsaesencrypt() != null && imageFile.getIsaesencrypt() == 1);
+                    info.setId(meta.getId());
+                    info.setFilename(meta.getFilename());
+                    info.setUrl("/api/blade-mall/file/download/" + meta.getId());
+                    info.setFilesize(meta.getFilesize());
+                    info.setFiletype(meta.getContentType());
+                    info.setIszip(meta.isZip() ? 1 : 0);
+                    info.setEncrypt(meta.isEncrypt());
                     productVO.setMainImageInfo(info);
                     productVO.setMainImage(info.getUrl());
-                }
+                });
             } catch (Exception e) {
                 log.warn("查询主图信息失败, productId={}, mainImageId={}: {}",
                     product.getId(), product.getMainImageId(), e.getMessage());

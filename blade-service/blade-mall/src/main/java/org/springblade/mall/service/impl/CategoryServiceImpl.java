@@ -1,6 +1,7 @@
 package org.springblade.mall.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import org.springblade.core.boot.file.service.IFileStorageService;
 import org.springblade.core.tenant.TenantUtil;
 import org.springblade.mall.dto.CategoryDTO;
 import org.springblade.mall.entity.Category;
@@ -34,6 +35,9 @@ public class CategoryServiceImpl implements CategoryService {
 
     @Autowired
     private ImageFileMapper imageFileMapper;
+
+    @Autowired
+    private IFileStorageService fileStorageService;
 
     @Override
     @Transactional
@@ -356,18 +360,17 @@ public class CategoryServiceImpl implements CategoryService {
      */
     private CategoryVO.ImageFileInfo buildImageFileInfo(Long imageFileId) {
         try {
-            ImageFile imageFile = imageFileMapper.selectById(imageFileId);
-            if (imageFile != null) {
+            return fileStorageService.metadata(imageFileId).map(meta -> {
                 CategoryVO.ImageFileInfo info = new CategoryVO.ImageFileInfo();
-                info.setId(imageFile.getImagefileid());
-                info.setFilename(imageFile.getImagefilename());
-                info.setUrl(buildImageUrl(imageFile));
-                info.setFilesize(imageFile.getFilesize());
-                info.setFiletype(imageFile.getImagefiletype());
-                info.setIszip(imageFile.getIszip());
-                info.setEncrypt(imageFile.getIsaesencrypt() != null && imageFile.getIsaesencrypt() == 1);
+                info.setId(meta.getId());
+                info.setFilename(meta.getFilename());
+                info.setUrl("/api/blade-mall/file/download/" + meta.getId());
+                info.setFilesize(meta.getFilesize());
+                info.setFiletype(meta.getContentType());
+                info.setIszip(meta.isZip() ? 1 : 0);
+                info.setEncrypt(meta.isEncrypt());
                 return info;
-            }
+            }).orElse(null);
         } catch (Exception e) {
             log.warn("查询图片信息失败, imageFileId={}: {}", imageFileId, e.getMessage());
         }

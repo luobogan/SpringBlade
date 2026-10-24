@@ -3,6 +3,7 @@ package org.springblade.mall.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
+import org.springblade.core.boot.file.service.IFileStorageService;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.mall.dto.CartDTO;
@@ -42,6 +43,9 @@ public class CartServiceImpl extends ServiceImpl<CartMapper, Cart> implements Ca
 
     @Autowired
     private ImageFileMapper imageFileMapper;
+
+    @Autowired
+    private IFileStorageService fileStorageService;
 
     @Override
     public List<CartVO> getCartList(Long userId) {
@@ -175,10 +179,8 @@ public class CartServiceImpl extends ServiceImpl<CartMapper, Cart> implements Ca
             // 从ImageFile表查询商品主图URL
             if (product.getMainImageId() != null) {
                 try {
-                    ImageFile imageFile = imageFileMapper.selectById(product.getMainImageId());
-                    if (imageFile != null) {
-                        cart.setProductImage("/api/blade-mall/file/download/" + imageFile.getImagefileid());
-                    }
+                    fileStorageService.metadata(product.getMainImageId()).ifPresent(meta ->
+                        cart.setProductImage("/api/blade-mall/file/download/" + meta.getId()));
                 } catch (Exception e) {
                     log.warn("查询商品主图失败, productId={}: {}", product.getId(), e.getMessage());
                 }
