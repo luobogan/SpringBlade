@@ -74,8 +74,9 @@ public class DocAttachmentController {
 
     @PreAuth(DocConstant.HAS_AUTH)
     @PostMapping("/delete")
-    @Operation(summary = "删除附件", description = "canManage 校验")
-    public R<Boolean> delete(@RequestParam Long id) {
-        return R.data(attachmentService.delete(id));
+    @Operation(summary = "删除附件", description = "canManage 校验；physical=false 时只删记录、保留物理文件")
+    public R<Boolean> delete(@RequestParam Long id,
+                             @RequestParam(required = false, defaultValue = "true") boolean physical) {
+        return R.data(attachmentService.delete(id, physical));
     }
 }

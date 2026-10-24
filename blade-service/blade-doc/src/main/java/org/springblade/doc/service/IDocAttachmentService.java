@@ -21,6 +21,11 @@ public interface IDocAttachmentService {
     /** 重命名附件 */
     DocImageFile rename(Long id, String fileName);
 
-    /** 删除附件 */
-    boolean delete(Long id);
+    /**
+     * 删除附件
+     *
+     * @param id       附件记录ID
+     * @param physical 是否同时删除物理文件（true=连统一存储的内容与元数据一起删；false=只删业务记录、保留文件）
+     */
+    boolean delete(Long id, boolean physical);
 }

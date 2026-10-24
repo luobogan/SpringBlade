@@ -121,7 +121,7 @@ public class DocAttachmentServiceImpl implements IDocAttachmentService {
     }
 
     @Override
-    public boolean delete(Long id) {
+    public boolean delete(Long id, boolean physical) {
         DocImageFile f = imageFileMapper.selectById(id);
         if (f == null) {
             throw new ServiceException("附件不存在");
@@ -129,13 +129,25 @@ public class DocAttachmentServiceImpl implements IDocAttachmentService {
         if (!permissionService.canManage(f.getDocId())) {
             throw new ServiceException("无权限删除该文档附件");
         }
-        if (f.getFilePath() != null && !f.getFilePath().isBlank()) {
+        // 1) 统一文件服务：删除实际存储内容 + imagefile 元数据（压缩/加密/分片都由它管理）
+        //    physical=false 时保留物理文件，只解除业务引用（文件可被其它处复用）
+        if (physical && f.getFileId() != null) {
+            try {
+                fileStorageService.delete(f.getFileId());
+                log.info("附件删除(统一文件服务) fileId={}", f.getFileId());
+            } catch (Exception e) {
+                log.warn("统一文件服务删除附件失败 fileId={}", f.getFileId(), e);
+            }
+        }
+        // 2) 改造前落盘的历史本地附件，按原路径清理
+        if (physical && f.getFilePath() != null && !f.getFilePath().isBlank()) {
             try {
                 Files.deleteIfExists(Paths.get(properties.getAttachmentPath(), f.getFilePath()));
             } catch (IOException e) {
                 log.warn("删除附件物理文件失败 path={}", f.getFilePath(), e);
             }
         }
+        log.info("删除附件 id={}, physical={}, fileId={}", id, physical, f.getFileId());
         return imageFileMapper.deleteById(id) > 0;
     }
 }
