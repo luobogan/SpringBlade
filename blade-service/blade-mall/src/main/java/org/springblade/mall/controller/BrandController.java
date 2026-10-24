@@ -5,12 +5,15 @@ import org.springblade.mall.service.BrandService;
 import org.springblade.mall.vo.BrandVO;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.boot.ctrl.BladeController;
+import org.springblade.core.boot.file.service.IFileStorageService;
+import org.springblade.core.boot.file.dto.FileUploadOptions;
+import org.springblade.core.boot.file.vo.FileUploadResult;
+import org.springblade.core.secure.utils.SecureUtil;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springblade.core.launch.constant.AppConstant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +32,9 @@ public class BrandController extends BladeController {
     @Autowired
     private BrandService brandService;
 
+    @Autowired
+    private IFileStorageService fileStorageService;
+
     /**
      * 创建品牌
      * @param brandDTO 品牌信息
@@ -38,33 +44,19 @@ public class BrandController extends BladeController {
     @PostMapping
     public ResponseEntity<R<BrandVO>> createBrand(@Valid BrandDTO brandDTO, @RequestParam(value = "file", required = false) MultipartFile file) {
         try {
-            // 处理文件上传
+            // 处理文件上传（统一走通用文件服务 IFileStorageService：压缩/加密/分片/元数据）
             if (file != null && !file.isEmpty()) {
                 // 检查文件类型
                 String contentType = file.getContentType();
-                if (!contentType.startsWith("image/")) {
+                if (contentType == null || !contentType.startsWith("image/")) {
                     return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
                 }
-
-                // 确保上传目录存在
-                String UPLOAD_DIR = System.getProperty("user.dir") + System.getProperty("file.separator") + "uploads";
-                java.io.File uploadDir = new java.io.File(UPLOAD_DIR);
-                if (!uploadDir.exists()) {
-                    uploadDir.mkdirs();
-                }
-
-                // 生成唯一文件名
-                String originalFilename = file.getOriginalFilename();
-                String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
-                String fileName = java.util.UUID.randomUUID().toString() + extension;
-
-                // 保存文件
-                java.io.File dest = new java.io.File(uploadDir, fileName);
-                file.transferTo(dest);
-
-                // 设置logo路径
-                String fileUrl = "/uploads/" + fileName;
-                brandDTO.setLogo(fileUrl);
+                FileUploadOptions options = new FileUploadOptions()
+                    .dir("brand")
+                    .comefrom("mall")
+                    .tenantId(tenantId());
+                FileUploadResult result = fileStorageService.upload(file, options);
+                brandDTO.setLogo("/api/blade-mall/file/download/" + result.getId());
             }
 
             BrandVO brandVO = brandService.createBrand(brandDTO);
@@ -85,33 +77,19 @@ public class BrandController extends BladeController {
     @PutMapping("/{id}")
     public ResponseEntity<R<BrandVO>> updateBrand(@PathVariable Long id, @Valid BrandDTO brandDTO, @RequestParam(value = "file", required = false) MultipartFile file) {
         try {
-            // 处理文件上传
+            // 处理文件上传（统一走通用文件服务 IFileStorageService：压缩/加密/分片/元数据）
             if (file != null && !file.isEmpty()) {
                 // 检查文件类型
                 String contentType = file.getContentType();
-                if (!contentType.startsWith("image/")) {
+                if (contentType == null || !contentType.startsWith("image/")) {
                     return ResponseEntity.badRequest().body(R.fail("只能上传图片文件"));
                 }
-
-                // 确保上传目录存在
-                String UPLOAD_DIR = System.getProperty("user.dir") + System.getProperty("file.separator") + "uploads";
-                java.io.File uploadDir = new java.io.File(UPLOAD_DIR);
-                if (!uploadDir.exists()) {
-                    uploadDir.mkdirs();
-                }
-
-                // 生成唯一文件名
-                String originalFilename = file.getOriginalFilename();
-                String extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
-                String fileName = java.util.UUID.randomUUID().toString() + extension;
-
-                // 保存文件
-                java.io.File dest = new java.io.File(uploadDir, fileName);
-                file.transferTo(dest);
-
-                // 设置logo路径
-                String fileUrl = "/uploads/" + fileName;
-                brandDTO.setLogo(fileUrl);
+                FileUploadOptions options = new FileUploadOptions()
+                    .dir("brand")
+                    .comefrom("mall")
+                    .tenantId(tenantId());
+                FileUploadResult result = fileStorageService.upload(file, options);
+                brandDTO.setLogo("/api/blade-mall/file/download/" + result.getId());
             }
 
             BrandVO brandVO = brandService.updateBrand(id, brandDTO);
@@ -206,6 +184,18 @@ public class BrandController extends BladeController {
             return ResponseEntity.ok(R.data(brands));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(R.fail(e.getMessage()));
+        }
+    }
+
+    /**
+     * 当前租户ID（取不到时兜底默认租户）
+     */
+    private String tenantId() {
+        try {
+            String tenantId = SecureUtil.getTenantId();
+            return (tenantId == null || tenantId.isBlank()) ? "000000" : tenantId;
+        } catch (Exception e) {
+            return "000000";
         }
     }
 }

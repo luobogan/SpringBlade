@@ -1,7 +1,10 @@
 package org.springblade.workflow.odoc.store;
 
-import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.core.boot.file.service.IFileStorageService;
+import org.springblade.core.boot.file.dto.FileUploadOptions;
+import org.springblade.core.boot.file.vo.FileDownloadContent;
+import org.springblade.core.boot.file.vo.FileUploadResult;
 import org.springblade.workflow.odoc.OdocUrlSigner;
 import org.springblade.workflow.odoc.config.OdocProperties;
 import org.springframework.http.HttpMethod;
@@ -17,11 +20,13 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
- * 本地文件存储（odoc 默认实现）：文件写到 {@code odoc.upload-path} 目录，
- * fileId（雪花）即文件名，免依赖 blade-resource OSS。
+ * 公文文件存储：已统一到通用上传组件（blade-file）
  *
- * <p>与本系统既有附件上传同目录（{@code .../springBlade/uploads}）；后续如需切换到
- * 对象存储，替换本实现即可（接口不变）。</p>
+ * <p>新写入的文件走统一组件（imagefile 元数据 + 统一目录 + 可选 ZIP/AES）；
+ * 读取时若统一元数据查不到，回退到历史本地目录 {@code odoc.upload-path}/{fileId}.ext，
+ * 保证改造前的公文文件仍可访问。</p>
+ *
+ * @author Blade
  */
 @Slf4j
 @Component
@@ -29,11 +34,13 @@ public class LocalOdocFileStore implements IOdocFileStore {
 
 	private final OdocProperties properties;
 	private final OdocUrlSigner signer;
+	private final IFileStorageService fileStorageService;
 	private final RestTemplate restTemplate = new RestTemplate();
 
-	public LocalOdocFileStore(OdocProperties properties, OdocUrlSigner signer) {
+	public LocalOdocFileStore(OdocProperties properties, OdocUrlSigner signer, IFileStorageService fileStorageService) {
 		this.properties = properties;
 		this.signer = signer;
+		this.fileStorageService = fileStorageService;
 	}
 
 	private Path dir() {
@@ -45,17 +52,9 @@ public class LocalOdocFileStore implements IOdocFileStore {
 		if (bytes == null || bytes.length == 0) {
 			throw new IllegalStateException("待写入文件为空: " + fileName);
 		}
-		try {
-			Path d = dir();
-			Files.createDirectories(d);
-			Long fileId = IdWorker.getId();
-			String ext = extOf(fileName);
-			Path target = d.resolve(fileId + (ext.isEmpty() ? "" : "." + ext));
-			Files.write(target, bytes);
-			return fileId;
-		} catch (IOException e) {
-			throw new IllegalStateException("本地写文件失败: " + fileName, e);
-		}
+		FileUploadOptions options = new FileUploadOptions().dir("odoc").comefrom("odoc");
+		FileUploadResult result = fileStorageService.store(bytes, fileName, options);
+		return result.getId();
 	}
 
 	@Override
@@ -70,6 +69,14 @@ public class LocalOdocFileStore implements IOdocFileStore {
 
 	@Override
 	public byte[] download(Long fileId) {
+		try {
+			FileDownloadContent content = fileStorageService.download(fileId);
+			if (content != null && content.getContent() != null) {
+				return content.getContent();
+			}
+		} catch (Exception e) {
+			log.debug("统一文件服务读取失败，回退历史本地文件: fileId={}, msg={}", fileId, e.getMessage());
+		}
 		try {
 			Path d = dir();
 			if (!Files.exists(d)) {
@@ -95,6 +102,14 @@ public class LocalOdocFileStore implements IOdocFileStore {
 	@Override
 	public String resolveFileName(Long fileId) {
 		try {
+			Optional<org.springblade.core.boot.file.store.FileMetadata> metadata = fileStorageService.metadata(fileId);
+			if (metadata.isPresent() && metadata.get().getFilename() != null) {
+				return metadata.get().getFilename();
+			}
+		} catch (Exception e) {
+			log.debug("查询统一文件元数据失败: fileId={}, msg={}", fileId, e.getMessage());
+		}
+		try {
 			Path d = dir();
 			if (!Files.exists(d)) {
 				return "";
@@ -115,11 +130,4 @@ public class LocalOdocFileStore implements IOdocFileStore {
 		return name.equals(id) || name.startsWith(id + ".");
 	}
 
-	private String extOf(String name) {
-		if (name == null) {
-			return "";
-		}
-		int i = name.lastIndexOf('.');
-		return i > 0 ? name.substring(i + 1).toLowerCase() : "";
-	}
 }

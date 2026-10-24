@@ -3,6 +3,9 @@ package org.springblade.doc.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.core.boot.file.service.IFileStorageService;
+import org.springblade.core.boot.file.dto.FileUploadOptions;
+import org.springblade.core.boot.file.vo.FileUploadResult;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.doc.entity.DocImageFile;
 import org.springblade.doc.mapper.DocImageFileMapper;
@@ -14,12 +17,14 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
 /**
  * 附件实现：读写均经权限判定（fail-closed），文件字节走 {@link IDocFileStore}。
+ *
+ * <p>上传已统一到通用上传组件（blade-file）：元数据落 imagefile 表，支持 ZIP 打包 / AES 加密 /
+ * 本地或 OSS 存储，附件通过 fileId 与文档关联。</p>
  */
 @Slf4j
 @Service
@@ -29,6 +34,8 @@ public class DocAttachmentServiceImpl implements IDocAttachmentService {
     private final DocImageFileMapper imageFileMapper;
     private final DocPermissionService permissionService;
     private final IDocFileStore fileStore;
+    private final IFileStorageService fileStorageService;
+    /** 仅用于清理改造前的历史本地附件 */
     private final DocProperties properties;
 
     @Override
@@ -49,32 +56,23 @@ public class DocAttachmentServiceImpl implements IDocAttachmentService {
         if (content == null || content.length == 0) {
             throw new ServiceException("文件内容为空");
         }
-        // 本地附件：落盘到 springBlade/uploads/{docId}/{fileName}（带扩展名），预览走网关白名单静态直链（无需云端）
-        String safeName = sanitize(fileName);
-        Path dir = Paths.get(properties.getAttachmentPath(), String.valueOf(docId));
-        try {
-            Files.createDirectories(dir);
-        } catch (IOException e) {
-            throw new ServiceException("附件目录创建失败");
-        }
-        Path target = dir.resolve(safeName);
-        // 防目录穿越：解析后必须仍在 dir 之内
-        if (!target.normalize().startsWith(dir.normalize())) {
-            throw new ServiceException("非法文件名");
-        }
-        try {
-            Files.write(target, content);
-        } catch (IOException e) {
-            throw new ServiceException("文件写入失败");
-        }
+        // 统一到通用上传组件：元数据落 imagefile 表，支持 ZIP 打包 / AES 加密 / 本地或 OSS 存储。
+        // 附件按 fileId 关联（前端「打开预览」按 fileId 取内容），不再依赖本地静态直链。
+        FileUploadOptions options = new FileUploadOptions()
+            .dir("doc-attachment")
+            .comefrom("doc-attachment");
+        FileUploadResult stored = fileStorageService.store(content,
+            fileName == null || fileName.isBlank() ? "attachment" : fileName, options);
         DocImageFile f = new DocImageFile();
         f.setDocId(docId);
+        f.setFileId(stored.getId());
         f.setFileName(fileName);
-        f.setFileSize((long) content.length);
+        f.setFileSize(stored.getFilesize());
         f.setDocFileType(docFileType == null ? 2 : docFileType);
-        f.setFilePath(docId + "/" + safeName);
+        f.setOssFileUrl("/api/blade-doc/file/download/" + stored.getId());
         imageFileMapper.insert(f);
-        log.info("上传附件(本地) docId={} path={} name={} size={}", docId, f.getFilePath(), fileName, content.length);
+        log.info("上传附件(统一上传组件) docId={} fileId={} name={} size={}",
+            docId, stored.getId(), fileName, stored.getFilesize());
         return f;
     }
 

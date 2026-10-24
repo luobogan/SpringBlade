@@ -58,6 +58,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.annotation.Value;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.springblade.core.boot.file.service.IFileStorageService;
+import org.springblade.core.boot.file.dto.FileUploadOptions;
+import org.springblade.core.boot.file.enums.FileStorageType;
+import org.springblade.core.boot.file.vo.FileUploadResult;
 
 import java.util.HashMap;
 import java.util.List;
@@ -90,6 +94,7 @@ public class WfOdocController {
 	private final IWfOdocSealService sealService;
 	private final IWfOdocFontService fontService;
 	private final IOdocFileStore fileStore;
+	private final IFileStorageService fileStorageService;
 	private final OdocUrlSigner signer;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -213,22 +218,34 @@ public class WfOdocController {
 		return R.data(reservedService.removeReserved(id));
 	}
 
-	// ===================== 文件上传/下载（本地存储） =====================
+	// ===================== 文件上传/下载（统一通用上传组件） =====================
 
 	@PostMapping("/file/upload")
-	@Operation(summary = "上传 odoc 文件", description = "本地存储到 odoc.upload-path，返回 fileId")
-	public R<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
+	@Operation(summary = "上传 odoc 文件", description = "统一上传组件：needZip 打包 ZIP、needEncrypt AES 加密、storage 本地/OSS；返回 fileId")
+	public R<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file,
+											  @RequestParam(value = "needZip", required = false) Boolean needZip,
+											  @RequestParam(value = "needEncrypt", required = false) Boolean needEncrypt,
+											  @RequestParam(value = "storage", required = false) FileStorageType storage) {
 		if (file == null || file.isEmpty()) {
 			throw new ServiceException("文件不能为空");
 		}
 		try {
-			Long fileId = fileStore.store(file.getBytes(), file.getOriginalFilename());
+			FileUploadOptions options = new FileUploadOptions()
+				.dir("odoc")
+				.needZip(needZip)
+				.needEncrypt(needEncrypt)
+				.storage(storage)
+				.comefrom("odoc");
+			FileUploadResult stored = fileStorageService.upload(file, options);
 			Map<String, Object> d = new HashMap<>();
-			d.put("id", fileId);
-			d.put("fileName", file.getOriginalFilename());
+			d.put("id", stored.getId());
+			d.put("fileName", stored.getFilename());
+			d.put("isZip", stored.isZip());
+			d.put("isEncrypt", stored.isEncrypt());
+			d.put("storage", stored.getStorage() == null ? null : stored.getStorage().name());
 			return R.data(d);
-		} catch (java.io.IOException e) {
-			throw new ServiceException("读取上传文件失败: " + e.getMessage());
+		} catch (RuntimeException e) {
+			throw new ServiceException("上传失败: " + e.getMessage());
 		}
 	}
 

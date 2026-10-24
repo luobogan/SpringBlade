@@ -1,0 +1,8 @@
+# 数据源配置
+# blade-resource 引入 MyBatis(Oss 配置表) 后需要数据源；复用 Nacos 公共变量 blade.datasource.dev
+# （定义在 Nacos 的 blade-dev.yaml，指向 jdbc:mysql://localhost:3306/blade）
+spring:
+  datasource:
+    url: ${blade.datasource.dev.url}
+    username: ${blade.datasource.dev.username}
+    password: ${blade.datasource.dev.password}

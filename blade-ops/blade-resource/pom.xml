@@ -22,6 +22,12 @@
             <groupId>org.springblade</groupId>
             <artifactId>blade-core-tool</artifactId>
         </dependency>
+        <!-- 框架自带通用上传/下载组件（blade-core-boot）：
+             统一本地/OSS 存储、ZIP 打包、AES 加密、附件元数据落 imagefile 表，并暴露 /file/** 端点 -->
+        <dependency>
+            <groupId>org.springblade</groupId>
+            <artifactId>blade-core-boot</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springblade</groupId>
             <artifactId>blade-core-cloud</artifactId>

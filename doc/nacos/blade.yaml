@@ -174,6 +174,37 @@ blade:
     save-to-db: true
     # 图片尺寸压缩（仅对图片生效，减小图片分辨率/质量）
     image-compress: true
+    # ------------------------------------------------------------
+    # 通用上传组件（blade-file）配置：所有业务模块统一走此组件
+    #   - 前端可按次指定：needZip（打包ZIP）/ needEncrypt（AES加密）/ storage（local/oss）
+    #   - 未指定时取下方 default-* 默认值
+    #   - 允许前端可选项由 allow-* 控制（关掉后前端传 true 会被拒绝）
+    # ------------------------------------------------------------
+    storage:
+      # 是否启用通用上传组件
+      enabled: true
+      # 默认存储方式：local（本地磁盘）/ oss（对象存储，需配置 oss.name）
+      default-type: local
+      # 默认是否打包为 ZIP（对任意类型附件生效）
+      default-need-zip: false
+      # 默认是否 AES 加密
+      default-need-encrypt: false
+      # 默认是否对图片做尺寸压缩
+      default-image-compress: true
+      # 是否允许前端选择 ZIP 打包
+      allow-zip: true
+      # 是否允许前端选择 AES 加密
+      allow-encrypt: true
+      # 是否允许前端切换存储方式
+      allow-storage-switch: true
+      # 单文件大小上限（字节），默认 100MB
+      max-size: 104857600
+      # 物理根目录（各微服务共用同一目录，便于任意服务按 fileId 下载）
+      root-path: d:/project/springbladeandreact/SpringBlade/uploads
+      # 上传子目录（相对 root-path）
+      upload-dir: ""
+      # 允许的扩展名白名单（空 = 不限制），例：jpg,png,docx,zip
+      allowed-extensions: []
 
   auth:
     #使用 @org.springblade.test.Sm2KeyGenerator 获取,用于国密sm2验签,需和前端保持一致
@@ -309,3 +340,18 @@ third-party:
     client-secret: your_douyin_client_secret  # 请替换为实际的抖音Client Secret
     access-token-url: https://open.douyin.com/oauth/access_token/
     user-info-url: https://open.douyin.com/oauth/userinfo/
+# ------------------------------------------------------------
+# 对象存储（OSS）配置：各服务「通用上传组件」的 OSS 通道
+#   oss.name 决定使用哪种模板：qiniu / aliyun / minio / tencent
+#   name 留空或模板不存在时，通用上传组件自动降级为本地存储（前端不显示 OSS 选项）
+#   密钥请通过配置中心加密项 / 环境变量注入，不要提交到代码库
+# ------------------------------------------------------------
+oss:
+  enable: true
+  name: ${OSS_NAME:}
+  endpoint: ${OSS_ENDPOINT:}
+  access-key: ${OSS_ACCESS_KEY:}
+  secret-key: ${OSS_SECRET_KEY:}
+  bucket-name: ${OSS_BUCKET:blade}
+  domain: ${OSS_DOMAIN:}
+  tenant-mode: false

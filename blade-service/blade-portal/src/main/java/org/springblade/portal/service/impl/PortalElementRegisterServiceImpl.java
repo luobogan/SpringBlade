@@ -6,6 +6,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.jackson.JsonUtil;
+import org.springblade.core.boot.file.service.IFileStorageService;
+import org.springblade.core.boot.file.dto.FileUploadOptions;
+import org.springblade.core.boot.file.vo.FileUploadResult;
 import org.springblade.portal.constant.PortalConstant;
 import org.springblade.portal.entity.PortalElementRegister;
 import org.springblade.portal.log.service.IPortalLogService;
@@ -52,6 +55,7 @@ public class PortalElementRegisterServiceImpl implements IPortalElementRegisterS
 
 	private final PortalElementRegisterMapper registerMapper;
 	private final IPortalLogService logService;
+	private final IFileStorageService fileStorageService;
 
 	@Override
 	@Transactional(rollbackFor = Exception.class)
@@ -115,17 +119,19 @@ public class PortalElementRegisterServiceImpl implements IPortalElementRegisterS
 			return null;
 		}
 
-		// 3) 存档 zip（应用目录 portal/element-register/<租户>/）
-		Path dir = Paths.get(System.getProperty("user.dir"), "portal", "element-register", tenantId);
+		// 3) 存档 zip（统一到通用上传组件：元数据落 imagefile 表，存储方式/压缩/加密可配置）
 		String fileName = elementType + "_" + System.currentTimeMillis() + ".zip";
-		Path target = dir.resolve(fileName);
+		FileUploadResult stored;
 		try {
-			Files.createDirectories(dir);
-			file.transferTo(target.toFile());
+			FileUploadOptions options = new FileUploadOptions()
+				.dir("portal-element")
+				.comefrom("portal-element");
+			stored = fileStorageService.store(file.getBytes(), fileName, options);
 		} catch (IOException e) {
 			log.warn("[portal] 元素注册失败：包存档异常，msg={}", e.getMessage());
 			return null;
 		}
+		Path target = Paths.get(stored.getPath());
 
 		// 4) 落库（软删记录占用唯一键 → 复活原行；否则插入）
 		PortalElementRegister exist = registerMapper.selectOne(new QueryWrapper<PortalElementRegister>()

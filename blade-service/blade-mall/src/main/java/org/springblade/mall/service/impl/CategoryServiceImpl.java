@@ -8,7 +8,6 @@ import org.springblade.mall.entity.ImageFile;
 import org.springblade.mall.mapper.MallCategoryMapper;
 import org.springblade.mall.mapper.ImageFileMapper;
 import org.springblade.mall.service.CategoryService;
-import org.springblade.mall.utils.FileUploadUtil;
 import org.springblade.mall.vo.CategoryVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;

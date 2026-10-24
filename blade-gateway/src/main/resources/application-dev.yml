@@ -14,6 +14,9 @@ blade:
       - /api/blade-portal/login-template/**
       - /blade-portal/pre-login/**
       - /api/blade-portal/pre-login/**
+      # 文档附件本地直链（springBlade/uploads）：免鉴权，供前端原生 iframe 预览
+      - /blade-doc/uploads/**
+      - /api/blade-doc/uploads/**
   #多团队协作服务配置
   loadbalancer:
     #开启配置

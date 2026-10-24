@@ -178,6 +178,11 @@ public class DocOnlineEditorController {
     }
 
     private DocEditorConfig buildPdfConfig(Long docId, Long fileId, String fileName, String ext) {
+        // 防呆：旧链路附件/正文存于本地 ./doc-files（相对 jar，重建即丢）。文件缺失时直接报错，
+        // 避免前端拿到签名 URL 后又 400「文件不存在」的困惑。新附件已落盘 springBlade/uploads 走静态直链。
+        if (fileId != null && !fileStore.exists(fileId)) {
+            throw new ServiceException("文件已失效（本地存储中找不到对应内容，请重新上传附件或重新保存文档正文）");
+        }
         DocEditorConfig cfg = new DocEditorConfig();
         cfg.setDocId(docId);
         cfg.setMode("view");
