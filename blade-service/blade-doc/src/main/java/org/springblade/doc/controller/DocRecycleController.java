@@ -44,6 +44,19 @@ public class DocRecycleController {
         return R.status(recycleService.restore(docId));
     }
 
+    /**
+     * 移入回收站（删除文档）。
+     *
+     * <p>与 list/restore/purge 的角色门禁不同：删除是「谁创建/管理该文档谁可删」，
+     * 故控制器只要求登录（{@code HAS_AUTH}），文档级权限由服务层 canManage 判定（fail-closed）。</p>
+     */
+    @PreAuth(DocConstant.HAS_AUTH)
+    @PostMapping("/remove")
+    @Operation(summary = "移入回收站", description = "删除文档（逻辑删除），可在回收站恢复")
+    public R<Boolean> remove(@RequestParam Long docId) {
+        return R.status(recycleService.removeToRecycle(docId));
+    }
+
     @PreAuth(DocConstant.HAS_ROLE_DOC)
     @PostMapping("/purge")
     @Operation(summary = "彻底删除", description = "内容管理员")

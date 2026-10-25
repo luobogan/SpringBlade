@@ -3,12 +3,14 @@ package org.springblade.doc.mapper;
 import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.springblade.doc.entity.DocDetail;
 
+import java.util.Date;
 import java.util.List;
 
 /**
@@ -59,4 +61,55 @@ public interface DocDetailMapper extends BaseMapper<DocDetail> {
                                    @Param("deptId") Long deptId,
                                    @Param("divisionId") Long divisionId,
                                    @Param("roleIds") List<Long> roleIds);
+
+    /**
+     * 移入回收站：逻辑删除（is_deleted=1）并记录操作人/操作时间。
+     *
+     * <p>DocDetail.isDeleted 带 {@code @TableLogic}，MP 的 updateById 会自动追加 {@code is_deleted=0}
+     * 条件，无法更新「已逻辑删除」的行，故回收站的标记/恢复/彻底删除统一用自定义 SQL。
+     * DataScope 拦截器只处理 SELECT（见 DataScopeInterceptor），此处仅受租户行拦截器约束
+     * （doc_detail 在 blade.tenant.tables 白名单内，越租户改不动）。</p>
+     */
+    @Update("UPDATE doc_detail SET is_deleted = 1, update_time = #{updateTime}, update_user = #{updateUser} WHERE id = #{id} AND is_deleted = 0")
+    int markRecycled(@Param("id") Long id, @Param("updateTime") Date updateTime, @Param("updateUser") Long updateUser);
+
+    /**
+     * 从回收站恢复：清除逻辑删除标记。
+     *
+     * <p>doc_status 保持删除前原值——「恢复」不等于「发布」，不回写生效态。</p>
+     */
+    @Update("UPDATE doc_detail SET is_deleted = 0, update_time = #{updateTime}, update_user = #{updateUser} WHERE id = #{id}")
+    int restoreFromRecycle(@Param("id") Long id, @Param("updateTime") Date updateTime, @Param("updateUser") Long updateUser);
+
+    /**
+     * 彻底删除：物理删除主表行（绕过 @TableLogic 的逻辑删除）。
+     */
+    @Delete("DELETE FROM doc_detail WHERE id = #{id}")
+    int purgePhysically(@Param("id") Long id);
+
+    /**
+     * 读取含「已逻辑删除」的文档（回收站恢复/彻底删除需要原状态）。
+     *
+     * <p>自定义 @Select 不会被 MP 自动追加 is_deleted 条件（同 selectByApproveInstId 手动加条件的行为）。</p>
+     */
+    @Select("SELECT * FROM doc_detail WHERE id = #{id}")
+    DocDetail selectByIdIncludeDeleted(@Param("id") Long id);
+
+    /**
+     * 批量读取（含已逻辑删除）文档的标题/目录，供回收站列表回填文档标题。
+     */
+    @Select("<script>"
+        + "SELECT id, doc_subject, sec_category_id FROM doc_detail "
+        + "WHERE id IN <foreach item='i' collection='ids' open='(' separator=',' close=')'>#{i}</foreach>"
+        + "</script>")
+    List<DocDetail> selectBriefByIds(@Param("ids") List<Long> ids);
+
+    /**
+     * 按目录读取（含已逻辑删除）文档的标题/目录。
+     *
+     * <p>回收站按目录过滤专用：MP 的 selectList 会自动追加 is_deleted=0，
+     * 用它过滤回收站将恒为空。</p>
+     */
+    @Select("SELECT id, doc_subject, sec_category_id FROM doc_detail WHERE sec_category_id = #{secCategoryId}")
+    List<DocDetail> selectBriefByCategory(@Param("secCategoryId") Long secCategoryId);
 }

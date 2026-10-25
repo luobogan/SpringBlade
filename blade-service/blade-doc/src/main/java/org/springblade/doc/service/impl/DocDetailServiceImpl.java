@@ -7,6 +7,7 @@ import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
+import org.springblade.core.tool.utils.DateUtil;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.doc.constant.DocConstant;
 import org.springblade.doc.entity.DocDetail;
@@ -61,13 +62,25 @@ public class DocDetailServiceImpl implements IDocDetailService {
         Long userId = SecureUtil.getUserId();
         if (doc.getId() == null) {
             doc.setDocStatus(DocStatus.DRAFT.getCode());
+            // 显式补齐审计字段：saveDoc 直接走 detailMapper.insert，绕过 BaseServiceImpl.resolveSave，
+            // 否则 create_time/tenant_id 为 NULL（E2E 实测），且 NULL create_time 会使 Search 按时间倒序沉底不可见。
             doc.setCreateUser(userId);
+            doc.setUpdateUser(userId);
+            doc.setCreateTime(DateUtil.now());
+            doc.setUpdateTime(DateUtil.now());
+            // 租户ID：仅在上下文非空时显式赋值，空值交由租户行拦截器填默认租户，避免写入空串
+            String tenantId = SecureUtil.getTenantId();
+            if (tenantId != null && !tenantId.isBlank()) {
+                doc.setTenantId(tenantId);
+            }
             detailMapper.insert(doc);
         } else {
             // ★ DOC-P0-3：更新必须显式编辑权校验（E9 曾整段注释 canEdit 致越权写）。严禁注释/绕过本判断。
             if (!docPermissionService.canManage(doc.getId())) {
                 throw new ServiceException("无权限编辑该文档");
             }
+            doc.setUpdateUser(userId);
+            doc.setUpdateTime(DateUtil.now());
             detailMapper.updateById(doc);
         }
         return doc;
@@ -155,9 +168,11 @@ public class DocDetailServiceImpl implements IDocDetailService {
 
     @Override
     public DocDetail voidDoc(Long id) {
+        // 允许的起始状态含 归档(5)：业务闭环为「发布→失效→重新打开→归档→作废」，
+        // 归档件应可直接作废（原实现缺 5，导致归档后必须先重新打开才能作废，与业务口径不符）
         return transition(id, DocStatus.VOID,
             DocStatus.DRAFT, DocStatus.EFFECTIVE, DocStatus.EFFECTIVE_APPROVED,
-            DocStatus.RETURNED, DocStatus.PENDING_PUBLISH);
+            DocStatus.RETURNED, DocStatus.PENDING_PUBLISH, DocStatus.ARCHIVED);
     }
 
     /**
