@@ -258,9 +258,14 @@ blade:
       - /custom-operation/**
       # blade-workflow：子流程操作（说明文本）
       - /subflow/**
+      # blade-workflow：e签宝签署回调（厂商报文参与 HMAC 验签，
+      #   一旦被 XSS 过滤器清洗/改写，验签必然失败 → 回调全丢）
+      - /odoc/esign/**
   secure:
     skip-url:
       - /test/**
+      # blade-workflow：e签宝签署回调（厂商外网直连，无 token；安全由请求头 HMAC 验签保证）
+      - /odoc/esign/callback
       - /blade-mall/front/**
       - /blade-mall/uploads/**
       - /blade-mall/auth/**

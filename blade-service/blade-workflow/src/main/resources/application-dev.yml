@@ -26,4 +26,7 @@ blade:
 odoc:
   url-sign-secret: odoc-dev-secret-change-me
   url-sign-ttl-seconds: 300
+  # e签宝电子签章配置统一由 Nacos 下发（data_id=blade-workflow-dev.yaml，根级 odoc.esign），
+  # 本地不再写死，避免与配置中心双源冲突（app-id/app-secret 也绝不进仓库）。
+  # 未配置时「第三方电子签章」方案在设置页显示为未就绪且不可选，流程自动降级、不阻断。
 

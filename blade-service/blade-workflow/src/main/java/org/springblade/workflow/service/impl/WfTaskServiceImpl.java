@@ -9,6 +9,7 @@ import org.springblade.workflow.action.NodeActionExecutor;
 import org.springblade.workflow.odoc.action.WfNodeMustDoActionExecutor;
 import org.springblade.workflow.odoc.number.WfOdocNumberAssignListener;
 import org.springblade.workflow.odoc.number.WfOdocLayoutAssignListener;
+import org.springblade.workflow.odoc.sign.OdocSealTriggerResult;
 import org.springblade.workflow.dto.AddSignDTO;
 import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.dto.ApproveDTO;
@@ -138,6 +139,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     /** 公文版式「出口监听」（转版式/定稿节点自动转 PDF/OFD，失败不阻断主干） */
     private final WfOdocLayoutAssignListener odocLayoutAssignListener;
     /** 节点操作者解析（退回弹窗「操作者」列展示用，解析失败不阻塞） */
+    /** 公文用印「出口监听」（签章/定稿节点发起用印：local 同步盖章 / esign 异步发起签署） */
+    private final org.springblade.workflow.odoc.sign.WfOdocSignAssignListener odocSignAssignListener;
     private final org.springblade.workflow.resolver.WfOperatorResolver operatorResolver;
     /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
     private final WfTaskActWriter taskActWriter;
@@ -315,9 +318,6 @@ public class WfTaskServiceImpl implements IWfTaskService {
             }
         }
 
-        // 公文「节点必做动作」提交拦截：套红节点且开启强制套红时，未套红则拒绝提交
-        odocMustDoActionExecutor.checkBeforeSubmit(inst, node);
-
         // 2.5 提交变量（提前准备：普通提交与「退回发起人后由创建节点重新提交」两条路径共用）
         Map<String, Object> vars = new HashMap<>(8);
         if (dto != null && dto.getVariables() != null) {
@@ -326,6 +326,61 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 引擎多实例：把全部 MI 节点的集合变量 wfMiAssignees_<nodeKey> 注入流转变量，
         // 保证进入该节点前集合已就绪（引擎据此逐人展开）。幂等、持久。
         injectMiCollectionVars(inst.getDefId(), inst, vars, operator);
+
+        // 2.6 公文准备（取号 / 公文镜像 / 版式转换）
+        //     必须排在「节点必做动作校验」之前：esign 方案下签章前提是「已有 PDF/OFD 版式文件」，
+        //     而版式文件正是在这里自动转换出来的（先转换 → 再校验 → 再发起签署）。
+        //     同时必须排在【引擎推进之前】：esign 是异步的，提交后流程停在签章节点等待签署，
+        //     由回调推进（OdocSealAdvancer）；若放在推进之后，等待期间就不会发起签署。
+        boolean testInst = inst.getIsTest() != null && inst.getIsTest() == 1;
+        OdocSealTriggerResult sealResult = null;
+        if (!testInst) {
+            // 公文文号出口监听：定稿节点取号并回写表单（失败不阻断主干，仅告警）
+            try {
+                odocNumberAssignListener.onNodeSubmit(inst, node);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 公文文号取号/回写失败（忽略）. instId={}, nodeKey={}, {}",
+                    inst.getId(), node.getNodeKey(), e.getMessage());
+            }
+            // 公文信息镜像同步：把表单公文属性冗余到 wf_odoc_request（失败不阻断主干，仅告警）
+            try {
+                odocRequestSyncListener.syncInstance(inst);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 公文信息镜像同步失败（忽略）. instId={}, nodeKey={}, {}",
+                    inst.getId(), node.getNodeKey(), e.getMessage());
+            }
+            // 公文版式出口监听：转版式/定稿节点自动转 PDF/OFD（幂等；失败不阻断主干，仅告警）
+            try {
+                odocLayoutAssignListener.onNodeSubmit(inst, node);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 公文版式自动转换失败（忽略）. instId={}, nodeKey={}, {}",
+                    inst.getId(), node.getNodeKey(), e.getMessage());
+            }
+        }
+
+        // 公文「节点必做动作」提交拦截：套红/签章/密级（版式已就绪，esign 口径可校验）
+        odocMustDoActionExecutor.checkBeforeSubmit(inst, node);
+
+        // 2.7 公文用印发起（签章/定稿节点）
+        //   local：同步盖章 → 流程照常推进；
+        //   esign：异步发起签署 → 返回 waiting=true → 本次提交不推进引擎，签完由回调推进。
+        if (!testInst) {
+            try {
+                sealResult = odocSignAssignListener.onNodeSubmit(inst, node, operator, task, vars);
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 公文用印发起失败（忽略）. instId={}, nodeKey={}, {}",
+                    inst.getId(), node.getNodeKey(), e.getMessage());
+            }
+        }
+
+        // 「签完才流转」：第三方签章已发起、等待签署完成 → 本次提交不推进引擎，
+        // 流程停在签章节点；签署完成（回调/补偿）后由 OdocSealAdvancer 推进到下一节点。
+        if (sealResult != null && sealResult.isWaiting()) {
+            log.info("[blade-workflow] 第三方签章等待签署，本次提交不推进引擎. instId={}, nodeKey={}, flowId={}",
+                inst.getId(), task.getNodeKey(), sealResult.getEsignFlowId());
+            markNoticeHandled(inst, task);
+            return true;
+        }
 
         // 3. 推进引擎并同步后续任务
         // 节点信息 → 运行时消费：「指定流转」。开启后由处理人手动指定下一节点（模式1 可指定操作者）；
@@ -405,40 +460,30 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
             // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（异常策略由 NodeActionExecutor 吸收）
         // 测试态：跳过附加操作/子流程副作用（对齐 ecology istest，避免污染真实业务数据）
-        boolean testInst = inst.getIsTest() != null && inst.getIsTest() == 1;
         if (!testInst) {
             nodeActionExecutor.execute(inst, node, NodeActionExecutor.PHASE_POST, operator);
             nodeActionExecutor.triggerSubflow(inst, node, NodeActionExecutor.TRIGGER_AFTER_SUBMIT, operator);
-            // 公文文号出口监听：定稿节点取号并回写表单（失败不阻断主干，仅告警）
-            try {
-                odocNumberAssignListener.onNodeSubmit(inst, node);
-            } catch (Exception e) {
-                log.warn("[blade-workflow] 公文文号取号/回写失败（忽略）. instId={}, nodeKey={}, {}",
-                    inst.getId(), node.getNodeKey(), e.getMessage());
-            }
-            // 公文信息镜像同步：把表单公文属性冗余到 wf_odoc_request（失败不阻断主干，仅告警）
-            try {
-                odocRequestSyncListener.syncInstance(inst);
-            } catch (Exception e) {
-                log.warn("[blade-workflow] 公文信息镜像同步失败（忽略）. instId={}, nodeKey={}, {}",
-                    inst.getId(), node.getNodeKey(), e.getMessage());
-            }
-            // 公文版式出口监听：转版式/定稿节点自动转 PDF/OFD（幂等；失败不阻断主干，仅告警）
-            try {
-                odocLayoutAssignListener.onNodeSubmit(inst, node);
-            } catch (Exception e) {
-                log.warn("[blade-workflow] 公文版式自动转换失败（忽略）. instId={}, nodeKey={}, {}",
-                    inst.getId(), node.getNodeKey(), e.getMessage());
-            }
         }
 
         // 二期 T9（对齐 ecology updateBizState）：待办已办理 → 把 TASK_CREATED 时发的
         // 流程通知（bizRefType=WF_TASK, bizRefId=引擎任务ID）回写为「已处理」，
         // 通知列表不再是永久"待办"。失败仅记日志（尽力而为语义，可补偿），不影响审批事务。
+        markNoticeHandled(inst, task);
+        return true;
+    }
+
+    /**
+     * 待办通知状态回写（已处理）。
+     *
+     * <p>二期 T9（对齐 ecology updateBizState）：待办已办理 → 把 TASK_CREATED 时发的
+     * 流程通知（bizRefType=WF_TASK, bizRefId=引擎任务ID）回写为「已处理」。
+     * 失败仅记日志（尽力而为语义，可补偿），不影响审批事务。</p>
+     */
+    private void markNoticeHandled(WfInstance inst, WfTask task) {
         try {
-            if (task.getEngineTaskId() != null) {
+            if (task != null && task.getEngineTaskId() != null) {
                 NoticeBizStateDTO biz = new NoticeBizStateDTO();
-                biz.setTenantId(inst.getTenantId());
+                biz.setTenantId(inst == null ? null : inst.getTenantId());
                 biz.setBizRefType("WF_TASK");
                 biz.setBizRefId(task.getEngineTaskId());
                 biz.setBizState(MessageConstant.BIZ_STATE_HANDLED);
@@ -446,9 +491,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
             }
         } catch (Exception e) {
             log.warn("[WfTaskServiceImpl] 待办通知状态回写失败（忽略）. engineTaskId={}, {}",
-                task.getEngineTaskId(), e.getMessage());
+                task == null ? null : task.getEngineTaskId(), e.getMessage());
         }
-        return true;
     }
 
     @Override

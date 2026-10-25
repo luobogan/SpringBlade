@@ -11,7 +11,10 @@ import org.springblade.workflow.odoc.entity.WfOdocDoc;
 import org.springblade.workflow.odoc.entity.WfOdocProcessSet;
 import org.springblade.workflow.odoc.entity.WfOdocSeal;
 import org.springblade.workflow.odoc.mapper.WfOdocProcessSetMapper;
+import org.springblade.workflow.odoc.seal.IOdocSealStrategy;
+import org.springblade.workflow.odoc.seal.OdocSealStrategyHolder;
 import org.springblade.workflow.odoc.service.IWfOdocDocService;
+import org.springblade.workflow.odoc.service.IWfOdocLayoutService;
 import org.springblade.workflow.odoc.service.IWfOdocSealService;
 import org.springblade.workflow.odoc.service.IWfOdocSecretRuleService;
 import org.springblade.formmode.feign.IFormmodeClient;
@@ -41,9 +44,12 @@ class WfNodeMustDoActionExecutorTest {
 	private final IWfOdocSealService sealService = mock(IWfOdocSealService.class);
 	private final IFormmodeClient formmodeClient = mock(IFormmodeClient.class);
 	private final IWfOdocSecretRuleService secretRuleService = mock(IWfOdocSecretRuleService.class);
+	private final IWfOdocLayoutService layoutService = mock(IWfOdocLayoutService.class);
+	private final OdocSealStrategyHolder strategyHolder = mock(OdocSealStrategyHolder.class);
 
 	private final WfNodeMustDoActionExecutor executor =
-		new WfNodeMustDoActionExecutor(docService, processSetMapper, sealService, formmodeClient, secretRuleService);
+		new WfNodeMustDoActionExecutor(docService, processSetMapper, sealService, formmodeClient, secretRuleService,
+			layoutService, strategyHolder);
 
 	private WfInstance inst(long id, long defId) {
 		WfInstance i = new WfInstance();

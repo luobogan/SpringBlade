@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springblade.workflow.odoc.entity.WfOdocSetting;
 import org.springblade.workflow.odoc.mapper.WfOdocSettingMapper;
+import org.springblade.workflow.odoc.seal.OdocSealConfig;
 
 import java.util.Collections;
 
@@ -22,7 +23,8 @@ import static org.mockito.Mockito.when;
 class WfOdocSettingServiceImplTest {
 
 	private final WfOdocSettingMapper settingMapper = mock(WfOdocSettingMapper.class);
-	private final WfOdocSettingServiceImpl service = new WfOdocSettingServiceImpl(settingMapper);
+	private final OdocSealConfig sealConfig = mock(OdocSealConfig.class);
+	private final WfOdocSettingServiceImpl service = new WfOdocSettingServiceImpl(settingMapper, sealConfig);
 
 	@Test
 	@DisplayName("get：无行时返回默认值（不落库）")
@@ -85,7 +87,7 @@ class WfOdocSettingServiceImplTest {
 
 		WfOdocSettingMapper m2 = mock(WfOdocSettingMapper.class);
 		when(m2.selectList(any())).thenReturn(Collections.singletonList(new WfOdocSetting()));
-		assertEquals(0, new WfOdocSettingServiceImpl(m2).seedIfAbsent());
+		assertEquals(0, new WfOdocSettingServiceImpl(m2, sealConfig).seedIfAbsent());
 		verify(m2, never()).insert(any(WfOdocSetting.class));
 	}
 }

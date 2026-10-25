@@ -38,6 +38,18 @@ public class WfOdocSetting extends TenantEntity {
 	@Schema(description = "默认流程定义ID(proc_def_id 或流程key)，新建公文默认带入；空表示不默认")
 	private String defaultProcessDefId;
 
+	@Schema(description = "签章方案 0自研印章(本地) 1第三方电子签章(e签宝)")
+	private Integer sealMode;
+
+	@Schema(description = "第三方签章机构ID(e签宝 orgId)，为空取Nacos配置")
+	private String sealEsignOrgId;
+
+	@Schema(description = "第三方默认印章ID(e签宝 sealId)，为空取Nacos配置")
+	private String sealEsignDefaultSealId;
+
+	@Schema(description = "第三方签章回调地址，留空取Nacos配置")
+	private String sealEsignNotifyUrl;
+
 	@Schema(description = "备注")
 	private String remark;
 }

@@ -10,10 +10,14 @@ import org.springblade.formmode.vo.FormDataVO;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.odoc.entity.WfOdocDoc;
+import org.springblade.workflow.odoc.entity.WfOdocLayoutFile;
 import org.springblade.workflow.odoc.entity.WfOdocProcessSet;
 import org.springblade.workflow.odoc.entity.WfOdocSeal;
 import org.springblade.workflow.odoc.mapper.WfOdocProcessSetMapper;
+import org.springblade.workflow.odoc.seal.IOdocSealStrategy;
+import org.springblade.workflow.odoc.seal.OdocSealStrategyHolder;
 import org.springblade.workflow.odoc.service.IWfOdocDocService;
+import org.springblade.workflow.odoc.service.IWfOdocLayoutService;
 import org.springblade.workflow.odoc.service.IWfOdocSealService;
 import org.springblade.workflow.odoc.service.IWfOdocSecretRuleService;
 import org.springframework.stereotype.Component;
@@ -44,6 +48,8 @@ public class WfNodeMustDoActionExecutor {
 	private final IWfOdocSealService sealService;
 	private final IFormmodeClient formmodeClient;
 	private final IWfOdocSecretRuleService secretRuleService;
+	private final IWfOdocLayoutService layoutService;
+	private final OdocSealStrategyHolder strategyHolder;
 
 	/**
 	 * 提交前校验节点必做动作。
@@ -91,6 +97,10 @@ public class WfNodeMustDoActionExecutor {
 	 * 且 {@code sealRequired=1} 时，要求该正文已有成功签章记录，否则拒绝提交。
 	 *
 	 * <p>优雅降级：未装配可用 CA 签章服务（无从签章）时只告警并跳过，绝不卡死未配置流程。</p>
+	 *
+	 * <p><b>第三方电子签章（esign）例外</b>：签署是异步的（提交后由出口监听器发起签署，
+	 * 回调/补偿完成后才归档签章件），若在此要求"已签章"会形成死锁（永远无法提交）。
+	 * 故 esign 方案下把校验口径降为「可签章前提」——必须已有 PDF/OFD 版式文件。</p>
 	 */
 	private void checkSeal(WfInstance inst, WfProcessNode node, WfOdocProcessSet set) {
 		if (set.getSealRequired() == null || set.getSealRequired() != 1) {
@@ -99,16 +109,31 @@ public class WfNodeMustDoActionExecutor {
 		if (!hitNode(node.getNodeKey(), set.getSignNodeKey(), set.getSignatureNodeKeys())) {
 			return;
 		}
+		WfOdocDoc doc = docService.getDocByInstanceId(inst.getId());
+		if (IOdocSealStrategy.MODE_ESIGN.equals(strategyHolder.mode())) {
+			// 第三方签章：异步，只校验「已有版式文件」这一可签章前提
+			boolean ready = doc != null && hasLayout(doc.getId());
+			if (!ready) {
+				throw new ServiceException("该节点提交前必须先生成版式文件（第三方电子签章需要 PDF/OFD 版式）");
+			}
+			return;
+		}
 		if (!sealService.sealAvailable()) {
 			log.warn("[blade-workflow] 签章节点到达但未装配可用 CA 签章服务，降级跳过. instId={}, nodeKey={}",
 				inst.getId(), node.getNodeKey());
 			return;
 		}
-		WfOdocDoc doc = docService.getDocByInstanceId(inst.getId());
 		boolean sealed = doc != null && hasSeal(doc.getId());
 		if (!sealed) {
 			throw new ServiceException("该节点提交前必须完成电子签章");
 		}
+	}
+
+	/** 是否已有可用于签章的版式文件（PDF/OFD） */
+	private boolean hasLayout(Long docId) {
+		List<WfOdocLayoutFile> list = layoutService.list(docId);
+		return list != null && list.stream()
+			.anyMatch(lf -> lf.getFormat() != null && (lf.getFormat() == 12 || lf.getFormat() == 13));
 	}
 
 	/**
