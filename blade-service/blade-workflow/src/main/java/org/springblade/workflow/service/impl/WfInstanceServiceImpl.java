@@ -1764,7 +1764,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             .ge(q.getBeginTime() != null, WfInstance::getStartTime, q.getBeginTime())
             .in(Func.isNotBlank(q.getStartersStr()), WfInstance::getStarter, Func.toLongList(q.getStartersStr()))
             .le(q.getEndTime() != null, WfInstance::getStartTime, q.getEndTime())
-            .in(idRestriction != null, WfInstance::getId, idRestriction);
+            .in(idRestriction != null, WfInstance::getId, idRestriction)
+            // 显式过滤已逻辑删实例（@TableLogic 在本查询链未生效）：已删数据不出现在监控列表
+            .eq(WfInstance::getIsDeleted, 0);
         if (scope != null) {
             // 委托人：范围覆盖所有定义则不限制 defId；否则限定到授权定义集合；并限定发起人集合
             if (!scope.isAllDefs()) {
@@ -1990,9 +1992,16 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         instanceMapper.deleteById(instId);
         taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, instId));
         logMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, instId));
-        // ② 清引擎运行态；③ 清历史
+        // ①-补 清表单快照（按实例），避免 forceDelete 后残留孤儿快照
+        snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, instId));
+        // ② 清引擎运行态；③ 清历史（容错：已完成实例运行态/历史可能已不存在，
+        //    必须 try-catch，否则异常会使整个 @Transactional 回滚 → 实例完全未删）
         if (inst.getEngineInstId() != null) {
-            processService.deleteProcessInstance(inst.getEngineInstId(), "强制删除");
+            try {
+                processService.deleteProcessInstance(inst.getEngineInstId(), "强制删除");
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 删除引擎运行态失败（可能已完成）. engineInstId={}", inst.getEngineInstId(), e);
+            }
             try {
                 historyService.deleteHistoricProcessInstance(inst.getEngineInstId());
             } catch (Exception e) {
