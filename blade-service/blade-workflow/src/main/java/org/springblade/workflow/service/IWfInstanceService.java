@@ -310,4 +310,7 @@ public interface IWfInstanceService {
      */
     Map<String, Object> monitorAnomalySummary();
 
+    /** 流程监控看板统计：状态分布 / 超时 / 异常 / 按流程定义分布 / 平均耗时 */
+    Map<String, Object> monitorStats();
+
 }

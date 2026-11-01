@@ -44,7 +44,7 @@ public class Role implements Serializable {
 	 * 主键
 	 */
 	@Schema(description = "主键")
-	@TableId(value = "id", type = IdType.ASSIGN_ID)
+	@TableId(value = "id", type = IdType.AUTO) // 2026-11-01 重编号：组织架构主数据改回自增小整数
 	@JsonSerialize(using = ToStringSerializer.class)
 	private Long id;
 

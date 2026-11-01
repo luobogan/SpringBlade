@@ -120,6 +120,14 @@ public class WfMonitorController {
         return R.data(data);
     }
 
+    @GetMapping("/stats")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    @Operation(summary = "流程监控看板统计",
+        description = "状态分布 / 超时 / 异常 / 按流程定义分布 / 平均耗时；管理员全租户，委托人按授权范围")
+    public R<Map<String, Object>> stats() {
+        return R.data(instanceService.monitorStats());
+    }
+
     /**
      * 流程监控：管理员视角的全租户实例分页检索。
      *

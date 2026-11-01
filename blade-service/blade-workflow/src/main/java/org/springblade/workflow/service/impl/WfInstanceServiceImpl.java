@@ -21,6 +21,7 @@ import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.api.R;
 import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.StringUtil;
+import org.springblade.core.tool.utils.Func;
 import org.springblade.formmode.dto.FormDataSaveDTO;
 import org.springblade.formmode.feign.IFormmodeClient;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
@@ -1761,6 +1762,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             .like(q.getKeyword() != null && !q.getKeyword().isBlank(), WfInstance::getTitle, q.getKeyword())
             .eq(q.getUrgent() != null, WfInstance::getUrgency, q.getUrgent())
             .ge(q.getBeginTime() != null, WfInstance::getStartTime, q.getBeginTime())
+            .in(Func.isNotBlank(q.getStartersStr()), WfInstance::getStarter, Func.toLongList(q.getStartersStr()))
             .le(q.getEndTime() != null, WfInstance::getStartTime, q.getEndTime())
             .in(idRestriction != null, WfInstance::getId, idRestriction);
         if (scope != null) {
@@ -1917,9 +1919,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return null;
     }
 
-    /** act 读源下的后置过滤（defName/starter/currentNodeKey 等非 act 列；超时/异常已在调用方处理） */
+    /** act 读源下的后置过滤（defName/starter/startersStr/currentNodeKey 等非 act 列；超时/异常已在调用方处理） */
     private void postFilterMonitor(IPage<InstanceVO> voPage, MonitorInstanceQuery q) {
-        if (q.getDefName() == null && q.getStarter() == null && q.getCurrentNodeKey() == null) {
+        List<Long> starters = Func.isNotBlank(q.getStartersStr()) ? Func.toLongList(q.getStartersStr()) : null;
+        if (q.getDefName() == null && q.getStarter() == null && starters == null && q.getCurrentNodeKey() == null) {
             return;
         }
         List<InstanceVO> kept = voPage.getRecords().stream().filter(v -> {
@@ -1927,6 +1930,9 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 return false;
             }
             if (q.getStarter() != null && !q.getStarter().equals(v.getStarter())) {
+                return false;
+            }
+            if (starters != null && (v.getStarter() == null || !starters.contains(v.getStarter()))) {
                 return false;
             }
             if (q.getCurrentNodeKey() != null && !q.getCurrentNodeKey().equals(v.getCurrentNodeKey())) {
@@ -2116,6 +2122,101 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         data.put("testInstances", instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
             .eq(WfInstance::getIsTest, 1)
             .in(scopedIds != null, WfInstance::getId, scopedIds)));
+        return data;
+    }
+
+    /**
+     * 流程监控看板统计：状态分布 / 超时 / 异常 / 按流程定义分布 / 平均耗时。
+     *
+     * <p>委托监控：委托人按 {@code wf_monitor_scope} 授权范围统计；管理员看全租户。全部走计数/聚合，
+     * 不拉全量实体（仅在按流程定义分布时按 id 聚合后映射名称）。</p>
+     */
+    @Override
+    public Map<String, Object> monitorStats() {
+        Long me = WfAuthUtil.userId();
+        boolean admin = WfAuthUtil.isAdmin();
+        MonitorScopeView scope = admin ? null : monitorScopeService.resolve(me);
+        List<Long> scopedIds = null;
+        if (scope != null) {
+            if (!scope.isHasAny()) {
+                Map<String, Object> empty = new LinkedHashMap<>();
+                empty.put("total", 0L);
+                empty.put("statusCounts", new long[]{0L, 0L, 0L, 0L, 0L, 0L});
+                empty.put("running", 0L);
+                empty.put("overdue", 0L);
+                empty.put("anomalyTotal", 0L);
+                empty.put("byDef", Collections.emptyList());
+                empty.put("avgDurationMinutes", 0.0);
+                return empty;
+            }
+            LambdaQueryWrapper<WfInstance> sq = Wrappers.<WfInstance>lambdaQuery();
+            if (!scope.isAllDefs()) sq.in(WfInstance::getDefId, scope.getDefIds());
+            sq.in(WfInstance::getStarter, scope.getStarterIds());
+            scopedIds = instanceMapper.selectObjs(sq.select(WfInstance::getId)).stream()
+                .map(this::toLong).collect(Collectors.toList());
+        }
+
+        LambdaQueryWrapper<WfInstance> base = Wrappers.<WfInstance>lambdaQuery();
+        if (scopedIds != null) base.in(WfInstance::getId, scopedIds);
+        base.select(WfInstance::getId, WfInstance::getStatus, WfInstance::getDefId,
+            WfInstance::getStartTime, WfInstance::getEndTime,
+            WfInstance::getBusinessRowReady, WfInstance::getRequestIdBound, WfInstance::getEngineDeploymentMatched);
+
+        List<WfInstance> all = instanceMapper.selectList(base);
+
+        long[] statusCounts = new long[6];
+        Map<Long, long[]> byDefMap = new LinkedHashMap<>();
+        long anomalyTotal = 0L;
+        long durationSum = 0L;
+        long durationCnt = 0L;
+        for (WfInstance w : all) {
+            int s = w.getStatus() == null ? WfInstance.STATUS_DRAFT : w.getStatus();
+            if (s >= 0 && s <= 5) statusCounts[s]++;
+            long[] d = byDefMap.computeIfAbsent(w.getDefId(), k -> new long[2]);
+            d[0]++;
+            if (s == WfInstance.STATUS_RUNNING) d[1]++;
+            if (w.getBusinessRowReady() != null && w.getBusinessRowReady() == 0) anomalyTotal++;
+            if (w.getRequestIdBound() != null && w.getRequestIdBound() == 0) anomalyTotal++;
+            if (w.getEngineDeploymentMatched() != null && w.getEngineDeploymentMatched() == 0) anomalyTotal++;
+            if (w.getEndTime() != null && w.getStartTime() != null) {
+                durationSum += (w.getEndTime().getTime() - w.getStartTime().getTime());
+                durationCnt++;
+            }
+        }
+
+        long overdue = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+            .select(WfTask::getInstId)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .lt(WfTask::getDueTime, new Date())
+            .in(scopedIds != null, WfTask::getInstId, scopedIds)
+            .groupBy(WfTask::getInstId)).size();
+
+        List<Map<String, Object>> byDef = new ArrayList<>();
+        if (!byDefMap.isEmpty()) {
+            List<WfProcessDefinition> defs = defMapper.selectList(
+                Wrappers.<WfProcessDefinition>lambdaQuery().in(WfProcessDefinition::getId, byDefMap.keySet()));
+            Map<Long, String> names = new LinkedHashMap<>();
+            defs.forEach(d -> names.put(d.getId(), d.getName()));
+            for (Map.Entry<Long, long[]> e : byDefMap.entrySet()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("defId", e.getKey());
+                m.put("defName", names.getOrDefault(e.getKey(), "未知流程"));
+                m.put("count", e.getValue()[0]);
+                m.put("running", e.getValue()[1]);
+                byDef.add(m);
+            }
+            byDef.sort((a, b) -> Long.compare((Long) b.get("count"), (Long) a.get("count")));
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("total", (long) all.size());
+        data.put("statusCounts", statusCounts);
+        data.put("running", statusCounts[0]);
+        data.put("overdue", overdue);
+        data.put("anomalyTotal", anomalyTotal);
+        data.put("byDef", byDef);
+        data.put("avgDurationMinutes", durationCnt > 0
+            ? Math.round((double) durationSum / durationCnt / 60000.0 * 10.0) / 10.0 : 0.0);
         return data;
     }
 

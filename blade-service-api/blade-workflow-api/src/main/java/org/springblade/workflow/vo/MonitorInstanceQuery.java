@@ -29,6 +29,9 @@ public class MonitorInstanceQuery implements Serializable {
 	@Schema(description = "发起人")
 	private Long starter;
 
+	@Schema(description = "发起人范围（逗号分隔的 user id，用于按部门/批量过滤）")
+	private String startersStr;
+
 	@Schema(description = "当前节点Key（精确）")
 	private String currentNodeKey;
 
