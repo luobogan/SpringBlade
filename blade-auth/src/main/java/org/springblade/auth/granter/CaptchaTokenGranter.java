@@ -58,19 +58,20 @@ public class CaptchaTokenGranter implements ITokenGranter {
 	public UserInfo grant(TokenParameter tokenParameter) {
 		HttpServletRequest request = WebUtil.getRequest();
 
-		// 按租户读取「是否开启登录验证码」(captcha_mode)，关闭则该租户免验证码。
+		// 按租户读取「是否开启登录验证码」(captcha_mode)：仅当显式配置为 "true" 时才要求验证码。
 		// 经 Feign(IParamClient) 走 Nacos 服务发现调用 blade-system 公开接口 /param/public-value，
 		// 替代原 RestTemplate 写死 host:port 的 HTTP 自调用（网关/回环路径变化会导致 404）。
-		// 读取失败（fallback 返回 null 或抛异常）时保持要求验证码，即 fail-closed。
+		// 未配置 / "false" / 读取失败（fallback 返回 null 或抛异常）一律默认不要求，即 fail-open，
+		// 与登录页「默认不显示验证码」保持一致，避免用户看不到输入框却被后端拒绝。
 		String tenantId = tokenParameter.getArgs().getStr("tenantId");
-		boolean captchaRequired = true;
+		boolean captchaRequired = false;
 		try {
 			R<String> result = paramClient.publicValue("captcha_mode", tenantId);
-			if (result != null && result.isSuccess() && "false".equals(result.getData())) {
-				captchaRequired = false;
+			if (result != null && result.isSuccess() && "true".equalsIgnoreCase(Func.toStr(result.getData()))) {
+				captchaRequired = true;
 			}
 		} catch (Exception ex) {
-			log.warn("读取租户验证码开关失败，默认要求验证码: {}", tenantId, ex);
+			log.warn("读取租户验证码开关失败，默认不要求验证码: {}", tenantId, ex);
 		}
 
 		String key = request.getHeader(TokenUtil.CAPTCHA_HEADER_KEY);
