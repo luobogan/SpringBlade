@@ -150,6 +150,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfBpmnExtensionReader bpmnReader;
     /** 流转日志唯一写入口（含 ACT_HI_COMMENT 审批意见双写） */
     private final WfWriteHelper writeHelper;
+    /** 自由流程推进器（特性开关默认关闭；非自由实例零行为变化） */
+    private final org.springblade.workflow.freeflow.IWfFreeFlowDriver freeFlowDriver;
+    /** 自由流程影子节点装饰（把静态池节点包装成本实例该步骤的节点） */
+    private final org.springblade.workflow.freeflow.WfFreeNodeResolver freeNodeResolver;
 
     /**
      * 定义源开关：false=读 wf_process_node（默认，零行为变化）；true=从 BPMN {@code wf:node} 扩展读。
@@ -256,7 +260,11 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private boolean doApprove(Long taskId, ApproveDTO dto, Long operator, boolean system) {
         WfTask task = requireTodoTask(taskId);
         WfInstance inst = instanceMapper.selectById(task.getInstId());
-        WfProcessNode node = loadNode(inst.getDefId(), task.getNodeKey());
+        // 自由流程：一次加载实例步骤快照，并把静态池节点装饰成本实例该步骤的节点。
+        // 非自由实例为空上下文，decorate 原样返回；特性开关关闭时连查询都不会发生。
+        org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx = freeFlowDriver.context(inst);
+        WfProcessNode node = freeNodeResolver.decorate(freeCtx,
+            loadNode(inst.getDefId(), task.getNodeKey()), task.getNodeKey());
 
         // 0. 记录级鉴权：只有该任务办理人本人（或流程管理员）能同意。
         //    系统自动提交 / 超时自动通过走 system=true，无人上下文，不受此限。
@@ -283,7 +291,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
         //    引擎多实例模式下放行由 Flowable 完成条件驱动，跳过自研发散计数（运行时会签门禁让位引擎）：
         //    「同意」只 completeTask 当前引擎任务，是否推进/关闭兄弟任务由引擎决定。
         if (!isEngineMultiInstance(inst, task.getNodeKey())) {
-            int signOrder = resolveSignOrder(inst.getDefId(), task.getNodeKey());
+            // 自由流程：优先取装饰后节点的 signOrder（来自 wf_free_node.sign_type），
+            // 否则 resolveSignOrder 内部读未装饰的静态节点会让会签门禁静默失效。
+            int signOrder = (node != null && node.getSignOrder() != null)
+                ? node.getSignOrder() : resolveSignOrder(inst.getDefId(), task.getNodeKey());
             if (signOrder == SIGN_ALL) {
                 // 会签：仍有同节点待办则不推进
                 if (countPending(inst.getId(), task.getNodeKey()) > 0) {
@@ -336,8 +347,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
         OdocSealTriggerResult sealResult = null;
         if (!testInst) {
             // 公文文号出口监听：定稿节点取号并回写表单（失败不阻断主干，仅告警）
+            // 自由流程传步骤快照：定稿点改由 wf_free_node.is_finalize 判定
             try {
-                odocNumberAssignListener.onNodeSubmit(inst, node);
+                odocNumberAssignListener.onNodeSubmit(inst, node, freeCtx);
             } catch (Exception e) {
                 log.warn("[blade-workflow] 公文文号取号/回写失败（忽略）. instId={}, nodeKey={}, {}",
                     inst.getId(), node.getNodeKey(), e.getMessage());
@@ -351,7 +363,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
             }
             // 公文版式出口监听：转版式/定稿节点自动转 PDF/OFD（幂等；失败不阻断主干，仅告警）
             try {
-                odocLayoutAssignListener.onNodeSubmit(inst, node);
+                odocLayoutAssignListener.onNodeSubmit(inst, node, freeCtx);
             } catch (Exception e) {
                 log.warn("[blade-workflow] 公文版式自动转换失败（忽略）. instId={}, nodeKey={}, {}",
                     inst.getId(), node.getNodeKey(), e.getMessage());
@@ -359,7 +371,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         }
 
         // 公文「节点必做动作」提交拦截：套红/签章/密级（版式已就绪，esign 口径可校验）
-        odocMustDoActionExecutor.checkBeforeSubmit(inst, node);
+        odocMustDoActionExecutor.checkBeforeSubmit(inst, node, freeCtx);
 
         // 2.7 公文用印发起（签章/定稿节点）
         //   local：同步盖章 → 流程照常推进；
@@ -387,7 +399,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 模式3（多目标）：以节点上配置的 targets 为准，提交时并行扇出到多个目标节点（仅提交时生效，退回不适用）。
         // 3.x MI 空集合守卫：引擎进入 MI 节点时若集合为空会抛 FlowableException，
         // 这里转成 ServiceException，保证前端按原文案收到「下个节点未解析到办理人」的提示。
+        // 3.0 自由流程实例改由 WfFreeFlowDriver 按实例步骤推进（中间步池内迁移、末步归档）；
+        //     非自由实例保持下面原有的「指定流转 / completeTask」链路，零回归。
+        boolean freeFlow = freeFlowDriver.isEnabled(inst);
         try {
+        if (freeFlow) {
+            freeFlowDriver.submit(inst, task, dto, operator, vars, freeCtx);
+        } else {
         int appointMode = WfNodeSettingsUtil.appointFlowMode(node);
         if (!system && appointMode != 0) {
             if (appointMode == 3) {
@@ -452,6 +470,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 instanceService.advance(inst.getId(), operator);
             }
             }
+            }
             } catch (org.flowable.common.engine.api.FlowableException fe) {
             // MI 空集合守卫异常（非 MI 节点解析为空已在 advanceInternal 内转 ServiceException 阻断）。
             // 保留原文案，改抛 ServiceException 让前端收到干净中文错误信息。
@@ -512,7 +531,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
         // 计算可退回节点集合（反向回溯 + 白名单；已剔除引擎停不住的类型，见 WfRejectManager）
         List<WfProcessNode> candidates = rejectManager.computeRejectableNodes(
-            inst.getDefId(), task.getNodeKey(), node);
+            inst.getDefId(), task.getNodeKey(), node, inst.getId());
         if (candidates.isEmpty()) {
             // 上游没有可停留的节点（如当前就是第一个审批节点、上游只有开始节点的情况本不该走到这里）。
             // 明确报错，避免调用方拿到 null 目标后又「移了个寂寞」。
@@ -569,6 +588,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 同步 wf_task / 当前节点：advance 读引擎当前活动任务，为目标节点生成待办
         // 来源标记 REJECT：退回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理设置」）
         instanceService.advance(inst.getId(), task.getAssignee(), null, null, AdvanceSrc.REJECT);
+        // 自由流程：退回后重置目标步骤及其后步骤的「已流转」状态，否则重新提交仍按 flowOrder 前进
+        if (freeFlowDriver.isEnabled(inst)) {
+            freeFlowDriver.onReject(inst.getId(), targetNodeKey);
+        }
 
         // 节点信息 → 运行时消费：节点后附加操作（退回场景，仅执行勾选「退回时触发」的条目）
         // 测试态：跳过附加操作 —— 对齐 doApprove 的 PHASE_POST 跳过（:309-313），
@@ -596,7 +619,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
             throw new ServiceException("当前节点未开放退回");
         }
         List<WfProcessNode> candidates = rejectManager.computeRejectableNodes(
-            inst.getDefId(), task.getNodeKey(), node);
+            inst.getDefId(), task.getNodeKey(), node, inst.getId());
         int rejectType = WfNodeSettingsUtil.rejectType(node);
         String defaultNodeKey = rejectManager.resolveDefaultRejectNode(
             inst.getDefId(), task.getNodeKey(), node, candidates);
@@ -1023,8 +1046,34 @@ public class WfTaskServiceImpl implements IWfTaskService {
             if (node != null) {
                 vo.setNodeName(node.getNodeName());
             }
+            // 自由流程：优先用待办上冗余的自定义步骤名（首人/其余人由 Driver 统一写入），
+            // 否则回退实例步骤表，避免「首人显示静态名、其他人显示自定义名」。
+            String displayName = freeDisplayName(t.getExtJson());
+            if (displayName == null && node != null) {
+                WfProcessNode shown = freeNodeResolver.decorate(freeFlowDriver.context(inst), node, t.getNodeKey());
+                if (shown != null && shown.getNodeName() != null) {
+                    displayName = shown.getNodeName();
+                }
+            }
+            if (displayName != null && !displayName.isBlank()) {
+                vo.setNodeName(displayName);
+            }
         }
         return vo;
+    }
+
+    /** 从 wf_task.ext_json 解析自由流程自定义步骤名；无配置/解析失败返回 null */
+    private String freeDisplayName(String extJson) {
+        if (extJson == null || extJson.isBlank()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode j =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(extJson);
+            return j.hasNonNull("nodeName") ? j.get("nodeName").asText() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ 节点信息运行时消费

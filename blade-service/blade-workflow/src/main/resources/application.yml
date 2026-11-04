@@ -101,6 +101,13 @@ blade:
       #       列未建时回填失败被兜底吞掉（debug 日志），由脚本幂等回填补齐。
       # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（届时需同步）。
       enabled: true
+    free-flow:
+      # 自由流程（P0+P1+P2）总开关：true 且 wf_process_definition.is_free=1 才进入新链路。
+      # false（默认）= 完全回到既有「指定流转 / completeTask」链路，零行为变化、可一键回退。
+      # ⚠️ 仅改开关不会改写已部署 BPMN：预置节点池调整后须 POST /definition/{id}/deploy 刷新 proc_def_id。
+      # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（本次不改 Nacos）。
+      # 2026-11-04 真机端到端验证后置 true；存量 is_free=0 流程仍走原链路（零回归）。
+      enabled: true
     engine-multi-instance:
       # 会签/或签/依次下沉引擎多实例总开关（去 wf_ 表：让「1 引擎任务 = 1 人」，解锁待办/已办读源=act）。
       # 前置条件（代码均已实现）：① 部署期注入 multiInstanceLoopCharacteristics；

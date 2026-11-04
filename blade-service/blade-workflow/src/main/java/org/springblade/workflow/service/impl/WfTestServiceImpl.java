@@ -148,6 +148,8 @@ public class WfTestServiceImpl implements IWfTestService {
     private final IFormmodeClient formmodeClient;
     /** 审批日志读源=act 时的 ACT_HI_COMMENT 还原器（与 WfInstanceServiceImpl.logs 同源） */
     private final WfApprovalLogActReader actLogReader;
+    /** 自由流程实例级步骤/链路级联清理（仅 Mapper 依赖，无 Bean 环） */
+    private final org.springblade.workflow.freeflow.WfFreeFlowManager freeFlowManager;
 
     @Override
     public WfTestResultVO run(WfTestRunDTO dto) {
@@ -1123,6 +1125,8 @@ public class WfTestServiceImpl implements IWfTestService {
             taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, inst.getId()));
             approvalLogMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, inst.getId()));
             snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, inst.getId()));
+            // 自由流程实例级步骤/链路（物理删除，避免测试实例清理后残留）
+            freeFlowManager.cleanup(inst.getId());
             if (StringUtil.isNotBlank(inst.getTestDeploymentId())) {
                 deployments.add(inst.getTestDeploymentId());
             }
@@ -1317,6 +1321,8 @@ public class WfTestServiceImpl implements IWfTestService {
             taskMapper.delete(Wrappers.<WfTask>lambdaQuery().eq(WfTask::getInstId, instId));
             approvalLogMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, instId));
             snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, instId));
+            // 影子实例清理路径不走 cleanupTestData，需独立级联清理
+            freeFlowManager.cleanup(instId);
         }
         testLogMapper.delete(Wrappers.<WfTestLog>lambdaQuery().in(WfTestLog::getInstId, created));
         instanceMapper.deleteBatchIds(created);

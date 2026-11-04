@@ -58,6 +58,17 @@ public class WfNodeMustDoActionExecutor {
 	 * @param node 当前节点
 	 */
 	public void checkBeforeSubmit(WfInstance inst, WfProcessNode node) {
+		checkBeforeSubmit(inst, node, org.springblade.workflow.freeflow.WfFreeNodeContext.empty());
+	}
+
+	/**
+	 * 自由流程重载：套红 / 签章点改由实例级 {@code wf_free_node.must_taohong / is_finalize} 判定。
+	 *
+	 * <p>静态池方案下 nodeKey 恒为 {@code Free_k}，永不等于设计期 taohongNodeKey / signNodeKey；
+	 * 不做此适配会导致必做动作「静默跳过、不报错」。</p>
+	 */
+	public void checkBeforeSubmit(WfInstance inst, WfProcessNode node,
+								  org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx) {
 		if (inst == null || node == null) {
 			return;
 		}
@@ -66,8 +77,8 @@ public class WfNodeMustDoActionExecutor {
 		if (set == null) {
 			return;
 		}
-		checkTaohong(inst, node, set);
-		checkSeal(inst, node, set);
+		checkTaohong(inst, node, set, freeCtx);
+		checkSeal(inst, node, set, freeCtx);
 		checkSecretLevel(inst, node, set);
 		// 清稿 / 打印暂无「完成态」可校验：WfOdocPrintSet 只是「哪个节点用哪个打印模板」的
 		// 配置表，非「已打印」记录；清稿无任何实体/版本标记。若此时做硬拦截会永久卡流程，
@@ -76,20 +87,34 @@ public class WfNodeMustDoActionExecutor {
 		checkPrintLogOnly(inst, node, set);
 	}
 
-	private void checkTaohong(WfInstance inst, WfProcessNode node, WfOdocProcessSet set) {
-		Integer must = set.getMustTaohong();
-		String taohongNodeKey = set.getTaohongNodeKey();
-		if (must == null || must != 1 || taohongNodeKey == null || taohongNodeKey.isBlank()) {
-			return;
-		}
-		if (!Objects.equals(node.getNodeKey(), taohongNodeKey)) {
-			return;
+	private void checkTaohong(WfInstance inst, WfProcessNode node, WfOdocProcessSet set,
+							  org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx) {
+		boolean freeHit = freeCtx != null && !freeCtx.isEmpty() && freeMustTaohong(freeCtx, node.getNodeKey());
+		if (!freeHit) {
+			Integer must = set.getMustTaohong();
+			String taohongNodeKey = set.getTaohongNodeKey();
+			if (must == null || must != 1 || taohongNodeKey == null || taohongNodeKey.isBlank()) {
+				return;
+			}
+			if (!Objects.equals(node.getNodeKey(), taohongNodeKey)) {
+				return;
+			}
 		}
 		WfOdocDoc doc = docService.getDocByInstanceId(inst.getId());
 		boolean done = doc != null && doc.getHasUsedTemplet() != null && doc.getHasUsedTemplet() == 1;
 		if (!done) {
 			throw new ServiceException("该节点提交前必须完成公文套红");
 		}
+	}
+
+	private boolean freeMustTaohong(org.springblade.workflow.freeflow.WfFreeNodeContext ctx, String nodeKey) {
+		var step = ctx.byNodeKey(nodeKey);
+		return step != null && Integer.valueOf(1).equals(step.getMustTaohong());
+	}
+
+	private boolean freeFinalize(org.springblade.workflow.freeflow.WfFreeNodeContext ctx, String nodeKey) {
+		var step = ctx.byNodeKey(nodeKey);
+		return step != null && Integer.valueOf(1).equals(step.getIsFinalize());
 	}
 
 	/**
@@ -102,11 +127,13 @@ public class WfNodeMustDoActionExecutor {
 	 * 回调/补偿完成后才归档签章件），若在此要求"已签章"会形成死锁（永远无法提交）。
 	 * 故 esign 方案下把校验口径降为「可签章前提」——必须已有 PDF/OFD 版式文件。</p>
 	 */
-	private void checkSeal(WfInstance inst, WfProcessNode node, WfOdocProcessSet set) {
+	private void checkSeal(WfInstance inst, WfProcessNode node, WfOdocProcessSet set,
+						   org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx) {
 		if (set.getSealRequired() == null || set.getSealRequired() != 1) {
 			return;
 		}
-		if (!hitNode(node.getNodeKey(), set.getSignNodeKey(), set.getSignatureNodeKeys())) {
+		boolean freeHit = freeCtx != null && !freeCtx.isEmpty() && freeFinalize(freeCtx, node.getNodeKey());
+		if (!freeHit && !hitNode(node.getNodeKey(), set.getSignNodeKey(), set.getSignatureNodeKeys())) {
 			return;
 		}
 		WfOdocDoc doc = docService.getDocByInstanceId(inst.getId());

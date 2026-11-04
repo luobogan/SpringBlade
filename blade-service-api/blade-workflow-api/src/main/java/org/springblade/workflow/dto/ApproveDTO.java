@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -28,6 +29,18 @@ public class ApproveDTO implements Serializable {
 
     @Schema(description = "指定流转-下一节点操作者（模式1=用户指定；模式2忽略，取目标节点设置）")
     private Long nextAssignee;
+
+    @Schema(description = "自由流程-下一节点多名办理人（向后兼容：为空时回退 nextAssignee 单人）")
+    private List<Long> nextAssigneeIds;
+
+    @Schema(description = "自由流程-下一步显示名（写入 wf_task.ext_json 供待办/进度图/意见展示）")
+    private String nextNodeName;
+
+    @Schema(description = "自由流程-会签关系：0非会签 1会签 2依次逐个")
+    private Integer signType;
+
+    @Schema(description = "自由流程-步骤编排保存幂等键（防重复提交）")
+    private String saveToken;
 
     @Schema(description = "明文密码（仅当前节点开启「二次认证」时需要）")
     private String password;

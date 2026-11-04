@@ -39,6 +39,12 @@ public class WfOdocLayoutAssignListener {
 	 * 节点提交后置处理：若为转版式/定稿节点则自动出版式文件。
 	 */
 	public void onNodeSubmit(WfInstance inst, WfProcessNode node) {
+		onNodeSubmit(inst, node, org.springblade.workflow.freeflow.WfFreeNodeContext.empty());
+	}
+
+	/** 自由流程重载：版式点跟随实例级定稿标记（wf_free_node.is_finalize） */
+	public void onNodeSubmit(WfInstance inst, WfProcessNode node,
+							 org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx) {
 		if (inst == null || node == null) {
 			return;
 		}
@@ -52,7 +58,7 @@ public class WfOdocLayoutAssignListener {
 			// 0=不启用（L1 纯 docx/pdf）或非法值：不自动转版式
 			return;
 		}
-		if (!triggered(node.getNodeKey(), set)) {
+		if (!triggered(node.getNodeKey(), set, freeCtx)) {
 			return;
 		}
 		WfOdocDoc doc = docService.getDocByInstanceId(inst.getId());
@@ -79,8 +85,18 @@ public class WfOdocLayoutAssignListener {
 
 	/** 命中判定：优先 layoutNodeKey；未配置时回落到 finalizeNodeKey */
 	private boolean triggered(String nodeKey, WfOdocProcessSet set) {
+		return triggered(nodeKey, set, org.springblade.workflow.freeflow.WfFreeNodeContext.empty());
+	}
+
+	/** 自由流程实例：定稿标记（is_finalize）即触发版式转换，不再比对静态 key */
+	private boolean triggered(String nodeKey, WfOdocProcessSet set,
+							  org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx) {
 		if (nodeKey == null) {
 			return false;
+		}
+		if (freeCtx != null && !freeCtx.isEmpty()) {
+			var step = freeCtx.byNodeKey(nodeKey);
+			return step != null && Integer.valueOf(1).equals(step.getIsFinalize());
 		}
 		String layoutNodeKey = set.getLayoutNodeKey();
 		if (layoutNodeKey != null && !layoutNodeKey.isBlank()) {

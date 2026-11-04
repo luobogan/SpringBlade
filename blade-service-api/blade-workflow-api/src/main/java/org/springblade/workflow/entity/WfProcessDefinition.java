@@ -108,6 +108,9 @@ public class WfProcessDefinition extends TenantEntity {
     @Schema(description = "自由流程类型：1简易 2高级（对齐 ecology newFreeWfType）")
     private Integer freeWfType;
 
+    @Schema(description = "自由流程预置通用审批节点数量；NULL=未配置（按默认5处理）；调整后须重新发布刷新 proc_def_id")
+    private Integer freeNodePoolSize;
+
     @Schema(description = "路径类型（对齐 ecology path_type 字典 code）")
     private String type;
 

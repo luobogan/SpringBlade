@@ -40,6 +40,17 @@ public class WfOdocNumberAssignListener {
 	 * 节点提交后置处理：若为定稿节点则取号并回写。
 	 */
 	public void onNodeSubmit(WfInstance inst, WfProcessNode node) {
+		onNodeSubmit(inst, node, org.springblade.workflow.freeflow.WfFreeNodeContext.empty());
+	}
+
+	/**
+	 * 自由流程重载：定稿点改由实例级 {@code wf_free_node.is_finalize} 判定。
+	 *
+	 * <p>静态节点池方案下 nodeKey 恒为 {@code Free_k}，永不等于设计期
+	 * {@code finalizeNodeKey}；若不做此适配会「不取号、不报错、无日志」静默失效。</p>
+	 */
+	public void onNodeSubmit(WfInstance inst, WfProcessNode node,
+							 org.springblade.workflow.freeflow.WfFreeNodeContext freeCtx) {
 		if (inst == null || node == null) {
 			return;
 		}
@@ -50,11 +61,15 @@ public class WfOdocNumberAssignListener {
 		}
 		String finalizeNodeKey = set.getFinalizeNodeKey();
 		String numberFieldKey = set.getNumberFieldKey();
-		if (finalizeNodeKey == null || finalizeNodeKey.isBlank()
-			|| numberFieldKey == null || numberFieldKey.isBlank()) {
+		if (numberFieldKey == null || numberFieldKey.isBlank()) {
 			return;
 		}
-		if (!finalizeNodeKey.equals(node.getNodeKey())) {
+		boolean freeFinalize = false;
+		if (freeCtx != null && !freeCtx.isEmpty()) {
+			var step = freeCtx.byNodeKey(node.getNodeKey());
+			freeFinalize = step != null && Integer.valueOf(1).equals(step.getIsFinalize());
+		}
+		if (!freeFinalize && (finalizeNodeKey == null || !finalizeNodeKey.equals(node.getNodeKey()))) {
 			return;
 		}
 		if (inst.getFormId() == null || inst.getDataId() == null) {

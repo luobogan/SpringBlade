@@ -92,4 +92,7 @@ public class WfTask extends TenantEntity {
     @Schema(description = "超时动作是否已执行（防重复触发）1=已执行 0=未执行")
     private Integer timeoutHandled;
 
+    @Schema(description = "任务级扩展上下文JSON（自由流程步骤显示名/步序；NULL=普通任务）")
+    private String extJson;
+
 }

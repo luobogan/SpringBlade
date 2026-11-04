@@ -2671,24 +2671,34 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         fields.add(order);
 
         // 7. 是否为自由流程 —— SWITCH（对齐 ecology isFreeWf）
+        //    旧文案「一旦启用不允许关闭」是空壳时代的误导：本期启用后为
+        //    「提交时自选下一步/办理人 + 流转设定编排步骤」，且允许关闭回普通流程。
         FormFieldVO free = field("isFree", "是否为自由流程", "switch", false);
         free.setDefaultValue(0);
-        free.setTip("提示：自由流程一旦启用，保存后即不允许关闭");
+        free.setTip("启用后办理人可在提交时自选下一步与办理人，并通过「流转设定」编排本次单据的步骤；可选节点范围限设计器内预置的通用节点");
         fields.add(free);
 
-        // 8. 自由流程类型（简易/高级）—— 仅当「是否为自由流程」开启时显示
-        //    对齐 ecology newFreeWfType（getBaseInfoItemList 中 isFree==1 的分支）
+        // 8. 自由流程类型：本期仅落地简易模式（高级=分支/合并/模板，留待后续）
         FormFieldVO freeType = field("freeWfType", "自由流程类型", "select", false);
         freeType.setDefaultValue(1);
-        freeType.setOptions(Arrays.asList(
-            option(1, "简易模式"),
-            option(2, "高级模式")
-        ));
+        freeType.setOptions(Arrays.asList(option(1, "简易模式")));
         FormFieldVO.VisibleWhenVO vis = new FormFieldVO.VisibleWhenVO();
         vis.setKey("isFree");
         vis.setEquals(true);
         freeType.setVisibleWhen(vis);
         fields.add(freeType);
+
+        // 9. 通用节点池容量（= 单实例自由步骤上限；NULL 由后端按 5 处理）
+        FormFieldVO pool = field("freeNodePoolSize", "通用节点数量", "number", false);
+        pool.setDefaultValue(5);
+        pool.setMin(1);
+        pool.setMax(20);
+        pool.setTip("自由流程单实例可编排的最大步骤数；调整后须重新生成默认画布并点「发布」刷新部署才生效（保存画布不等于生效）");
+        FormFieldVO.VisibleWhenVO poolVis = new FormFieldVO.VisibleWhenVO();
+        poolVis.setKey("isFree");
+        poolVis.setEquals(true);
+        pool.setVisibleWhen(poolVis);
+        fields.add(pool);
 
         return fields;
     }

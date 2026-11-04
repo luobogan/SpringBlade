@@ -151,6 +151,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
     private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
+    /** 自由流程步骤/链路级联清理（仅依赖 Mapper，无 Bean 循环） */
+    private final org.springblade.workflow.freeflow.WfFreeFlowManager freeFlowManager;
     /** 灰度是否对「单据自动触发」生效（默认 false：单据触发不走灰度，避免生产单据被静默切到灰度版） */
     @Value("${blade.workflow.gray.apply-to-bill-initiated:false}")
     private boolean grayApplyToBillInitiated;
@@ -788,6 +790,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             .eq(WfFormSnapshot::getInstId, instId));
         logMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery()
             .eq(WfApprovalLog::getInstId, instId));
+        // ①-补 自由流程实例级步骤/链路（物理删除，避免孤儿行与唯一键占用）
+        freeFlowManager.cleanup(instId);
 
         // ② 草稿实例本体
         instanceMapper.deleteById(instId);
@@ -2158,6 +2162,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         logMapper.delete(Wrappers.<WfApprovalLog>lambdaQuery().eq(WfApprovalLog::getInstId, instId));
         // ①-补 清表单快照（按实例），避免 forceDelete 后残留孤儿快照
         snapshotMapper.delete(Wrappers.<WfFormSnapshot>lambdaQuery().eq(WfFormSnapshot::getInstId, instId));
+        // ①-补 自由流程实例级步骤/链路（物理删除，防孤儿行与唯一键占用）
+        freeFlowManager.cleanup(instId);
         // ② 清引擎运行态；③ 清历史（容错：已完成实例运行态/历史可能已不存在，
         //    必须 try-catch，否则异常会使整个 @Transactional 回滚 → 实例完全未删）
         if (inst.getEngineInstId() != null) {

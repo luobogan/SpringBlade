@@ -45,6 +45,9 @@ public class WfRejectManager {
     private final WfNodeLinkMapper linkMapper;
     /** BPMN wf: 扩展读取收口：定义读源=BPMN 时出口/节点改读引擎部署模型（含折叠连线） */
     private final WfBpmnExtensionReader bpmnReader;
+    /** 自由流程实例级步骤/链路（仅 Mapper，无 Service 回边） */
+    private final org.springblade.workflow.mapper.WfFreeNodeMapper freeNodeMapper;
+    private final org.springblade.workflow.mapper.WfFreeLinkMapper freeLinkMapper;
 
     /** 定义读源开关：三个消费方（任务/定义/退回）共用同一配置 key，默认关 */
     @Value("${blade.workflow.definition-from-bpmn.enabled:false}")
@@ -62,6 +65,41 @@ public class WfRejectManager {
             return List.of();
         }
         return computeRejectableNodes(defId, currentNodeKey, currentNode, loadLinks(defId), loadNodes(defId));
+    }
+
+    /**
+     * 自由流程重载：用实例链路 {@code wf_free_link} 的<b>正向线</b>替代定义态出口做反向 BFS。
+     *
+     * <p>静态池节点之间没有定义态连线，若沿用 {@link #computeRejectableNodes(Long,String,WfProcessNode)}
+     * 会得到空候选 → 前端「当前节点没有可退回的节点」。注意纯函数会跳过 {@code is_reject=1}
+     * 的入边，故这里只转换 {@code is_reject=0} 的正向链（逐级退回线不参与 BFS）。</p>
+     */
+    public List<WfProcessNode> computeRejectableNodes(Long defId, String currentNodeKey,
+                                                      WfProcessNode currentNode, Long instId) {
+        if (instId == null) {
+            return computeRejectableNodes(defId, currentNodeKey, currentNode);
+        }
+        var ctx = org.springblade.workflow.freeflow.WfFreeNodeContext.load(freeNodeMapper, instId);
+        if (ctx.isEmpty()) {
+            return computeRejectableNodes(defId, currentNodeKey, currentNode);
+        }
+        List<org.springblade.workflow.entity.WfFreeLink> rows = freeLinkMapper.selectList(
+            com.baomidou.mybatisplus.core.toolkit.Wrappers.<org.springblade.workflow.entity.WfFreeLink>lambdaQuery()
+                .eq(org.springblade.workflow.entity.WfFreeLink::getInstId, instId));
+        List<WfNodeLink> links = new ArrayList<>();
+        for (var l : rows) {
+            if (Integer.valueOf(1).equals(l.getIsReject())) {
+                continue;
+            }
+            WfNodeLink n = new WfNodeLink();
+            n.setDefId(defId);
+            n.setFromNodeKey(l.getFromNodeKey());
+            n.setToNodeKey(l.getToNodeKey());
+            n.setIsReject(0);
+            n.setSortOrder(l.getSortOrder());
+            links.add(n);
+        }
+        return computeRejectableNodes(defId, currentNodeKey, currentNode, links, loadNodes(defId));
     }
 
     /**

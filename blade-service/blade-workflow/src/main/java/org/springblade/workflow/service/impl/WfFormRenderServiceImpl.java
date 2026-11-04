@@ -90,6 +90,9 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     private final ActHiProcinstMapper actProcinstMapper;
     private final WfApprovalLogActReader actLogReader;
     private final WfTaskActReader taskActReader;
+    /** 自由流程：办理页渲染也应用影子节点装饰（仅 Mapper + Component，无 Service 回边） */
+    private final org.springblade.workflow.mapper.WfFreeNodeMapper freeNodeMapper;
+    private final org.springblade.workflow.freeflow.WfFreeNodeResolver freeNodeResolver;
     /**
      * 渲染层节点读源开关（T-10 孤立缺口闭环）：与定义期总开关 {@code definition-from-bpmn} 解耦，仅影响
      * {@code /form/render} 与 {@code /form/preview} 的节点配置读取（操作菜单/签字意见/打印设置/意见显示）。
@@ -169,6 +172,10 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
                 .eq(WfProcessNode::getNodeKey, nodeKey)
                 .last("LIMIT 1"));
         }
+        // 自由流程：办理页渲染也应用影子节点装饰，使操作菜单/签字意见/打印设置
+        // 读到本实例该步骤的配置（非自由实例为空上下文，原样返回、零额外生效）。
+        node = freeNodeResolver.decorate(
+            org.springblade.workflow.freeflow.WfFreeNodeContext.load(freeNodeMapper, inst.getId()), node, nodeKey);
         List<String> allowMenus = WfNodeSettingsUtil.operateMenus(node);
         vo.setAllowMenus(allowMenus);
         // 「未配置=不限制」必须显式标记：blade 全局 HTTP 转换器 nullToEmpty=true（默认开）会把
