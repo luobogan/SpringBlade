@@ -1745,9 +1745,21 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             //   必须把满足条件的实例ID约束（overdue ∩ anomalyTypes 交集，见 computeMonitorIdRestriction）下推到主查询
             //   BUSINESS_KEY_（=wf_instance.id）。否则分页时这些实例不在前几页会被漏掉，内存后置过滤只能过滤已返回
             //   记录 → 表现为「看板统计显示 N 条、点对应分类列表却空」。复用 wf 读源同源的约束计算，保证双读源口径一致。
-            List<Long> idRestriction = computeMonitorIdRestriction(q);
-            if (idRestriction != null && idRestriction.isEmpty()) {
+            // act 读源：ACT_HI_PROCINST 无 is_deleted 列，无法在 SQL 内排除已逻辑删实例；
+            // 复用 wf 读源同源的「非删除实例ID」集合（带委托范围）约束 BUSINESS_KEY_，
+            // 使列表与看板（wf_instance 口径）一致：已删实例不出现在监控列表。
+            List<Long> validIds = nonDeletedInstanceIds(scope);
+            if (validIds.isEmpty()) {
                 return new Page<InstanceVO>(cur, size);
+            }
+            List<Long> idRestriction = computeMonitorIdRestriction(q);
+            if (idRestriction == null) {
+                idRestriction = validIds;
+            } else {
+                idRestriction = intersectIds(idRestriction, validIds);
+                if (idRestriction.isEmpty()) {
+                    return new Page<InstanceVO>(cur, size);
+                }
             }
             List<String> statusCodes = (q.getStatuses() != null && !q.getStatuses().isEmpty())
                 ? q.getStatuses().stream().map(ActHiProcinst::statusCodeName).collect(Collectors.toList()) : null;
@@ -1884,6 +1896,22 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             keep.putIfAbsent(key, v);
         }
         voPage.setRecords(new ArrayList<>(keep.values()));
+    }
+
+    /** 监控 act 读源下 ACT_HI_PROCINST 无 is_deleted 列，无法在 SQL 内排除已逻辑删实例；
+     *  此处复用 wf 读源同源的「非删除业务实例ID」集合（带委托范围），供 act 主查询约束 BUSINESS_KEY_，
+     *  使列表与看板（wf_instance 口径）一致。 */
+    private List<Long> nonDeletedInstanceIds(MonitorScopeView scope) {
+        LambdaQueryWrapper<WfInstance> wq = Wrappers.<WfInstance>lambdaQuery()
+            .select(WfInstance::getId)
+            .eq(WfInstance::getIsDeleted, 0);
+        if (scope != null) {
+            if (!scope.isAllDefs()) {
+                wq.in(WfInstance::getDefId, scope.getDefIds());
+            }
+            wq.in(WfInstance::getStarter, scope.getStarterIds());
+        }
+        return instanceMapper.selectObjs(wq).stream().map(this::toLong).collect(Collectors.toList());
     }
 
     /** 计算「超时 + 异常」交叠后的实例ID约束（用于 wf 读源主查询）；无约束返回 null */
