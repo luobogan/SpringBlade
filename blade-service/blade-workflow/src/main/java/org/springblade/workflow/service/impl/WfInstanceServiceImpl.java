@@ -1740,14 +1740,14 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
 
         if (actRead()) {
-            // 读源=act：与 picker 同构，仅叠加可表达的筛选；defName/starter/currentNodeKey 在 act 模式下做后置过滤。
-            // ⚠️ 超时（wf_task.due_time）/ 异常（wf_instance 业务列）维度无法在 ACT_HI_PROCINST 上表达，
-            //   必须把满足条件的实例ID约束（overdue ∩ anomalyTypes 交集，见 computeMonitorIdRestriction）下推到主查询
-            //   BUSINESS_KEY_（=wf_instance.id）。否则分页时这些实例不在前几页会被漏掉，内存后置过滤只能过滤已返回
-            //   记录 → 表现为「看板统计显示 N 条、点对应分类列表却空」。复用 wf 读源同源的约束计算，保证双读源口径一致。
-            // act 读源：ACT_HI_PROCINST 无 is_deleted 列，无法在 SQL 内排除已逻辑删实例；
-            // 复用 wf 读源同源的「非删除实例ID」集合（带委托范围）约束 BUSINESS_KEY_，
-            // 使列表与看板（wf_instance 口径）一致：已删实例不出现在监控列表。
+            // 读源=act。ACT_HI_PROCINST 同一 business_id（=wf_instance.id）可能因「发起 / 退回重启」产生多行，
+            // 实例的「当前状态」必须由该 business_id 最新一行（START_TIME_ 最大）决定。本分支采用
+            // 「全量候选行 → 全局去重取最新行（当前状态）→ 内存统一过滤 → 内存分页」，
+            // 避免「先按状态过滤再去重」导致同一实例在不同状态筛选下被算成不同状态（口径分裂），
+            // 也避免分页内去重因多行跨页而取错「当前状态」。
+            // ⚠️ 超时（wf_task）/ 异常（wf_instance 业务列）维度无法在 ACT_HI_PROCINST 表达，其约束经
+            //   computeMonitorIdRestriction 以实例ID集合下推到 BUSINESS_KEY_。
+            // act 读源无 is_deleted 列，复用 wf 读源同源「非删除实例ID」集合约束 BUSINESS_KEY_，与看板口径一致。
             List<Long> validIds = nonDeletedInstanceIds(scope);
             if (validIds.isEmpty()) {
                 return new Page<InstanceVO>(cur, size);
@@ -1761,70 +1761,80 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     return new Page<InstanceVO>(cur, size);
                 }
             }
-            List<String> statusCodes = (q.getStatuses() != null && !q.getStatuses().isEmpty())
-                ? q.getStatuses().stream().map(ActHiProcinst::statusCodeName).collect(Collectors.toList()) : null;
-            LambdaQueryWrapper<ActHiProcinst> wq = monitorActQueryWrapper(q, statusCodes, idRestriction)
-                .orderByDesc(ActHiProcinst::getStartTime);
-            Page<ActHiProcinst> page = new Page<>(cur, size);
-            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, wq);
-            IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
-            // 同一 business_id（=wf_instance.id）在 ACT_HI_PROCINST 可能因「发起 / 退回重启」产生多行，
-            // 监控按实例维度展示，每张 wf_instance 仅应出现一次；查询已按 START_TIME_ DESC，保留首个即最新。
-            dedupeMonitorByInstance(voPage);
-            postFilterMonitor(voPage, q);
-            enrichMonitor(voPage);
+            // 流程名称/流程定义 → defId 列表（下推 SQL）；名称模糊无匹配则直接空集
+            List<Long> defIds = resolveMonitorDefIds(q);
+            if (Func.isNotBlank(q.getDefName()) && (defIds == null || defIds.isEmpty())) {
+                return new Page<InstanceVO>(cur, size);
+            }
+            // 1) 拉全量候选行：状态不下推 SQL（状态须基于全局去重后的当前状态）；
+            //    其余可表达维度（租户/测试态/标题/时间/流程定义/发起人/当前节点/紧急度/实例ID约束）下推 SQL 粗过滤
+            List<ActHiProcinst> rows = actProcinstMapper.selectList(
+                monitorActQueryWrapper(q, null, idRestriction, defIds).orderByDesc(ActHiProcinst::getStartTime));
+            // 2) 全局去重：每个 business_id 保留 START_TIME_ 最新行 → 当前状态实例全集
+            rows.sort((a, b) -> Long.compare(
+                b.getStartTime() == null ? 0L : b.getStartTime().getTime(),
+                a.getStartTime() == null ? 0L : a.getStartTime().getTime()));
+            LinkedHashMap<Long, ActHiProcinst> latest = new LinkedHashMap<>();
+            for (ActHiProcinst t : rows) {
+                latest.putIfAbsent(t.getBusinessId(), t);
+            }
+            List<InstanceVO> all = latest.values().stream()
+                .map(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)))
+                .collect(Collectors.toList());
+            // 3) 富化（超时 / 异常 / 发起人姓名 / 流程名称等）
+            IPage<InstanceVO> tmp = new Page<>();
+            tmp.setRecords(all);
+            enrichMonitor(tmp);
+            List<InstanceVO> enriched = tmp.getRecords();
+            // 4) 状态维度（基于当前状态）内存过滤
+            if (q.getStatuses() != null && !q.getStatuses().isEmpty()) {
+                enriched = enriched.stream()
+                    .filter(v -> q.getStatuses().contains(v.getStatus()))
+                    .collect(Collectors.toList());
+            }
+            // 5) 超时 / 异常维度（仅作用于已启动实例；草稿无待办、与异常卡片口径解耦，于草稿合并处排除）
             if (q.getOverdue() != null || (q.getAnomalyTypes() != null && !q.getAnomalyTypes().isEmpty())) {
-                voPage.setRecords(voPage.getRecords().stream()
+                enriched = enriched.stream()
                     .filter(v -> (q.getOverdue() == null || Boolean.TRUE.equals(v.getOverdue()))
                         && (q.getAnomalyTypes() == null || !Collections.disjoint(anomalyCodes(v), q.getAnomalyTypes())))
-                    .collect(Collectors.toList()));
-                voPage.setTotal(voPage.getRecords().size());
-            } else {
-                // 普通列表：total 按去重后的实例数（distinct business_id）校正，避免重复行虚高分页总数
-                long distinctTotal = actProcinstMapper.selectObjs(
-                    monitorActQueryWrapper(q, statusCodes, idRestriction)
-                        .select(ActHiProcinst::getBusinessId)
-                        .groupBy(ActHiProcinst::getBusinessId)).size();
-                voPage.setTotal(distinctTotal);
+                    .collect(Collectors.toList());
             }
-            // 委托范围后置裁剪（act 读源无法在 SQL 内 join 跨库用户表，故在此按范围过滤）
-            if (scope != null) {
-                voPage.setRecords(voPage.getRecords().stream()
-                    .filter(v -> (scope.isAllDefs() || (v.getDefId() != null && scope.getDefIds().contains(v.getDefId())))
-                        && v.getStarter() != null && scope.getStarterIds().contains(v.getStarter()))
-                    .collect(Collectors.toList()));
-                voPage.setTotal((long) voPage.getRecords().size());
-            }
-            // 草稿实例只存在于业务表 wf_instance（从未启动引擎 → ACT_HI_PROCINST 无对应行），
-            // act 读源下若不补回，监控列表会漏掉所有草稿（含已发起未提交的拟稿），与统计/「我的请求」口径不一致
-            if (q.getStatuses() == null || q.getStatuses().isEmpty()
-                || q.getStatuses().contains(WfInstance.STATUS_DRAFT)) {
+            // 6) 草稿并入（草稿仅存 wf_instance，ACT 无行）；仅当筛选含草稿（statuses 含5或为null）且非超时/异常维度
+            List<InstanceVO> combined = new ArrayList<>(enriched);
+            boolean draftAllowed = (q.getStatuses() == null || q.getStatuses().isEmpty()
+                    || q.getStatuses().contains(WfInstance.STATUS_DRAFT))
+                && q.getOverdue() == null
+                && (q.getAnomalyTypes() == null || q.getAnomalyTypes().isEmpty());
+            if (draftAllowed) {
                 var draftQ = Wrappers.<WfInstance>lambdaQuery()
                     .eq(WfInstance::getIsDeleted, 0)
                     .eq(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
                     .eq(q.getIsTest() != null, WfInstance::getIsTest, q.getIsTest())
                     .like(q.getKeyword() != null && !q.getKeyword().isBlank(), WfInstance::getTitle, q.getKeyword())
                     .ge(q.getBeginTime() != null, WfInstance::getStartTime, q.getBeginTime())
-                    .le(q.getEndTime() != null, WfInstance::getStartTime, q.getEndTime());
+                    .le(q.getEndTime() != null, WfInstance::getStartTime, q.getEndTime())
+                    .in(defIds != null && !defIds.isEmpty(), WfInstance::getDefId, defIds)
+                    .eq(q.getStarter() != null, WfInstance::getStarter, q.getStarter())
+                    .in(Func.isNotBlank(q.getStartersStr()), WfInstance::getStarter, Func.toLongList(q.getStartersStr()))
+                    .eq(q.getCurrentNodeKey() != null && !q.getCurrentNodeKey().isBlank(), WfInstance::getCurrentNodeKey, q.getCurrentNodeKey())
+                    .eq(q.getUrgent() != null, WfInstance::getUrgency, q.getUrgent());
                 if (scope != null) {
                     if (!scope.isAllDefs()) draftQ.in(WfInstance::getDefId, scope.getDefIds());
                     draftQ.in(WfInstance::getStarter, scope.getStarterIds());
                 }
-                Long draftTotal = instanceMapper.selectCount(draftQ);
-                long dc = draftTotal == null ? 0L : draftTotal;
-                voPage.setTotal(voPage.getTotal() + dc);
-                // 草稿只在第一页并入：避免翻页时同一草稿重复插入（与 mine 列表同口径）
-                if (dc > 0 && cur <= 1) {
-                    List<WfInstance> drafts = instanceMapper.selectList(draftQ.orderByDesc(WfInstance::getStartTime));
-                    if (drafts != null && !drafts.isEmpty()) {
-                        List<InstanceVO> merged =
-                            new java.util.ArrayList<>(drafts.size() + voPage.getRecords().size());
-                        drafts.forEach(d -> merged.add(toInstanceVO(d)));
-                        merged.addAll(voPage.getRecords());
-                        voPage.setRecords(merged);
-                    }
+                List<WfInstance> drafts = instanceMapper.selectList(draftQ.orderByDesc(WfInstance::getStartTime));
+                if (drafts != null && !drafts.isEmpty()) {
+                    drafts.forEach(d -> combined.add(toInstanceVO(d)));
                 }
             }
+            // 7) 内存分页（与全部过滤口径一致，total 即过滤后全集大小，翻页无错位）
+            long total = combined.size();
+            int from = (int) ((cur - 1) * size);
+            List<InstanceVO> pageRecs = combined.stream()
+                .skip(from).limit(size).collect(Collectors.toList());
+            IPage<InstanceVO> voPage = new Page<>(cur, size);
+            voPage.setRecords(pageRecs);
+            voPage.setTotal(total);
             return voPage;
         }
 
@@ -1833,8 +1843,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (idRestriction != null && idRestriction.isEmpty()) {
             return new Page<InstanceVO>(cur, size);
         }
-        Long defIdFilter = resolveMonitorDefId(q);
-        if (defIdFilter != null && defIdFilter < 0) {
+        List<Long> defIds = resolveMonitorDefIds(q);
+        if (Func.isNotBlank(q.getDefName()) && (defIds == null || defIds.isEmpty())) {
             return new Page<InstanceVO>(cur, size);
         }
         LambdaQueryWrapper<WfInstance> wq = Wrappers.<WfInstance>lambdaQuery()
@@ -1856,7 +1866,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             }
             wq.in(WfInstance::getStarter, scope.getStarterIds());
         } else {
-            wq.eq(defIdFilter != null, WfInstance::getDefId, defIdFilter)
+            wq.in(defIds != null && !defIds.isEmpty(), WfInstance::getDefId, defIds)
                 .eq(q.getStarter() != null, WfInstance::getStarter, q.getStarter());
         }
         Page<WfInstance> page = new Page<>(cur, size);
@@ -1866,9 +1876,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return voPage;
     }
 
-    /** 监控 act 读源主查询的过滤 wrapper（不含排序，调用方按需追加）；与 wf 读源口径一致 */
+    /** 监控 act 读源主查询的过滤 wrapper（不含排序，调用方按需追加）；与 wf 读源口径一致。
+     *  ACT_HI_PROCINST 冗余了 DEF_ID_/STARTER_/CURRENT_NODE_KEY_/URGENCY_ 列，可全部下推 SQL，
+     *  避免「内存后置过滤 → total 虚高 / 分页错位」。defName 无对应列，由调用方先解析为 defIds 列表下推。 */
     private LambdaQueryWrapper<ActHiProcinst> monitorActQueryWrapper(
-        MonitorInstanceQuery q, List<String> statusCodes, List<Long> idRestriction) {
+        MonitorInstanceQuery q, List<String> statusCodes, List<Long> idRestriction, List<Long> defIds) {
         return Wrappers.<ActHiProcinst>lambdaQuery()
             .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
             .eq(q.getIsTest() != null, ActHiProcinst::getIsTest, q.getIsTest())
@@ -1876,26 +1888,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             .like(q.getKeyword() != null && !q.getKeyword().isBlank(), ActHiProcinst::getTitle, q.getKeyword())
             .ge(q.getBeginTime() != null, ActHiProcinst::getStartTime, q.getBeginTime())
             .le(q.getEndTime() != null, ActHiProcinst::getStartTime, q.getEndTime())
+            .in(defIds != null && !defIds.isEmpty(), ActHiProcinst::getDefId, defIds)
+            .eq(q.getStarter() != null, ActHiProcinst::getStarter, q.getStarter())
+            .in(Func.isNotBlank(q.getStartersStr()), ActHiProcinst::getStarter, Func.toLongList(q.getStartersStr()))
+            .eq(q.getCurrentNodeKey() != null && !q.getCurrentNodeKey().isBlank(), ActHiProcinst::getCurrentNodeKey, q.getCurrentNodeKey())
+            .eq(q.getUrgent() != null, ActHiProcinst::getUrgency, q.getUrgent())
             .in(idRestriction != null && !idRestriction.isEmpty(), ActHiProcinst::getBusinessId, idRestriction);
-    }
-
-    /** 监控列表按实例维度去重：同一 business_id（=wf_instance.id）在 ACT_HI_PROCINST 可能有多行
-     *  （发起 / 退回重启），保留 START_TIME_ 最新者（入参 records 已按 START_TIME_ DESC）。 */
-    private void dedupeMonitorByInstance(IPage<InstanceVO> voPage) {
-        List<InstanceVO> recs = voPage.getRecords();
-        if (recs == null || recs.isEmpty()) {
-            return;
-        }
-        LinkedHashMap<Long, InstanceVO> keep = new LinkedHashMap<>();
-        for (InstanceVO v : recs) {
-            Long key = v.getId();
-            // 理论上 id 必为 business_id 非空；对极少数缺 id 的记录用占位键避免互相覆盖
-            if (key == null) {
-                key = -(keep.size() + 1L);
-            }
-            keep.putIfAbsent(key, v);
-        }
-        voPage.setRecords(new ArrayList<>(keep.values()));
     }
 
     /** 监控 act 读源下 ACT_HI_PROCINST 无 is_deleted 列，无法在 SQL 内排除已逻辑删实例；
@@ -1959,22 +1957,28 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return a.stream().filter(set::contains).collect(Collectors.toList());
     }
 
-    /** 流程定义名称模糊 → 定位 defId（取首个匹配；定义名通常唯一） */
-    private Long resolveMonitorDefId(MonitorInstanceQuery q) {
+    /** 流程定义名称模糊 + 显式 defId → 解析为匹配的 defId 列表（取交集；显式下拉优先）。
+     *  用于 act / wf 双读源把「流程名称/流程定义」筛选统一下推 SQL，避免内存过滤导致 total 与分页失真。 */
+    private List<Long> resolveMonitorDefIds(MonitorInstanceQuery q) {
+        List<Long> ids = null;
         if (q.getDefName() != null && !q.getDefName().isBlank()) {
-            List<Long> ids = defMapper.selectObjs(Wrappers.<WfProcessDefinition>lambdaQuery()
+            ids = defMapper.selectObjs(Wrappers.<WfProcessDefinition>lambdaQuery()
                 .select(WfProcessDefinition::getId)
                 .like(WfProcessDefinition::getName, q.getDefName()))
                 .stream().map(this::toLong).collect(Collectors.toList());
-            if (ids.isEmpty()) {
-                return -1L;
-            }
-            if (q.getDefId() != null) {
-                return ids.contains(q.getDefId()) ? q.getDefId() : -1L;
-            }
-            return ids.get(0);
         }
-        return q.getDefId();
+        if (q.getDefId() != null) {
+            if (ids == null) {
+                ids = new ArrayList<>();
+            }
+            // 显式下拉优先：最终仅保留 defId（若与名称模糊匹配不一致则以此为准）
+            boolean matched = ids.stream().anyMatch(id -> id.equals(q.getDefId()));
+            ids = ids.stream().filter(id -> id.equals(q.getDefId())).collect(Collectors.toList());
+            if (!matched) {
+                ids.add(q.getDefId());
+            }
+        }
+        return ids;
     }
 
     /**
@@ -2066,31 +2070,6 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             // 单个用户查询失败不影响整列展示
         }
         return null;
-    }
-
-    /** act 读源下的后置过滤（defName/starter/startersStr/currentNodeKey 等非 act 列；超时/异常已在调用方处理） */
-    private void postFilterMonitor(IPage<InstanceVO> voPage, MonitorInstanceQuery q) {
-        List<Long> starters = Func.isNotBlank(q.getStartersStr()) ? Func.toLongList(q.getStartersStr()) : null;
-        if (q.getDefName() == null && q.getStarter() == null && starters == null && q.getCurrentNodeKey() == null) {
-            return;
-        }
-        List<InstanceVO> kept = voPage.getRecords().stream().filter(v -> {
-            if (q.getDefName() != null && (v.getDefName() == null || !v.getDefName().contains(q.getDefName()))) {
-                return false;
-            }
-            if (q.getStarter() != null && !q.getStarter().equals(v.getStarter())) {
-                return false;
-            }
-            if (starters != null && (v.getStarter() == null || !starters.contains(v.getStarter()))) {
-                return false;
-            }
-            if (q.getCurrentNodeKey() != null && !q.getCurrentNodeKey().equals(v.getCurrentNodeKey())) {
-                return false;
-            }
-            return true;
-        }).collect(Collectors.toList());
-        voPage.setRecords(kept);
-        voPage.setTotal(kept.size());
     }
 
     /** L3 异常类型集合（与 anomalyTypes 编码 1/2/3 对应） */
