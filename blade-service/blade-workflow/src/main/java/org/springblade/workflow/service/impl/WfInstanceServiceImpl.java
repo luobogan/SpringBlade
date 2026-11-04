@@ -1749,19 +1749,16 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             if (idRestriction != null && idRestriction.isEmpty()) {
                 return new Page<InstanceVO>(cur, size);
             }
-            Page<ActHiProcinst> page = new Page<>(cur, size);
             List<String> statusCodes = (q.getStatuses() != null && !q.getStatuses().isEmpty())
                 ? q.getStatuses().stream().map(ActHiProcinst::statusCodeName).collect(Collectors.toList()) : null;
-            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, Wrappers.<ActHiProcinst>lambdaQuery()
-                .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
-                .eq(q.getIsTest() != null, ActHiProcinst::getIsTest, q.getIsTest())
-                .in(statusCodes != null && !statusCodes.isEmpty(), ActHiProcinst::getBusinessStatus, statusCodes)
-                .like(q.getKeyword() != null && !q.getKeyword().isBlank(), ActHiProcinst::getTitle, q.getKeyword())
-                .ge(q.getBeginTime() != null, ActHiProcinst::getStartTime, q.getBeginTime())
-                .le(q.getEndTime() != null, ActHiProcinst::getStartTime, q.getEndTime())
-                .in(idRestriction != null && !idRestriction.isEmpty(), ActHiProcinst::getBusinessId, idRestriction)
-                .orderByDesc(ActHiProcinst::getStartTime));
+            LambdaQueryWrapper<ActHiProcinst> wq = monitorActQueryWrapper(q, statusCodes, idRestriction)
+                .orderByDesc(ActHiProcinst::getStartTime);
+            Page<ActHiProcinst> page = new Page<>(cur, size);
+            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, wq);
             IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
+            // 同一 business_id（=wf_instance.id）在 ACT_HI_PROCINST 可能因「发起 / 退回重启」产生多行，
+            // 监控按实例维度展示，每张 wf_instance 仅应出现一次；查询已按 START_TIME_ DESC，保留首个即最新。
+            dedupeMonitorByInstance(voPage);
             postFilterMonitor(voPage, q);
             enrichMonitor(voPage);
             if (q.getOverdue() != null || (q.getAnomalyTypes() != null && !q.getAnomalyTypes().isEmpty())) {
@@ -1770,6 +1767,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                         && (q.getAnomalyTypes() == null || !Collections.disjoint(anomalyCodes(v), q.getAnomalyTypes())))
                     .collect(Collectors.toList()));
                 voPage.setTotal(voPage.getRecords().size());
+            } else {
+                // 普通列表：total 按去重后的实例数（distinct business_id）校正，避免重复行虚高分页总数
+                long distinctTotal = actProcinstMapper.selectObjs(
+                    monitorActQueryWrapper(q, statusCodes, idRestriction)
+                        .select(ActHiProcinst::getBusinessId)
+                        .groupBy(ActHiProcinst::getBusinessId)).size();
+                voPage.setTotal(distinctTotal);
             }
             // 委托范围后置裁剪（act 读源无法在 SQL 内 join 跨库用户表，故在此按范围过滤）
             if (scope != null) {
@@ -1848,6 +1852,38 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         IPage<InstanceVO> voPage = result.convert(this::toInstanceVO);
         enrichMonitor(voPage);
         return voPage;
+    }
+
+    /** 监控 act 读源主查询的过滤 wrapper（不含排序，调用方按需追加）；与 wf 读源口径一致 */
+    private LambdaQueryWrapper<ActHiProcinst> monitorActQueryWrapper(
+        MonitorInstanceQuery q, List<String> statusCodes, List<Long> idRestriction) {
+        return Wrappers.<ActHiProcinst>lambdaQuery()
+            .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+            .eq(q.getIsTest() != null, ActHiProcinst::getIsTest, q.getIsTest())
+            .in(statusCodes != null && !statusCodes.isEmpty(), ActHiProcinst::getBusinessStatus, statusCodes)
+            .like(q.getKeyword() != null && !q.getKeyword().isBlank(), ActHiProcinst::getTitle, q.getKeyword())
+            .ge(q.getBeginTime() != null, ActHiProcinst::getStartTime, q.getBeginTime())
+            .le(q.getEndTime() != null, ActHiProcinst::getStartTime, q.getEndTime())
+            .in(idRestriction != null && !idRestriction.isEmpty(), ActHiProcinst::getBusinessId, idRestriction);
+    }
+
+    /** 监控列表按实例维度去重：同一 business_id（=wf_instance.id）在 ACT_HI_PROCINST 可能有多行
+     *  （发起 / 退回重启），保留 START_TIME_ 最新者（入参 records 已按 START_TIME_ DESC）。 */
+    private void dedupeMonitorByInstance(IPage<InstanceVO> voPage) {
+        List<InstanceVO> recs = voPage.getRecords();
+        if (recs == null || recs.isEmpty()) {
+            return;
+        }
+        LinkedHashMap<Long, InstanceVO> keep = new LinkedHashMap<>();
+        for (InstanceVO v : recs) {
+            Long key = v.getId();
+            // 理论上 id 必为 business_id 非空；对极少数缺 id 的记录用占位键避免互相覆盖
+            if (key == null) {
+                key = -(keep.size() + 1L);
+            }
+            keep.putIfAbsent(key, v);
+        }
+        voPage.setRecords(new ArrayList<>(keep.values()));
     }
 
     /** 计算「超时 + 异常」交叠后的实例ID约束（用于 wf 读源主查询）；无约束返回 null */
