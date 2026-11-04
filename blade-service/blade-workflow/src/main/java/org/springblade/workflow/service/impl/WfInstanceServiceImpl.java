@@ -8,6 +8,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
 import java.util.stream.Collectors;
+import java.util.Date;
 import java.util.Set;
 import java.util.HashSet;
 import com.baomidou.mybatisplus.core.metadata.IPage;
@@ -62,7 +63,12 @@ import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
+import org.springblade.workflow.reject.WfRejectManager;
 import org.springblade.workflow.util.BpmnExtensionUtil;
+import org.springblade.system.user.entity.UserInfo;
+import org.springblade.system.user.feign.IUserClient;
+import org.springblade.workflow.vo.RejectCandidateVO;
+import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfSubflowService;
@@ -73,6 +79,7 @@ import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springblade.workflow.service.helper.WfApprovalLogActReader;
 import org.springblade.workflow.service.helper.ActInstanceConverter;
 import org.springblade.workflow.service.helper.WfTaskActReader;
+import org.springblade.workflow.service.policy.WfArchiveRecallPolicy;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.config.WfRetirementProperties;
@@ -120,6 +127,20 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class WfInstanceServiceImpl implements IWfInstanceService {
+
+    /**
+     * 「退回后再提交=直达本节点」的引擎变量名（与 WfTaskServiceImpl 同值）。
+     *
+     * <p>强制收回是逐级语义，必须清理该标记残留，否则目标节点重新提交时会跳过中间节点直达上次退回点。</p>
+     */
+    private static final String VAR_RESUBMIT_DIRECT_NODE = "wf_resubmit_direct_node";
+
+    /** 退回后再提交的处理方式：逐级审批（缺省） */
+    private static final int REJECT_RESUBMIT_SEQUENTIAL = 1;
+    /** 退回后再提交的处理方式：直达本节点（重新提交时跳过中间节点，直接回到执行退回的节点） */
+    private static final int REJECT_RESUBMIT_DIRECT = 2;
+    /** 退回弹窗操作者列最多展示的姓名数量（超出以「等N人」收尾） */
+    private static final int MAX_OPERATOR_NAMES = 3;
 
     private final WfInstanceMapper instanceMapper;
     private final WfTaskMapper taskMapper;
@@ -178,6 +199,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfApprovalLogActReader actLogReader;
     /** 任务业务列读器（去 wf_ 表读侧）：nodeOperators / fresh 的任务维度读源=act 由此还原 */
     private final WfTaskActReader taskActReader;
+    /** 退回候选算法（纯 BPMN 反向 BFS，已剔除引擎停不住的类型）：监控回退复用，零改动 */
+    private final WfRejectManager rejectManager;
 
     /**
      * 子流程服务：与 {@link WfSubflowServiceImpl}（亦注入本服务）存在循环依赖，
@@ -1524,6 +1547,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         vo.setNodeName(nodeNameOf(inst.getDefId(), uiNodeKey));
 
         // ① 实例已终结：界面无论停在哪个节点都已失效（归档页只应只读查看，不应再办理）
+        //    ⚠️ 与「归档复活」的耦合：本判定按 status 走，而归档实例被「强制收回 / 监控回退」复活后
+        //    status 会被翻回 RUNNING(0)、current_node_key 置为复活落点，并由 advance 在该节点生成 TODO 待办
+        //    → 本分支自然不再命中，页面即可正常保存与办理。故「归档→收回」的翻转无需在此额外放行，
+        //    判定键保持 status 不变（不得放宽 REJECTED / CANCELED 的拒绝）。
         if (status != null && (status == WfInstance.STATUS_APPROVED
             || status == WfInstance.STATUS_REJECTED || status == WfInstance.STATUS_CANCELED)) {
             vo.setNodeActive(false);
@@ -1713,7 +1740,15 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
 
         if (actRead()) {
-            // 读源=act：与 picker 同构，仅叠加可表达的筛选；defName/starter/currentNodeKey/anomaly 在 act 模式下做后置过滤
+            // 读源=act：与 picker 同构，仅叠加可表达的筛选；defName/starter/currentNodeKey 在 act 模式下做后置过滤。
+            // ⚠️ 超时（wf_task.due_time）/ 异常（wf_instance 业务列）维度无法在 ACT_HI_PROCINST 上表达，
+            //   必须把满足条件的实例ID约束（overdue ∩ anomalyTypes 交集，见 computeMonitorIdRestriction）下推到主查询
+            //   BUSINESS_KEY_（=wf_instance.id）。否则分页时这些实例不在前几页会被漏掉，内存后置过滤只能过滤已返回
+            //   记录 → 表现为「看板统计显示 N 条、点对应分类列表却空」。复用 wf 读源同源的约束计算，保证双读源口径一致。
+            List<Long> idRestriction = computeMonitorIdRestriction(q);
+            if (idRestriction != null && idRestriction.isEmpty()) {
+                return new Page<InstanceVO>(cur, size);
+            }
             Page<ActHiProcinst> page = new Page<>(cur, size);
             List<String> statusCodes = (q.getStatuses() != null && !q.getStatuses().isEmpty())
                 ? q.getStatuses().stream().map(ActHiProcinst::statusCodeName).collect(Collectors.toList()) : null;
@@ -1724,6 +1759,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 .like(q.getKeyword() != null && !q.getKeyword().isBlank(), ActHiProcinst::getTitle, q.getKeyword())
                 .ge(q.getBeginTime() != null, ActHiProcinst::getStartTime, q.getBeginTime())
                 .le(q.getEndTime() != null, ActHiProcinst::getStartTime, q.getEndTime())
+                .in(idRestriction != null && !idRestriction.isEmpty(), ActHiProcinst::getBusinessId, idRestriction)
                 .orderByDesc(ActHiProcinst::getStartTime));
             IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
             postFilterMonitor(voPage, q);
@@ -1742,6 +1778,36 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                         && v.getStarter() != null && scope.getStarterIds().contains(v.getStarter()))
                     .collect(Collectors.toList()));
                 voPage.setTotal((long) voPage.getRecords().size());
+            }
+            // 草稿实例只存在于业务表 wf_instance（从未启动引擎 → ACT_HI_PROCINST 无对应行），
+            // act 读源下若不补回，监控列表会漏掉所有草稿（含已发起未提交的拟稿），与统计/「我的请求」口径不一致
+            if (q.getStatuses() == null || q.getStatuses().isEmpty()
+                || q.getStatuses().contains(WfInstance.STATUS_DRAFT)) {
+                var draftQ = Wrappers.<WfInstance>lambdaQuery()
+                    .eq(WfInstance::getIsDeleted, 0)
+                    .eq(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
+                    .eq(q.getIsTest() != null, WfInstance::getIsTest, q.getIsTest())
+                    .like(q.getKeyword() != null && !q.getKeyword().isBlank(), WfInstance::getTitle, q.getKeyword())
+                    .ge(q.getBeginTime() != null, WfInstance::getStartTime, q.getBeginTime())
+                    .le(q.getEndTime() != null, WfInstance::getStartTime, q.getEndTime());
+                if (scope != null) {
+                    if (!scope.isAllDefs()) draftQ.in(WfInstance::getDefId, scope.getDefIds());
+                    draftQ.in(WfInstance::getStarter, scope.getStarterIds());
+                }
+                Long draftTotal = instanceMapper.selectCount(draftQ);
+                long dc = draftTotal == null ? 0L : draftTotal;
+                voPage.setTotal(voPage.getTotal() + dc);
+                // 草稿只在第一页并入：避免翻页时同一草稿重复插入（与 mine 列表同口径）
+                if (dc > 0 && cur <= 1) {
+                    List<WfInstance> drafts = instanceMapper.selectList(draftQ.orderByDesc(WfInstance::getStartTime));
+                    if (drafts != null && !drafts.isEmpty()) {
+                        List<InstanceVO> merged =
+                            new java.util.ArrayList<>(drafts.size() + voPage.getRecords().size());
+                        drafts.forEach(d -> merged.add(toInstanceVO(d)));
+                        merged.addAll(voPage.getRecords());
+                        voPage.setRecords(merged);
+                    }
+                }
             }
             return voPage;
         }
@@ -1847,13 +1913,30 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return q.getDefId();
     }
 
-    /** 批量补 overdue（wf_task 过期）与 anomalyTags（L3 自检列） */
+    /**
+     * 批量补异常业务列（业务行缺失 / requestId未回填 / 部署漂移）与 overdue（wf_task 过期）。
+     * act 读源下 InstanceVO 来自 ACT_HI_PROCINST，缺 wf_instance 业务列，必须回查补齐：
+     * 否则 anomalyTags 列不显示、内存后置过滤（anomalyCodes）也判定为空。
+     */
     private void enrichMonitor(IPage<InstanceVO> voPage) {
         List<InstanceVO> records = voPage.getRecords();
         if (records == null || records.isEmpty()) {
             return;
         }
         List<Long> ids = records.stream().map(InstanceVO::getId).collect(Collectors.toList());
+        // 异常业务列回查 wf_instance：act 读源缺这些列，wf 读源覆盖赋值也无副作用（值同源）。
+        Map<Long, WfInstance> instMap = instanceMapper.selectList(Wrappers.<WfInstance>lambdaQuery()
+            .select(WfInstance::getId, WfInstance::getBusinessRowReady, WfInstance::getRequestIdBound, WfInstance::getEngineDeploymentMatched)
+            .in(WfInstance::getId, ids)).stream()
+            .collect(Collectors.toMap(WfInstance::getId, e -> e, (a, b) -> a));
+        for (InstanceVO vo : records) {
+            WfInstance ei = instMap.get(vo.getId());
+            if (ei != null) {
+                vo.setBusinessRowReady(ei.getBusinessRowReady());
+                vo.setRequestIdBound(ei.getRequestIdBound());
+                vo.setEngineDeploymentMatched(ei.getEngineDeploymentMatched());
+            }
+        }
         for (InstanceVO vo : records) {
             List<String> tags = new ArrayList<>();
             if (vo.getBusinessRowReady() != null && vo.getBusinessRowReady() == 0) {
@@ -1963,6 +2046,10 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
     /**
      * 强制归档(强制办结)：复用 {@code terminate}(intent=APPROVED)，由引擎事件反写终态并关闭残留待办，保留历史。
+     *
+     * <p><b>归档管理策略（流程级，对标 E9 {@code workflow_base.isoverrb/isoveriv}）</b>：
+     * 仅当该流程<b>显式配置</b>了归档策略时才按配置裁决（未配置 = 保持既有行为，避免误伤存量流程）：
+     * 「允许强制归档」关闭 → 拒绝；当前节点不在「可归档节点范围」内 → 拒绝。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -1974,7 +2061,41 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (WfInstance.STATUS_APPROVED == inst.getStatus()) {
             return true;
         }
+        // 归档策略强校验（前端显隐之外的后端闸门：隐藏的按钮接口同样不可越权调用）
+        // 口径：未配置 = 保持既有行为（允许）；显式关闭「允许强制归档」→ 拒绝；当前节点不在范围内 → 拒绝
+        WfArchiveRecallPolicy policy = archivePolicy(inst.getDefId());
+        if (!policy.isForceArchiveEnabled()) {
+            throw new ServiceException("该流程未开启「允许强制归档」，无法强制归档");
+        }
+        if (!policy.isNodeArchiveApplicable(resolveCurrentNodeKey(inst))) {
+            throw new ServiceException("当前节点不在该流程的「可归档节点范围」内，无法强制归档");
+        }
         return terminate(instId, WfInstance.STATUS_APPROVED, opinion, "强制归档");
+    }
+
+    /**
+     * 读取流程的「归档 / 撤回」策略（流程级）。
+     *
+     * <p>数据源：{@code wf_process_definition.archive_manage / recall_manage} 两列 JSON，
+     * 由「流程设计 → 归档与撤回」页签录入、{@code GET /wf/definition/{id}} 回读。
+     * <b>监控端不另存配置</b> —— 前端显隐与后端强校验都用这一份（单一事实源）。</p>
+     *
+     * <p>定义不存在时返回空策略（= 全部关闭），不抛异常阻断监管动作。</p>
+     */
+    private WfArchiveRecallPolicy archivePolicy(Long defId) {
+        WfProcessDefinition def = loadDef(defId);
+        if (def == null) {
+            return WfArchiveRecallPolicy.empty();
+        }
+        return WfArchiveRecallPolicy.of(def.getArchiveManage(), def.getRecallManage());
+    }
+
+    /** 按定义ID取流程定义（不存在返回 null，不抛异常） */
+    private WfProcessDefinition loadDef(Long defId) {
+        if (defId == null) {
+            return null;
+        }
+        return defMapper.selectById(defId);
     }
 
     /**
@@ -2035,49 +2156,215 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (inst == null) {
             throw new ServiceException("流程实例不存在");
         }
-        if (inst.getStatus() != WfInstance.STATUS_RUNNING && inst.getStatus() != WfInstance.STATUS_SUSPENDED) {
+        // 归档态（status=APPROVED）：归档已删除引擎运行态，无法原地回退 → 走「复活」路径
+        boolean archived = inst.getStatus() != null && inst.getStatus() == WfInstance.STATUS_APPROVED;
+        if (!archived && inst.getStatus() != WfInstance.STATUS_RUNNING
+            && inst.getStatus() != WfInstance.STATUS_SUSPENDED) {
             throw new ServiceException("仅运行中或暂停中的实例可强制收回");
         }
-        if (inst.getEngineInstId() == null) {
+        // 撤回管理策略强校验（对标 E9 workflow_base.isoverrb）
+        WfArchiveRecallPolicy policy = archivePolicy(inst.getDefId());
+        if (archived) {
+            // 新能力：必须显式开启「归档后允许强制收回」，否则拒绝
+            if (!policy.isRecallFromArchiveEnabled()) {
+                throw new ServiceException("该流程未开启「归档后允许强制收回」，无法强制收回已归档实例");
+            }
+        } else if (!policy.isRecallEnabled()) {
+            // 既有能力：缺省保持原有行为，仅当流程显式关闭「允许强制收回」时拒绝
+            throw new ServiceException("该流程未开启「允许强制收回」，无法强制收回");
+        }
+        if (!archived && inst.getEngineInstId() == null) {
             throw new ServiceException("实例无引擎运行态，无法原地回退");
         }
-        // 暂停态先恢复运行态：引擎挂起时 moveActivity 无法推进
-        if (inst.getStatus() == WfInstance.STATUS_SUSPENDED) {
+        // 暂停态先恢复运行态：引擎挂起时 moveActivity 无法推进（归档态无待办，不适用）
+        if (!archived && inst.getStatus() == WfInstance.STATUS_SUSPENDED) {
             writeHelper.activate(inst);
         }
 
-        String currentNodeKey = resolveCurrentNodeKey(inst);
+        String currentNodeKey = archived ? null : resolveCurrentNodeKey(inst);
         String target = (targetNodeKey == null || targetNodeKey.isBlank())
             ? resolveCreateNodeKey(inst.getDefId()) : targetNodeKey;
         if (target == null || target.isBlank()) {
             throw new ServiceException("未找到收回目标节点：流程缺少「创建」节点且未指定 targetNodeKey");
         }
-        if (target.equals(currentNodeKey)) {
+        if (!archived && target.equals(currentNodeKey)) {
             throw new ServiceException("目标节点与当前节点相同，无需收回");
         }
-
+        // 目标合法性硬校验：节点必须真实存在于流程定义，且必须是「引擎能停住」的 UserTask
+        // （创建0/审批1/提交2）。归档(3)/等待(5)/自动(6)/网关(7) 不是等待态，token 移过去会立刻沿出口
+        // 流出，表现为「收回了但节点没变」；落在网关上还会按条件重选分支（可能跳回原节点）。
+        WfProcessNode targetNode = requireRecallTargetNode(inst.getDefId(), target);
         Long admin = WfAuthUtil.userId();
+        // 「是否在本实例办理过」：既是越级回退的告警依据，也是落点范围「history/specified」的判定输入
+        boolean targetPassed = recallTargetPassed(inst, targetNode);
+        // 强制收回落点范围校验（流程级 recall_manage.recallTargetScope）：
+        // create=仅创建节点 / history=已办+创建 / all=任意可停节点 / specified=指定清单。
+        // 缺省 all → 不改变既有行为（越级回退仍放行，仅按范围收紧时才拦）。
+        String scope = policy.getRecallTargetScope();
+        boolean isCreateTarget = target.equals(resolveCreateNodeKey(inst.getDefId()));
+        boolean inSpecified = policy.getRecallTargetNodeKeys().contains(target);
+        if (!WfArchiveRecallPolicy.scopeAllows(scope, isCreateTarget, targetPassed, inSpecified)) {
+            throw new ServiceException("收回目标节点不在该流程允许的落点范围内（范围=" + scope + "）：" + target);
+        }
+        // 「是否在本实例办理过」只告警不拦截：现有前端候选是全流程创建/审批节点（含尚未走到的后续节点），
+        // 硬拦截会让既有「强制收回」回归；越级回退是监管动作的既定能力，改为 warn 留痕以便追溯。
+        if (!archived && !targetPassed) {
+            log.warn("[blade-workflow] 强制收回目标节点未在本实例办理过（越级回退，放行但留痕）: instId={}, from={}, to={}, operator={}",
+                instId, currentNodeKey, target, admin);
+        }
         // ① 关闭当前节点未办任务（收回即强制办结当前待办），同步 ACT_HI_TASKINST
-        Date now = new Date();
-        List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
-        for (WfTask t : todos) {
-            t.setStatus(WfTask.STATUS_DONE);
-            t.setOperateTime(now);
-            taskMapper.updateById(t);
-            taskActWriter.sync(t);
+        //    归档态无未办待办（归档时已被 terminate 关闭），故跳过。
+        if (!archived) {
+            Date now = new Date();
+            List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, instId)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+            for (WfTask t : todos) {
+                t.setStatus(WfTask.STATUS_DONE);
+                t.setOperateTime(now);
+                taskMapper.updateById(t);
+                taskActWriter.sync(t);
+            }
         }
         // ② 留痕：无独立「收回」日志类型，复用退回(3)，意见前缀标注为管理员强制收回
-        recordLog(instId, currentNodeKey, admin, WfApprovalLog.LOG_REJECT,
+        //    归档态无「离开的节点」，落点记目标节点。
+        recordLog(instId, archived ? target : currentNodeKey, admin, WfApprovalLog.LOG_REJECT,
             "[强制收回]" + (opinion == null ? "" : opinion));
         // ③ 引擎回退：token 移回目标节点，实例不终止
         Map<String, Object> vars = new LinkedHashMap<>();
-        processService.moveActivity(inst.getEngineInstId(), currentNodeKey, target, vars);
+        // 引擎多实例：目标节点可能是 MI 节点，进入前集合变量必须就绪，否则引擎按 0 实例展开 →
+        // 目标节点被「瞬间完成」静默跳过（与 WfTaskServiceImpl#reject、本类异常兜底同口径）。
+        injectMiCollectionVars(inst.getDefId(), inst, vars,
+            inst.getStarter() != null ? inst.getStarter() : admin);
+        if (archived) {
+            // 归档态：运行态已被归档删除，无法原地 moveActivity → 改为「在目标节点新建运行态」
+            reviveArchivedAt(inst, target, vars);
+        } else {
+            // 清「退回后再提交=直达本节点」的残留标记：强制收回是逐级语义，残留会让目标节点重新提交时
+            // 跳过中间节点直达上次退回点（与 WfTaskServiceImpl#reject 逐级模式一致）。
+            try {
+                processService.removeVariables(inst.getEngineInstId(), List.of(VAR_RESUBMIT_DIRECT_NODE));
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 清理「直达本节点」标记失败（忽略）: instId={}, err={}", instId, e.getMessage());
+            }
+            processService.moveActivity(inst.getEngineInstId(), currentNodeKey, target, vars);
+        }
         // ④ 按引擎当前活动任务同步 wf_task / 当前节点，为目标节点生成待办
         //    REJECT 语义：收回链路的「流程异常处理」兜底不生效（对齐 ecology「退回忽略异常处理」）
         advance(instId, inst.getStarter() != null ? inst.getStarter() : admin, null, null, AdvanceSrc.REJECT);
         return true;
+    }
+
+    /**
+     * 归档实例复活：在目标节点新建引擎运行态，并把实例状态翻回运行中。
+     *
+     * <p><b>为什么必须新建运行态（而非「复活」已删运行态）</b>：归档走
+     * {@code terminate} → {@code processService.deleteProcessInstance}，引擎运行态已被销毁；
+     * Flowable 的 {@code ProcessInstanceModification} 只能作用于<b>活</b>运行态，
+     * 已结束的流程实例无法 resume。故归档回退的唯一可行路径 =「新建运行态 + token 停在目标节点 +
+     * 重定向 {@code engineInstId}」。</p>
+     *
+     * <p><b>语义</b>：对齐 E9「解除归档后重新流转」——{@code wf_instance.id} 与 {@code bizKey} 保持不变
+     * （同一请求重新打开，审计链连续），仅引擎实例 ID 变化；旧运行态的 ACT_HI 行（APPROVED）保留作审计。
+     * {@code WfInstanceActWriter} 按 engineInstId 写 {@code ACT_HI_PROCINST}，新旧行天然隔离、互不覆盖。</p>
+     *
+     * <p>归档时待办已被 terminate 关闭，故本方法<b>不关待办、不调 moveActivity</b>；
+     * 待办由随后的 {@code advance} 按新运行态的活动任务统一生成。</p>
+     *
+     * @param inst          归档实例（就地更新 engineInstId / status / 当前节点）
+     * @param targetNodeKey 复活落点（必须是引擎能停住的 UserTask：创建/审批/提交）
+     * @param vars          流程变量（已含 MI 集合变量）
+     */
+    private void reviveArchivedAt(WfInstance inst, String targetNodeKey, Map<String, Object> vars) {
+        // ① 定位引擎流程定义：优先用实例当初实际跑的那一版（proc_def_id），避免跑错版本；
+        //    存量实例该列可能为空 → 回退「该 procKey 的最新部署」。
+        String procDefId = inst.getProcDefId();
+        if (procDefId == null || procDefId.isBlank()) {
+            WfProcessDefinition def = loadDef(inst.getDefId());
+            String procKey = (def == null) ? null : def.getProcKey();
+            procDefId = (procKey == null || procKey.isBlank())
+                ? null : processService.latestProcDefId(procKey, inst.getTenantId());
+        }
+        if (procDefId == null || procDefId.isBlank()) {
+            throw new ServiceException("归档实例复活失败：流程定义未部署到引擎，无法重建运行态");
+        }
+        // ② 在目标节点新建运行态（正常发起 → token 移到目标节点；bizKey 沿用原实例，保持同一请求）
+        String oldEngineInstId = inst.getEngineInstId();
+        String newEngineInstId = processService.startInstanceAtActivity(procDefId, inst.getBizKey(), targetNodeKey, vars);
+        // ③ 台账翻回运行中
+        //    ⚠️ 必须用显式 UPDATE（而非 updateById）：MP updateById 默认 NOT_NULL 策略会**跳过 null 字段**，
+        //    setEndTime(null) 不落库 → end_time 残留归档时间，实例已回运行态却带着结束时间。
+        inst.setEngineInstId(newEngineInstId);
+        inst.setStatus(WfInstance.STATUS_RUNNING);
+        inst.setEndTime(null);
+        inst.setCurrentNodeKey(targetNodeKey);
+        inst.setProcDefId(procDefId);
+        instanceMapper.update(Wrappers.<WfInstance>lambdaUpdate()
+            .eq(WfInstance::getId, inst.getId())
+            .set(WfInstance::getEngineInstId, newEngineInstId)
+            .set(WfInstance::getStatus, WfInstance.STATUS_RUNNING)
+            .set(WfInstance::getEndTime, null)
+            .set(WfInstance::getCurrentNodeKey, targetNodeKey)
+            .set(WfInstance::getProcDefId, procDefId));
+        // ④ 去 wf_ 表预热：按新 engineInstId 写回 ACT_HI_PROCINST 业务列（旧归档行保留，不覆盖）
+        actWriter.writeOnStart(inst, newEngineInstId, WfInstance.STATUS_RUNNING);
+        log.info("[blade-workflow] 归档实例已复活为运行态. instId={}, oldEngineInstId={}, newEngineInstId={}, target={}",
+            inst.getId(), oldEngineInstId, newEngineInstId, targetNodeKey);
+    }
+
+    /**
+     * 强制收回目标节点的硬校验：① 节点必须真实存在于流程定义（防脏 key / 目标节点已被删）；② 必须是
+     * 「引擎能停住」的 UserTask（创建0/审批1/提交2）。
+     *
+     * <p>归档(3)/等待(5)/自动(6)/网关(7) 不是等待态，token 移过去会立刻沿出口流出，表现为「收回了但节点
+     * 没变」；落在网关上还会按条件重选分支（可能跳回原节点）。剔除口径与 {@code WfRejectManager} 一致，
+     * 但对 nodeType 未配置（null）的节点保守放行，避免误伤既有流程。</p>
+     */
+    private WfProcessNode requireRecallTargetNode(Long defId, String targetNodeKey) {
+        WfProcessNode node = loadNodes(defId).stream()
+            .filter(n -> targetNodeKey.equals(n.getNodeKey()))
+            .findFirst()
+            .orElse(null);
+        if (node == null) {
+            throw new ServiceException("收回目标节点不存在于流程定义：" + targetNodeKey);
+        }
+        Integer type = node.getNodeType();
+        if (type != null && type != 0 && type != 1 && type != 2) {
+            throw new ServiceException("收回目标节点不是可停留的办理节点（创建/审批/提交）：" + targetNodeKey);
+        }
+        return node;
+    }
+
+    /**
+     * 目标节点是否属于「本实例已办理过的节点」——越级回退判定（只作告警依据，不拦截）。
+     *
+     * <p>「已办理」= 本实例 {@code wf_task} 台账里出现过的 node_key 集合（每办理过一个节点就留下一条台账，
+     * 与「谁办理过」的业务语义一致）。⚠️ 不能用 {@code wf_approval_log}：该表在「去 wf_ 表」改造后
+     * <b>已停写</b>（审批意见真源改为 {@code ACT_HI_COMMENT}），实测全表 0 行，用它判定会永远读不到数据、
+     * 使本告警形同虚设。</p>
+     *
+     * <p>既有「强制收回」的前端候选是全流程创建/审批节点（含尚未走到的后续节点），若在此硬拦截会造成既有
+     * 功能回归，故只 warn 留痕；台账读不到（为空）时按「通过」处理，不阻断监管动作。</p>
+     */
+    private boolean recallTargetPassed(WfInstance inst, WfProcessNode targetNode) {
+        // 创建节点始终允许（发起人重填场景）
+        if (targetNode.getNodeType() != null && targetNode.getNodeType() == 0) {
+            return true;
+        }
+        try {
+            List<Object> passed = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+                .select(WfTask::getNodeKey)
+                .eq(WfTask::getInstId, inst.getId())
+                .isNotNull(WfTask::getNodeKey));
+            if (passed == null || passed.isEmpty()) {
+                return true;
+            }
+            return passed.stream().anyMatch(o -> targetNode.getNodeKey().equals(String.valueOf(o)));
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 读取本实例已办理节点失败（跳过越级回退告警）: instId={}, err={}",
+                inst.getId(), e.getMessage());
+            return true;
+        }
     }
 
     /**
@@ -2161,12 +2448,17 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             LambdaQueryWrapper<WfInstance> sq = Wrappers.<WfInstance>lambdaQuery();
             if (!scope.isAllDefs()) sq.in(WfInstance::getDefId, scope.getDefIds());
             sq.in(WfInstance::getStarter, scope.getStarterIds());
+            // 与 monitorList 一致：排除已逻辑删实例（聚合查询 @TableLogic 未生效）
+            sq.eq(WfInstance::getIsDeleted, 0);
             scopedIds = instanceMapper.selectObjs(sq.select(WfInstance::getId)).stream()
                 .map(this::toLong).collect(Collectors.toList());
         }
 
         LambdaQueryWrapper<WfInstance> base = Wrappers.<WfInstance>lambdaQuery();
         if (scopedIds != null) base.in(WfInstance::getId, scopedIds);
+        // 与 monitorList 一致：显式过滤已逻辑删实例（@TableLogic 在此聚合查询未生效），
+        // 否则统计看板会把已删实例也算进 total/状态分布/按流程定义分布，与列表对不上
+        base.eq(WfInstance::getIsDeleted, 0);
         base.select(WfInstance::getId, WfInstance::getStatus, WfInstance::getDefId,
             WfInstance::getStartTime, WfInstance::getEndTime,
             WfInstance::getBusinessRowReady, WfInstance::getRequestIdBound, WfInstance::getEngineDeploymentMatched);
@@ -2227,6 +2519,295 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         data.put("avgDurationMinutes", durationCnt > 0
             ? Math.round((double) durationSum / durationCnt / 60000.0 * 10.0) / 10.0 : 0.0);
         return data;
+    }
+
+    /**
+     * 监控级「可回退节点」查询：返回本实例已办理过的节点 + 创建节点（结构与运行时交集）。
+     *
+     * <p>候选 = {@code WfRejectManager} 的结构候选（BPMN 反向 BFS，已剔除 3/5/6/7 引擎停不住的类型）
+     * ∩ {@code 已办理过(wf_task 台账 node_key) ∪ 创建节点}，按离当前节点由近及远排序（算法已保证）。</p>
+     *
+     * <p>与任务级 {@code rejectNodes} 的区别：任务级候选是「该任务可退的纯结构上游」；监控级额外叠加
+     * 「必须本实例走过」的运行时约束，避免监管把单子退到尚未到达的节点。</p>
+     */
+    @Override
+    public RejectCandidatesVO monitorRejectableNodes(Long instId) {
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        if (isTestInstance(inst)) {
+            throw new ServiceException("测试实例不支持回退");
+        }
+        // ⚠️ 归档态（status=APPROVED）：引擎运行态已删、current_node_key 为空（办结时清空），无「当前节点」
+        //    → 反向 BFS 无起点。候选改为「已办理过节点 ∪ 创建节点」（与 monitorRejectTo 归档硬校验同口径），
+        //    否则本接口直接 400「无法确定当前节点」，归档回退 / 强制收回在界面上根本走不下去。
+        boolean archived = inst.getStatus() != null && inst.getStatus() == WfInstance.STATUS_APPROVED;
+        String currentNodeKey = resolveCurrentNodeKey(inst);
+        if (!archived && (currentNodeKey == null || currentNodeKey.isBlank())) {
+            throw new ServiceException("无法确定当前节点，无法回退");
+        }
+        List<WfProcessNode> finalNodes;
+        if (archived) {
+            finalNodes = archivedCandidates(inst.getDefId(), instId);
+        } else {
+            WfProcessNode currentNode = loadNode(inst.getDefId(), currentNodeKey);
+            // 结构候选（纯 BPMN 反向 BFS，已剔除 3/5/6/7）
+            List<WfProcessNode> structCandidates = rejectManager.computeRejectableNodes(
+                inst.getDefId(), currentNodeKey, currentNode);
+            // 运行时「已办理过」节点集：wf_task 台账 node_key（该表仍在写，比 wf_approval_log 可靠）
+            Set<String> passed = loadPassedNodeKeys(instId);
+            String createNodeKey = resolveCreateNodeKey(inst.getDefId());
+            // 交集：结构候选中「已办理过」或「创建节点」
+            finalNodes = structCandidates.stream()
+                .filter(n -> passed.contains(n.getNodeKey())
+                    || (createNodeKey != null && createNodeKey.equals(n.getNodeKey())))
+                .collect(Collectors.toList());
+        }
+
+        RejectCandidatesVO vo = new RejectCandidatesVO();
+        vo.setType(2); // 选择退回：弹窗显式选节点（监控回退不允许误退，始终让用户点选）
+        vo.setDefaultNodeKey(finalNodes.isEmpty() ? null : finalNodes.get(0).getNodeKey());
+        vo.setRemind(true);
+        vo.setChangeNode(false); // 监控候选已固定，不允许改节点
+        Long admin = WfAuthUtil.userId();
+        List<RejectCandidateVO> nodes = new ArrayList<>();
+        for (WfProcessNode n : finalNodes) {
+            RejectCandidateVO c = new RejectCandidateVO();
+            c.setNodeKey(n.getNodeKey());
+            c.setNodeName(n.getNodeName());
+            c.setNodeType(n.getNodeType());
+            c.setOperators(resolveNodeOperatorNames(inst, n, admin));
+            nodes.add(c);
+        }
+        vo.setNodes(nodes);
+        return vo;
+    }
+
+    /**
+     * 归档实例的回退候选：已办理过的节点（按最近一次办理由近及远）+ 创建节点（末位，「重填」语义）。
+     *
+     * <p>归档态没有「当前节点」，无法做反向 BFS；候选直接取 wf_task 台账（DONE）里真实走过的节点，
+     * 并按 {@code requireRecallTargetNode} 同口径过滤引擎停不住的类型（剔除 3 归档 / 5 等待 / 6 自动 /
+     * 7 网关，nodeType 未配置保守放行），保证弹窗里选得到的项回退时一定能通过硬校验。</p>
+     */
+    private List<WfProcessNode> archivedCandidates(Long defId, Long instId) {
+        // 按任务 id 倒序 ≈ 最近办理在前；LinkedHashMap putIfAbsent 保序去重（每节点取最近一次）
+        List<WfTask> doneTasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .eq(WfTask::getStatus, WfTask.STATUS_DONE)
+            .isNotNull(WfTask::getNodeKey)
+            .orderByDesc(WfTask::getId));
+        Map<String, WfTask> latest = new LinkedHashMap<>();
+        for (WfTask t : doneTasks) {
+            if (t.getNodeKey() != null && !t.getNodeKey().isBlank()) {
+                latest.putIfAbsent(t.getNodeKey(), t);
+            }
+        }
+        Map<String, WfProcessNode> nodeMap = loadNodes(defId).stream()
+            .collect(Collectors.toMap(WfProcessNode::getNodeKey, n -> n, (a, b) -> a));
+        List<WfProcessNode> out = new ArrayList<>();
+        for (String key : latest.keySet()) {
+            WfProcessNode n = nodeMap.get(key);
+            if (n == null) {
+                continue;
+            }
+            if (n.getNodeType() != null && n.getNodeType() != 0 && n.getNodeType() != 1
+                && n.getNodeType() != 2) {
+                continue;
+            }
+            out.add(n);
+        }
+        String createNodeKey = resolveCreateNodeKey(defId);
+        if (createNodeKey != null) {
+            WfProcessNode create = nodeMap.get(createNodeKey);
+            if (create != null && !out.contains(create)) {
+                out.add(create);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 监控级「回退到指定节点」：把实例回退到已办理过的节点或创建节点（实例保持运行、不终止）。
+     *
+     * <p>引擎侧与 {@code WfTaskServiceImpl#reject} / {@code forceRecallTo} 同链路：关闭当前未办任务 →
+     * 留痕 → injectMiCollectionVars → moveActivity → advance(REJECT) → 节点后附加操作（退回时触发）。</p>
+     *
+     * <p>区别于任务级 reject：① 目标必须 ∈「已办理过 ∪ 创建节点」（硬校验，候选由服务端下发，不会出现越级选项）；
+     * ② 留痕人记当前操作人（监管动作，与「强制收回」一致，任务级记节点接收人）；③ 意见必填。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean monitorRejectTo(Long instId, String targetNodeKey, String opinion, Integer resubmitMode,
+                                   boolean runPreOperate) {
+        if (opinion == null || opinion.isBlank()) {
+            throw new ServiceException("回退意见必填（监管留痕，便于审计）");
+        }
+        WfInstance inst = instanceMapper.selectById(instId);
+        if (inst == null) {
+            throw new ServiceException("流程实例不存在");
+        }
+        if (isTestInstance(inst)) {
+            throw new ServiceException("测试实例不支持回退");
+        }
+        // 归档态（status=APPROVED）：归档已删除引擎运行态，无「当前待办节点」→ 走复活路径
+        boolean archived = inst.getStatus() != null && inst.getStatus() == WfInstance.STATUS_APPROVED;
+        WfArchiveRecallPolicy policy = archivePolicy(inst.getDefId());
+        String currentNodeKey;
+        if (archived) {
+            // 新能力：必须显式开启「归档后允许流程干预」（对标 E9 workflow_base.isoveriv），否则拒绝
+            if (!policy.isInterveneFromArchiveEnabled()) {
+                throw new ServiceException("该流程未开启「归档后允许流程干预」，无法回退已归档实例");
+            }
+            currentNodeKey = null;
+        } else {
+            if (!policy.isRejectEnabled()) {
+                // 既有能力：缺省保持原有行为，仅当流程显式关闭「允许监控回退」时拒绝
+                throw new ServiceException("该流程未开启「允许监控回退」，无法回退");
+            }
+            currentNodeKey = resolveCurrentNodeKey(inst);
+            if (currentNodeKey == null || currentNodeKey.isBlank()) {
+                throw new ServiceException("无法确定当前节点，无法回退");
+            }
+        }
+        if (targetNodeKey == null || targetNodeKey.isBlank()) {
+            throw new ServiceException("回退目标节点不能为空");
+        }
+        // 目标合法性硬校验：节点真实存在 + 引擎可停住（nodeType 0/1/2）
+        WfProcessNode targetNode = requireRecallTargetNode(inst.getDefId(), targetNodeKey);
+        if (!archived && targetNodeKey.equals(currentNodeKey)) {
+            throw new ServiceException("目标节点与当前节点相同，无需回退");
+        }
+        // 「已办理过 + 创建节点」硬校验（监控回退口径，比强制收回更严）
+        Set<String> passed = loadPassedNodeKeys(instId);
+        String createNodeKey = resolveCreateNodeKey(inst.getDefId());
+        if (!passed.contains(targetNodeKey) && !(createNodeKey != null && createNodeKey.equals(targetNodeKey))) {
+            throw new ServiceException("回退目标节点不是本实例已办理过的节点（仅允许退到已办理节点或创建节点）：" + targetNodeKey);
+        }
+        Long admin = WfAuthUtil.userId();
+        // 暂停态：与「强制收回」一致，先 activate 解除暂停（副作用：实例回到运行中）
+        if (inst.getStatus() != null && inst.getStatus() == WfInstance.STATUS_SUSPENDED) {
+            writeHelper.activate(inst);
+        }
+        // ① 关闭当前节点全部 TODO 待办（监管语义：整单收回该节点办理权），并同步业务列
+        List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+        for (WfTask t : todos) {
+            t.setStatus(WfTask.STATUS_DONE);
+            t.setOperateTime(new Date());
+            taskMapper.updateById(t);
+            taskActWriter.sync(t);
+        }
+        // ② 留痕：记录当前操作人（管理员），意见前缀标注为监控回退
+        //    归档态无「离开的节点」，落点记目标节点。
+        recordLog(instId, archived ? targetNodeKey : currentNodeKey, admin, WfApprovalLog.LOG_REJECT,
+            "[监控回退]" + opinion);
+        // ③ 引擎回退：token 移回目标节点，实例不终止
+        Map<String, Object> vars = new LinkedHashMap<>();
+        // 引擎多实例：目标节点可能是 MI 节点，进入前集合变量必须就绪（与 reject / forceRecallTo 同口径）
+        injectMiCollectionVars(inst.getDefId(), inst, vars,
+            inst.getStarter() != null ? inst.getStarter() : admin);
+        // 逐级/直达：默认逐级（清残留），直达则写标记
+        //    归档态无「离开的节点」→ 直达标记无意义，一律按逐级处理
+        int rm = (archived) ? REJECT_RESUBMIT_SEQUENTIAL
+            : ((resubmitMode != null) ? resubmitMode : REJECT_RESUBMIT_SEQUENTIAL);
+        if (rm == REJECT_RESUBMIT_DIRECT) {
+            vars.put(VAR_RESUBMIT_DIRECT_NODE, currentNodeKey);
+        } else {
+            try {
+                processService.removeVariables(inst.getEngineInstId(), List.of(VAR_RESUBMIT_DIRECT_NODE));
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 清理「直达本节点」标记失败（忽略）: instId={}, err={}", instId, e.getMessage());
+            }
+        }
+        if (archived) {
+            // 归档态：运行态已被归档删除，无法原地 moveActivity → 改为「在目标节点新建运行态」
+            reviveArchivedAt(inst, targetNodeKey, vars);
+        } else {
+            processService.moveActivity(inst.getEngineInstId(), currentNodeKey, targetNodeKey, vars);
+        }
+        // ④ 按引擎当前活动任务同步 wf_task / 当前节点，为目标节点生成待办
+        //    runPreOperate=false 时跳过目标节点的「节点前附加操作」（监管退回到指定节点的开关控制）
+        advance(instId, inst.getStarter() != null ? inst.getStarter() : admin, null, null,
+            AdvanceSrc.REJECT, runPreOperate);
+        // ⑤ 节点后附加操作（仅执行勾选「退回时触发」的条目；退回语义，与任务级 reject 一致）
+        //    归档态无「离开的节点」→ 跳过
+        if (!archived) {
+            WfProcessNode currentNode = loadNode(inst.getDefId(), currentNodeKey);
+            if (currentNode != null) {
+                nodeActionExecutor.execute(inst, currentNode, NodeActionExecutor.PHASE_POST, admin, true);
+            }
+        }
+        return true;
+    }
+
+    /** 是否测试实例（is_test=1）：测试实例禁止监控回退，避免破坏测试数据 */
+    private boolean isTestInstance(WfInstance inst) {
+        return inst.getIsTest() != null && inst.getIsTest() == 1;
+    }
+
+    /** 本实例「已办理过」的节点 Key 集合（wf_task 台账 node_key；该表仍在写） */
+    private Set<String> loadPassedNodeKeys(Long instId) {
+        List<Object> keys = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+            .select(WfTask::getNodeKey)
+            .eq(WfTask::getInstId, instId)
+            .isNotNull(WfTask::getNodeKey));
+        Set<String> set = new HashSet<>();
+        if (keys != null) {
+            for (Object o : keys) {
+                if (o != null) {
+                    set.add(String.valueOf(o));
+                }
+            }
+        }
+        return set;
+    }
+
+    /**
+     * 解析候选节点的当前操作者姓名（退回弹窗「操作者」列展示用，与 WfTaskServiceImpl 同口径）。
+     *
+     * <p>创建节点(0) = 发起人本人；其余节点走 {@link WfOperatorResolver#resolve}（与流转 advance 生成待办同一口径）。
+     * 解析失败 / 为空返回 {@code null}（前端显示 -）：绝不抛异常阻塞回退弹窗。</p>
+     */
+    private String resolveNodeOperatorNames(WfInstance inst, WfProcessNode node, Long currentOperator) {
+        try {
+            List<Long> ids;
+            if (node.getNodeType() != null && node.getNodeType() == 0) {
+                ids = inst.getStarter() == null ? List.of() : List.of(inst.getStarter());
+            } else {
+                ids = operatorResolver.resolve(inst.getDefId(), node.getNodeKey(), inst.getId(),
+                    inst.getStarter(), currentOperator);
+            }
+            if (ids == null || ids.isEmpty()) {
+                return null;
+            }
+            List<String> names = new ArrayList<>();
+            for (Long id : ids) {
+                if (id == null || id <= 0 || names.size() >= MAX_OPERATOR_NAMES) {
+                    continue;
+                }
+                try {
+                    R<UserInfo> r = userClient.userInfo(id);
+                    if (r != null && r.getData() != null && r.getData().getUser() != null
+                        && r.getData().getUser().getRealName() != null) {
+                        names.add(r.getData().getUser().getRealName());
+                    }
+                } catch (Exception ignore) {
+                    // 单个用户查询失败不影响整列展示
+                }
+            }
+            if (names.isEmpty()) {
+                return null;
+            }
+            String joined = String.join("、", names);
+            return ids.size() > MAX_OPERATOR_NAMES ? joined + " 等" + ids.size() + "人" : joined;
+        } catch (Exception e) {
+            log.debug("[blade-workflow] 解析回退候选节点操作者失败. defId={}, nodeKey={}",
+                inst.getDefId(), node.getNodeKey(), e);
+            return null;
+        }
     }
 
     /** 当前节点Key：优先取未办任务所在节点，回退实例表当前节点 */
@@ -2325,7 +2906,19 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Transactional(rollbackFor = Exception.class)
     public void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee, AdvanceSrc src) {
         advanceInternal(instId, currentOperator, overrideNodeKey, overrideAssignee, null,
-            AdvanceSrc.of(src), new LinkedHashSet<>());
+            AdvanceSrc.of(src), new LinkedHashSet<>(), true);
+    }
+
+    /**
+     * 退回 / 监管退回到指定节点等场景用：在 {@link #advance(Long, Long, String, Long, AdvanceSrc)} 基础上，
+     * 提供 {@code runPreOperate} 开关控制是否执行目标（新激活）节点的「节点前附加操作」。
+     * 缺省 true（与常规流转一致）；退回时若希望跳过前附加操作（避免重复触发业务副作用）可传 false。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void advance(Long instId, Long currentOperator, String overrideNodeKey, Long overrideAssignee,
+                        AdvanceSrc src, boolean runPreOperate) {
+        advanceInternal(instId, currentOperator, overrideNodeKey, overrideAssignee, null,
+            AdvanceSrc.of(src), new LinkedHashSet<>(), runPreOperate);
     }
 
     /**
@@ -2336,7 +2929,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     @Transactional(rollbackFor = Exception.class)
     public void advance(Long instId, Long currentOperator, Map<String, Long> overrideAssignees, AdvanceSrc src) {
         advanceInternal(instId, currentOperator, null, null, overrideAssignees,
-            AdvanceSrc.of(src), new LinkedHashSet<>());
+            AdvanceSrc.of(src), new LinkedHashSet<>(), true);
     }
 
     /**
@@ -2347,7 +2940,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      */
     private void advanceInternal(Long instId, Long currentOperator, String overrideNodeKey,
                                  Long overrideAssignee, Map<String, Long> overrideAssignees,
-                                 AdvanceSrc src, Set<String> fallbackVisited) {
+                                 AdvanceSrc src, Set<String> fallbackVisited, boolean runPreOperate) {
         WfInstance inst = instanceMapper.selectById(instId);
         if (inst == null) {
             return;
@@ -2403,9 +2996,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 nodeActionExecutor.executeLink(inst, inst.getDefId(), oldNodeKey, nodeKey, inst.getStarter());
             }
             // 新节点激活 → 执行「节点前附加操作」（受「流程异常处理」策略保护）
-            // 测试态：跳过附加操作副作用
-            nodeActionExecutor.execute(inst, loadNode(inst.getDefId(), nodeKey),
-                NodeActionExecutor.PHASE_PRE, inst.getStarter());
+            // 测试态：跳过附加操作副作用；runPreOperate=false（如监控退回到指定节点时关闭）可跳过，
+            // 避免退回场景下对目标节点重复触发业务副作用
+            if (runPreOperate) {
+                nodeActionExecutor.execute(inst, loadNode(inst.getDefId(), nodeKey),
+                    NodeActionExecutor.PHASE_PRE, inst.getStarter());
+            }
         }
 
         for (TaskVO t : engineTasks) {
@@ -2452,7 +3048,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             if (assignees.isEmpty() && !engineHasAssignee
                 && applyExceptionFallback(inst, tk, src, fallbackVisited, currentOperator)) {
                 // 兜底已把引擎 token 移到别处 → 重新读引擎活动任务并同步（visited 防环，深度有限）
-                advanceInternal(instId, currentOperator, null, null, null, AdvanceSrc.SUBMIT, fallbackVisited);
+                advanceInternal(instId, currentOperator, null, null, null, AdvanceSrc.SUBMIT, fallbackVisited, true);
                 return;
             }
             if (assignees.isEmpty()) {

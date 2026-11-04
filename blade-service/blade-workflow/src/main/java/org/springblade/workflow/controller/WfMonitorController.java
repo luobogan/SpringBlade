@@ -14,6 +14,7 @@ import org.springblade.workflow.service.helper.WfStateProjector;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.MonitorBatchResult;
 import org.springblade.workflow.vo.MonitorInstanceQuery;
+import org.springblade.workflow.vo.RejectCandidatesVO;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springframework.beans.factory.ObjectProvider;
@@ -152,6 +153,28 @@ public class WfMonitorController {
                                   @RequestParam(required = false) String targetNodeKey,
                                   @RequestParam(required = false) String opinion) {
         return R.data(instanceService.forceRecallTo(id, targetNodeKey, opinion));
+    }
+
+    @GetMapping("/instances/{id}/rejectable-nodes")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @Operation(summary = "监控-可回退节点",
+        description = "当前节点可回退的目标：已办理过的节点 + 创建节点（按 ecology 退回口径，不允许退到尚未到达的节点）")
+    public R<RejectCandidatesVO> rejectableNodes(@PathVariable Long id) {
+        return R.data(instanceService.monitorRejectableNodes(id));
+    }
+
+    @PostMapping("/instances/{id}/reject-to")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @Operation(summary = "监控-回退到指定节点",
+        description = "把实例回退到已办理过的节点或创建节点（实例保持运行、不终止）；意见必填，resubmitMode 1=逐级(缺省) 2=直达本节点；"
+            + "runPreOperate 控制回退后是否执行目标节点的「节点前附加操作」（缺省 true）")
+    public R<Boolean> rejectTo(@PathVariable Long id,
+                               @RequestParam String targetNodeKey,
+                               @RequestParam String opinion,
+                               @RequestParam(required = false, defaultValue = "1") Integer resubmitMode,
+                               @RequestParam(required = false, defaultValue = "true") Boolean runPreOperate) {
+        return R.data(instanceService.monitorRejectTo(id, targetNodeKey, opinion, resubmitMode,
+            runPreOperate != null && runPreOperate));
     }
 
     @PostMapping("/instances/{id}/force-archive")

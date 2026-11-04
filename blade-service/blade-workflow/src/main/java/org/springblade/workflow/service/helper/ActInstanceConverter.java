@@ -62,7 +62,13 @@ public final class ActInstanceConverter {
 			log.warn("[blade-workflow] ACT 实例读源缺少租户上下文，本次未按租户过滤（后台调用属预期）businessId={}",
 				businessId);
 		}
-		q.last("LIMIT 1");
+		// ⚠️ 归档实例被「强制收回 / 监控回退」复活后，同一 BUSINESS_ID_ 在 ACT_HI_PROCINST 会有
+		// **多条行**（每次 revive 新建引擎运行态，旧行保留作审计）；LIMIT 1 无排序会随机命中
+		// 旧的已归档行（BUSINESS_STATUS_=终态、旧节点）→ fresh / detail / 表单渲染 / 自定义操作
+		// 全部拿到过期状态，复活后的实例被误判「已归档」而无法继续办理。
+		// 口径：活跃行（END_TIME_ IS NULL，运行中的新运行态）优先；全部已结束时按 START_TIME_
+		// 取最新（复活运行态的发起时间必然晚于旧行，最后一次归档的行即权威行）。
+		q.last("ORDER BY END_TIME_ IS NULL DESC, START_TIME_ DESC LIMIT 1");
 		return q;
 	}
 }

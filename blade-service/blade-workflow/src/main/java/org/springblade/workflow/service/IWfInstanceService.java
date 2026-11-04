@@ -9,6 +9,7 @@ import org.springblade.workflow.vo.InstanceFreshVO;
 import org.springblade.workflow.vo.InstanceVO;
 import org.springblade.workflow.vo.MonitorInstanceQuery;
 import org.springblade.workflow.vo.MonitorBatchResult;
+import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.WfInstanceResourceVO;
 import org.springblade.workflow.vo.WfNodeOperatorVO;
 import org.springblade.workflow.vo.WfProgressView;
@@ -294,6 +295,25 @@ public interface IWfInstanceService {
      * @param opinion       办理意见
      */
     boolean forceRecallTo(Long instId, String targetNodeKey, String opinion);
+
+    /**
+     * 监控级「可回退节点」查询：返回本实例已办理过的节点 + 创建节点（结构与运行时交集）。
+     *
+     * <p>区别于 {@link #forceRecallTo}：后者候选是全流程创建/审批节点（监管可越级），本方法按
+     * 「已走过 + 创建」口径收紧，避免监控员把单子退到尚未到达的节点。</p>
+     */
+    RejectCandidatesVO monitorRejectableNodes(Long instId);
+
+    /**
+     * 监控级「回退到指定节点」：把实例回退到已办理过的节点或创建节点（实例保持运行、不终止）。
+     *
+     * @param instId        实例ID
+     * @param targetNodeKey 目标节点Key（必须 ∈ 已办理节点 ∪ 创建节点）
+     * @param opinion       回退意见（必填，监管留痕）
+     * @param resubmitMode  退回后再提交处理方式：1=逐级（缺省） 2=直达本节点
+     */
+    boolean monitorRejectTo(Long instId, String targetNodeKey, String opinion, Integer resubmitMode,
+                             boolean runPreOperate);
 
     /**
      * 批量监管动作（stop / resume / archive / recall / delete），逐条隔离，返回成功/失败汇总。

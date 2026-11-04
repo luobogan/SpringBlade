@@ -369,6 +369,19 @@ public final class WfNodeSettingsUtil {
         return node == null ? Collections.emptyList() : list(node.getExtJson(), "reject", "nodeKeys");
     }
 
+    /**
+     * 「排除选择」开关：把 {@link #rejectableNodeKeys} 的清单语义由「包含」切换为「排除」。
+     *
+     * <p>对齐 E9 节点退回设置的「排除选择」：关闭时清单内节点<b>是</b>可退回节点（白名单），
+     * 打开时清单内节点<b>不可</b>退回（排除名单），其余上游历史节点均可退回。
+     * 两种语义共用同一个 {@code reject.nodeKeys} 字段，由本开关切换，避免配置歧义。</p>
+     *
+     * <p>缺省 false（= 白名单语义），与迁移前行为一致。</p>
+     */
+    public static boolean rejectExcludeMode(WfProcessNode node) {
+        return node != null && bool(node.getExtJson(), "reject", "excludeMode");
+    }
+
     /** 退回时是否提醒已走过节点（对应 ecology isrejectremind） */
     public static boolean rejectRemind(WfProcessNode node) {
         return node != null && bool(node.getExtJson(), "reject", "remind");

@@ -82,8 +82,11 @@ public class WfRejectManager {
      */
     public static List<WfProcessNode> computeRejectableNodes(Long defId, String currentNodeKey, WfProcessNode currentNode,
                                                              List<WfNodeLink> links, List<WfProcessNode> nodes) {
-        // 白名单：rejectType=2 时限制可选范围
+        // 节点清单：rejectType=2 时限制可选范围。
+        // 「排除选择」（reject.excludeMode）打开时，清单语义由「包含」翻转为「排除」——
+        // 清单内节点不可退回，其余上游历史节点均可退回（对齐 E9 节点退回设置）。
         List<String> whitelist = WfNodeSettingsUtil.rejectableNodeKeys(currentNode);
+        boolean excludeMode = WfNodeSettingsUtil.rejectExcludeMode(currentNode);
 
         // 反向邻接表：toNodeKey -> 入边列表
         Map<String, List<WfNodeLink>> incoming = new HashMap<>();
@@ -117,9 +120,9 @@ public class WfRejectManager {
             }
         }
 
-        // 白名单裁剪
+        // 清单裁剪：白名单（保留清单内）/ 排除名单（剔除清单内）
         if (!whitelist.isEmpty()) {
-            order.removeIf(k -> !whitelist.contains(k));
+            order.removeIf(k -> excludeMode ? whitelist.contains(k) : !whitelist.contains(k));
         }
         if (order.isEmpty()) {
             return List.of();

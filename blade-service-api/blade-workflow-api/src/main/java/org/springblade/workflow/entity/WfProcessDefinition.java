@@ -121,6 +121,43 @@ public class WfProcessDefinition extends TenantEntity {
     private Integer sortOrder;
 
     /**
+     * 归档管理策略（JSON 串，对标 ecology {@code workflow_base.isoverrb / isoveriv}）。
+     *
+     * <p>流程级配置：在「流程设计 → 归档与撤回」页签录入，「流程监控」按<b>同一份</b>配置
+     * 决定监管动作的显隐与后端强制校验（单一事实源，监控端不另存配置）。
+     * 结构（解析器见 {@code org.springblade.workflow.service.policy.WfArchiveRecallPolicy}）：</p>
+     * <ul>
+     *   <li>{@code forceArchiveEnabled}：是否允许「强制归档」</li>
+     *   <li>{@code archiveApplicableNodeKeys}：可归档节点范围，{@code ["*"]} = 任意节点，否则为 nodeKey 白名单</li>
+     *   <li>{@code recallFromArchiveEnabled}：归档后允许「强制收回」</li>
+     *   <li>{@code interveneFromArchiveEnabled}：归档后允许「流程干预」（回退 / 流转到指定节点）</li>
+     * </ul>
+     * <p>NULL = 未配置：既有能力（强制归档）保持迁移前的原有行为（开启），
+     * 全新能力（归档后强制收回 / 归档后流程干预）默认关闭，需在本表显式配置后启用。
+     * 落库走 {@code DefinitionSaveDTO.definition → defMapper.updateById}，
+     * MP 默认 {@code NOT_NULL} 策略，故「只传本列」的局部保存不会清空其它列。</p>
+     */
+    @Schema(description = "归档管理策略JSON：强制归档/可归档节点范围/归档后可强制收回/归档后可流程干预")
+    private String archiveManage;
+
+    /**
+     * 撤回管理策略（JSON 串，流程级；节点级退回配置在 BPMN 节点 {@code settings.reject.*}）。
+     *
+     * <p>结构：</p>
+     * <ul>
+     *   <li>{@code recallEnabled}：是否允许「强制收回」</li>
+     *   <li>{@code rejectEnabled}：是否允许「监控回退」</li>
+     *   <li>{@code remindSelect}：允许前端用户选择是否提醒（总闸，对齐 ecology {@code workflow_base.isrejectremind}；
+     *       节点级 {@code settings.reject.remind} 为节点覆盖）</li>
+     *   <li>{@code recallTargetScope}：强制收回落点范围 —
+     *       {@code create}(仅创建节点) / {@code history}(已办+创建) / {@code all}(任意可停节点) / {@code specified}(指定清单)</li>
+     * </ul>
+     * <p>NULL = 未配置（等价于全部关闭）。</p>
+     */
+    @Schema(description = "撤回管理策略JSON：允许强制收回/允许监控回退/提醒选择总闸/强制收回落点范围")
+    private String recallManage;
+
+    /**
      * 主键以字符串形式序列化。
      *
      * <p>主键为 ASSIGN_ID 雪花 ID（19 位），若以 JSON 数字返回，前端 JS 解析会丢失精度，

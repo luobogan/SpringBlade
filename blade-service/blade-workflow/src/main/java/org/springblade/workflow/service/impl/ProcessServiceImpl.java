@@ -93,6 +93,36 @@ public class ProcessServiceImpl implements IProcessService {
     }
 
     @Override
+    public String startInstanceAtActivity(String processDefinitionId, String bizKey, String activityId,
+                                          Map<String, Object> variables) {
+        if (processDefinitionId == null || processDefinitionId.isBlank()) {
+            throw new IllegalArgumentException("从节点启动失败：流程定义ID不能为空");
+        }
+        if (activityId == null || activityId.isBlank()) {
+            throw new IllegalArgumentException("从节点启动失败：目标节点Key不能为空");
+        }
+        Map<String, Object> vars = (variables == null) ? new HashMap<>(8) : variables;
+        // ① 正常发起：token 落在流程的首个等待节点（通常是「创建」节点）
+        ProcessInstance instance = runtimeService.startProcessInstanceById(processDefinitionId, bizKey, vars);
+        // ② 定位跳转起点：以引擎实际活动任务为准（不假设一定是创建节点）
+        List<TaskVO> tasks = currentTasks(instance.getId());
+        if (tasks.isEmpty()) {
+            throw new IllegalStateException("从节点启动失败：流程发起后没有等待节点，无法定位跳转起点（该流程可能没有办理节点）");
+        }
+        String fromActivityId = tasks.get(0).getTaskDefinitionKey();
+        // ③ 状态变更跳转：不经序列流，故中间节点的条件判定与执行监听器不会执行
+        if (!activityId.equals(fromActivityId)) {
+            runtimeService.createChangeActivityStateBuilder()
+                .processInstanceId(instance.getId())
+                .moveActivityIdTo(fromActivityId, activityId)
+                .changeState();
+        }
+        log.info("[blade-workflow] 引擎从指定节点启动流程（归档实例复活）. procDefId={}, bizKey={}, from={}, activityId={}, engineInstId={}",
+            processDefinitionId, bizKey, fromActivityId, activityId, instance.getId());
+        return instance.getId();
+    }
+
+    @Override
     public List<TaskVO> currentTasks(String engineInstId) {
         List<Task> tasks = taskService.createTaskQuery()
             .processInstanceId(engineInstId)

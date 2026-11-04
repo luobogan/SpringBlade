@@ -44,6 +44,37 @@ public interface IProcessService {
     String startInstanceById(String processDefinitionId, String bizKey, Map<String, Object> variables);
 
     /**
+     * 按**流程定义ID**启动流程，并把 token 移到<b>指定节点</b>后等待（用于「归档实例复活」）。
+     *
+     * <p><b>为什么需要这个能力</b>：归档走 {@code deleteProcessInstance} 已把运行态销毁，
+     * Flowable 无法 resume 一个已结束的流程实例（{@code ProcessInstanceModification} 只能作用于
+     * <b>活</b>运行态），故归档实例回退的唯一可行路径是「新建运行态并把 token 停在目标节点」，
+     * 再由业务侧把 {@code wf_instance.engine_inst_id} 重定向到新运行态。</p>
+     *
+     * <p><b>实现口径（Flowable 无「从任意节点启动」API）</b>：
+     * {@code ProcessInstanceBuilder} 只提供 {@code startEventId}（仅能指定开始事件），
+     * 故本方法分两步：</p>
+     * <ol>
+     *   <li>按正常流程发起新实例 → token 落在流程的<b>首个等待节点</b>（通常是「创建」节点）；</li>
+     *   <li>用引擎状态变更（{@code moveActivityIdTo}）把 token 移到目标节点。</li>
+     * </ol>
+     *
+     * <p>收益：走的是与「强制收回」完全同源的引擎跳转机制（{@link #moveActivity}），
+     * 目标节点上的任务由引擎正常创建（任务监听器照常触发 → 操作者照常解析）。</p>
+     *
+     * <p><b>边界（务必知悉）</b>：第 2 步是<b>状态变更跳转</b>，不按 BPMN 顺序流转 ——
+     * 首个等待节点与目标节点之间的网关条件判定与执行监听器<b>不会执行</b>。</p>
+     *
+     * @param processDefinitionId 流程定义ID（{@code ACT_RE_PROCDEF.ID_}）
+     * @param bizKey              业务主键（沿用原实例 bizKey，使同一请求的审计链连续）
+     * @param activityId          目标节点Key（= BPMN 元素 id），流程将在该节点等待
+     * @param variables           流程变量（可为 null）
+     * @return 新建的引擎实例ID（PROC_INST_ID_）
+     */
+    String startInstanceAtActivity(String processDefinitionId, String bizKey, String activityId,
+                                    Map<String, Object> variables);
+
+    /**
      * 查询指定引擎实例的当前活动任务
      */
     List<TaskVO> currentTasks(String engineInstId);
