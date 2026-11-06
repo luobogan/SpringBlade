@@ -624,7 +624,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
     @Override
     public RejectCandidatesVO rejectNodes(Long taskId) {
-        WfTask task = taskMapper.selectById(taskId);
+        WfTask task = resolveTask(taskId);
         if (task == null) {
             throw new ServiceException("任务不存在");
         }
@@ -786,7 +786,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean circulate(Long taskId, CirculateDTO dto) {
-        WfTask task = taskMapper.selectById(taskId);
+        WfTask task = resolveTask(taskId);
         if (task == null) {
             throw new ServiceException("任务不存在");
         }
@@ -828,7 +828,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean urge(Long taskId, UrgeDTO dto) {
-        WfTask task = taskMapper.selectById(taskId);
+        WfTask task = resolveTask(taskId);
         if (task == null) {
             throw new ServiceException("任务不存在");
         }
@@ -854,7 +854,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (taskId == null) {
             return false;
         }
-        WfTask task = taskMapper.selectById(taskId);
+        WfTask task = resolveTask(taskId);
         if (task == null) {
             return false;
         }
@@ -881,7 +881,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (taskId == null) {
             throw new ServiceException("任务不存在");
         }
-        WfTask task = taskMapper.selectById(taskId);
+        WfTask task = resolveTask(taskId);
         if (task == null) {
             throw new ServiceException("任务不存在");
         }
@@ -1266,8 +1266,29 @@ public class WfTaskServiceImpl implements IWfTaskService {
         }
     }
 
-    private WfTask requireTodoTask(Long taskId) {
+    /**
+     * 解析任务：先按业务主键（wf_task.id 雪花）查，查不到再按引擎任务ID（engine_task_id）回退一次。
+     *
+     * <p><b>为什么需要回退</b>：消息中心 / 流程通知（{@code WfProcessNoticeListener} 监听 Flowable
+     * TASK_CREATED 事件）写入的 bizRefId 取自 Flowable 引擎 {@code Task.getId()}，即 engine_task_id
+     * （如 453214），而本系统一切任务操作均以 wf_task.id 为入口。若不兼容，用户点开「待办通知」会
+     * 因 selectById(engine_task_id) 查不到而全程报「任务不存在」。</p>
+     * <p>回退安全：engine_task_id 为 Flowable 自增整数，与 19 位雪花主键无碰撞可能。</p>
+     */
+    private WfTask resolveTask(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
         WfTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            task = taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getEngineTaskId, String.valueOf(taskId)).last("LIMIT 1"));
+        }
+        return task;
+    }
+
+    private WfTask requireTodoTask(Long taskId) {
+        WfTask task = resolveTask(taskId);
         if (task == null) {
             throw new ServiceException("任务不存在（可能该流程已被删除），请刷新页面后重试");
         }
