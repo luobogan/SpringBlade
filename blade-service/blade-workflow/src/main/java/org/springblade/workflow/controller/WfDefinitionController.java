@@ -22,6 +22,7 @@ import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.service.IWfDefinitionPermNormalizeService;
 import org.springblade.workflow.service.IWfDefinitionService;
 import org.springblade.workflow.service.IWfDefinitionRedeployService;
+import org.springblade.workflow.utils.WfNoticeContext;
 import org.springblade.workflow.vo.BrowserOptionVO;
 import org.springblade.workflow.vo.DefinitionKeyTenantVO;
 import org.springblade.workflow.vo.PermNormalizeReportVO;
@@ -115,7 +116,12 @@ public class WfDefinitionController {
         // 「谁在何时部署了哪个定义」—— 这是排查「正式版本被测试/手工部署顶替」的第一手依据
         log.info("[blade-workflow][审计] 部署流程定义. defId={}, 结果={}, operator={}",
             id, ok, SecureUtil.getUserId());
-        return R.data(ok, "部署成功");
+        try {
+            // 发布期非阻断配置提示（如出口条件引用的字段未配置/非必填）拼进 msg，前端据此提示管理员
+            return R.data(ok, WfNoticeContext.join("部署成功"));
+        } finally {
+            WfNoticeContext.clear();
+        }
     }
 
     @PostMapping("/admin/redeploy-mi")

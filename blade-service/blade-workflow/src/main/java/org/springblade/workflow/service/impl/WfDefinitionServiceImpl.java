@@ -74,6 +74,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -95,8 +96,11 @@ import org.w3c.dom.NodeList;
 import org.springblade.core.tool.api.R;
 import org.springblade.system.user.entity.UserInfo;
 import org.springblade.system.user.feign.IUserClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.util.BpmnExtensionUtil;
+import org.springblade.workflow.utils.WfConditionVarUtil;
+import org.springblade.workflow.utils.WfNoticeContext;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -2521,7 +2525,108 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
                 + String.join("、", noOperatorNodes)
                 + "。运行期会静默降级（无人可办/节点被整级跳过），请为节点配置操作者后重新保存并发布。");
         }
+        // ⑤ 出口条件变量「配置完整性」非阻断提示（E9 口径：配置问题靠提示，不靠静默兜底/硬拦）。
+        //    真实运行期用 Flowable UEL，缺变量会抛 Unknown property 让提交失败；此处提前把
+        //    「条件引用了没配置 / 非必填的字段」暴露给管理员，由其检查配置，不阻断发布。
+        warnConditionFields(def, process);
         log.info("[blade-workflow] 发布门禁通过(结构级). defId={}, bpmnNodes={}", def.getId(), bpmnNodeKeys.size());
+    }
+
+    /**
+     * 发布期配置提示（非阻断）：出口条件引用的字段若「表单里查不到」或「未设必填」，给管理员提示。
+     *
+     * <p>字段存在性口径：BPMN 各节点 {@code wf:fieldPerm} 的并集（节点字段权限矩阵，
+     * 由设计器从表单字段生成）∪ 表单布局 {@code fieldMeta.fieldName}（跨服务读取，失败则跳过），
+     * 避免仅看权限矩阵把「布局里有、但没显式配权限」的字段误报成不存在。</p>
+     *
+     * <p>必填口径：{@code wf:fieldPerm.required=1} 或布局 {@code fieldMeta.fieldAttr=3/required=true}，
+     * 与运行期 {@code WfNodeSettingsUtil} / {@code collectLayoutRequired} 的双口径一致。</p>
+     */
+    private void warnConditionFields(WfProcessDefinition def, Process process) {
+        try {
+            Set<String> condVars = new LinkedHashSet<>();
+            for (WfNodeLink l : links(def.getId())) {
+                condVars.addAll(WfConditionVarUtil.extract(l.getConditionExpr()));
+            }
+            if (condVars.isEmpty()) {
+                return;
+            }
+            Set<String> known = new LinkedHashSet<>();
+            Set<String> required = new LinkedHashSet<>();
+            for (FlowElement fe : process.getFlowElements()) {
+                BpmnExtensionUtil.WfNodeExt ext = BpmnExtensionUtil.readNode(fe);
+                if (ext == null) {
+                    continue;
+                }
+                for (BpmnExtensionUtil.WfFieldPermExt fp : ext.fieldPerms) {
+                    if (fp.field == null || fp.field.isBlank()) {
+                        continue;
+                    }
+                    known.add(fp.field);
+                    if ("1".equals(fp.required)) {
+                        required.add(fp.field);
+                    }
+                }
+            }
+            // 布局字段（best-effort，跨服务；失败不影响门禁）
+            try {
+                R<org.springblade.formmode.vo.FormLayoutVO> lr = formmodeClient.getFormLayout(def.getFormId(), 0, null);
+                String lj = lr == null ? null : (lr.getData() == null ? null : lr.getData().getLayoutJson());
+                if (lj != null && !lj.isBlank()) {
+                    JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(lj);
+                    collectLayoutFieldMeta(root, known, required);
+                }
+            } catch (Exception e) {
+                log.debug("[blade-workflow] 发布期布局字段读取跳过. defId={}, {}", def.getId(), e.getMessage());
+            }
+
+            List<String> tips = new ArrayList<>();
+            for (String v : condVars) {
+                if (!known.contains(v)) {
+                    tips.add("出口条件引用的字段【" + v + "】在表单字段/节点字段权限中未找到，"
+                        + "请确认该字段已配置且条件引用的字段名正确");
+                } else if (!required.contains(v)) {
+                    tips.add("出口条件引用的字段【" + v + "】未设为必填，"
+                        + "发起或办理时若不填写，网关条件变量会缺失（建议设为必填）");
+                }
+            }
+            if (tips.isEmpty()) {
+                return;
+            }
+            for (String t : tips) {
+                // 用户可见：由 WfDefinitionController 拼进 R.msg
+                WfNoticeContext.add(t);
+            }
+            log.warn("[blade-workflow] 发布配置提示（不阻断）. defId={}, formId={}, {}",
+                def.getId(), def.getFormId(), String.join("；", tips));
+        } catch (Exception e) {
+            // 提示是尽力而为，绝不能因为检查本身失败而阻断发布
+            log.warn("[blade-workflow] 发布期出口条件配置检查跳过. defId={}, {}", def.getId(), e.getMessage());
+        }
+    }
+
+    /** 遍历布局 JSON，收集 fieldMeta.fieldName 及必填标记（fieldAttr=3 / required=true） */
+    private void collectLayoutFieldMeta(JsonNode node, Set<String> known, Set<String> required) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            JsonNode fm = node.get("fieldMeta");
+            if (fm != null && fm.isObject()) {
+                JsonNode fn = fm.get("fieldName");
+                if (fn != null && !fn.asText("").isBlank()) {
+                    String name = fn.asText();
+                    known.add(name);
+                    boolean req = fm.path("fieldAttr").asInt(0) == 3 || fm.path("required").asBoolean(false);
+                    if (req) {
+                        required.add(name);
+                    }
+                }
+            }
+        }
+        if (node.isContainerNode()) {
+            node.elements().forEachRemaining(child -> collectLayoutFieldMeta(child, known, required));
+        }
     }
 
     /**

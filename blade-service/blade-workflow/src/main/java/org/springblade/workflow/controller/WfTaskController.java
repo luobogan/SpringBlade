@@ -16,6 +16,7 @@ import org.springblade.workflow.dto.ForwardDTO;
 import org.springblade.workflow.dto.RejectDTO;
 import org.springblade.workflow.dto.UrgeDTO;
 import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.utils.WfNoticeContext;
 import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.WfTaskVO;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -97,7 +98,12 @@ public class WfTaskController {
     @PostMapping("/{id}/approve")
     @Operation(summary = "同意", description = "按节点 sign_order 判定是否推进：会签需全部办完，或签任一人即推进，依次逐个激活")
     public R<Boolean> approve(@PathVariable("id") Long id, @RequestBody(required = false) ApproveDTO dto) {
-        return R.data(taskService.approve(id, dto), "审批完成");
+        try {
+            // 把 service 层的非阻断配置提示（如出口条件字段未随提交下发）拼进 msg，前端据此提示用户
+            return R.data(taskService.approve(id, dto), WfNoticeContext.join("审批完成"));
+        } finally {
+            WfNoticeContext.clear();
+        }
     }
 
     @PostMapping("/{id}/reject")

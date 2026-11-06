@@ -19,6 +19,7 @@ import org.springblade.workflow.dto.RejectDTO;
 import org.springblade.workflow.dto.UrgeDTO;
 import org.springblade.workflow.entity.WfApprovalLog;
 import org.springblade.workflow.entity.WfInstance;
+import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
@@ -26,6 +27,7 @@ import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
+import org.springblade.workflow.mapper.WfNodeLinkMapper;
 import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfSubflowRequestMapper;
@@ -50,7 +52,9 @@ import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.mapper.WfFormSnapshotMapper;
 import org.springblade.workflow.reject.WfRejectManager;
 import org.springblade.workflow.utils.WfAuthUtil;
+import org.springblade.workflow.utils.WfConditionVarUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.workflow.utils.WfNoticeContext;
 import org.springblade.workflow.config.WfRetirementProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springblade.workflow.vo.RejectCandidateVO;
@@ -122,6 +126,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final INoticeClient noticeClient;
     private final WfProcessNodeMapper nodeMapper;
     private final WfNodeOperatorMapper operatorMapper;
+    /** 出口条件读取：提交前补齐网关 UEL 变量，避免 Unknown property */
+    private final WfNodeLinkMapper linkMapper;
     private final WfApprovalLogMapper logMapper;
     private final IProcessService processService;
     private final IWfInstanceService instanceService;
@@ -337,6 +343,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 引擎多实例：把全部 MI 节点的集合变量 wfMiAssignees_<nodeKey> 注入流转变量，
         // 保证进入该节点前集合已就绪（引擎据此逐人展开）。幂等、持久。
         injectMiCollectionVars(inst.getDefId(), inst, vars, operator);
+        // 网关 UEL 条件变量兜底：见 supplyMissingConditionVars 注释。
+        // 位置严格排在 validateBeforeApprove（必填/二次认证校验）之后，且只改本次提交的 vars，
+        // 绝不写回表单快照 / 业务表，因此不会绕过任何必填校验。
+        supplyMissingConditionVars(inst.getDefId(), inst.getEngineInstId(), vars);
 
         // 2.6 公文准备（取号 / 公文镜像 / 版式转换）
         //     必须排在「节点必做动作校验」之前：esign 方案下签章前提是「已有 PDF/OFD 版式文件」，
@@ -474,7 +484,17 @@ public class WfTaskServiceImpl implements IWfTaskService {
             } catch (org.flowable.common.engine.api.FlowableException fe) {
             // MI 空集合守卫异常（非 MI 节点解析为空已在 advanceInternal 内转 ServiceException 阻断）。
             // 保留原文案，改抛 ServiceException 让前端收到干净中文错误信息。
-            throw new org.springblade.core.log.exception.ServiceException(fe.getMessage());
+            String raw = fe.getMessage() == null ? "" : fe.getMessage();
+            if (raw.contains("Unknown property used in expression")) {
+                // 理论上 supplyMissingConditionVars 已补齐所有条件变量；这里是兜底漏网时的中文防线，
+                // 避免用户再看到 Flowable/JUEL 的英文原始异常。
+                String var = extractUelVar(raw);
+                throw new org.springblade.core.log.exception.ServiceException(
+                    "流程出口条件引用的字段【" + (var == null ? "未知字段" : var) + "】未随表单提交下发，"
+                        + "引擎无法判断审批路径；请检查：①该字段是否已在表单中配置 "
+                        + "②该字段是否设为必填 ③出口条件引用的字段名是否正确。原始信息：" + raw);
+            }
+            throw new org.springblade.core.log.exception.ServiceException(raw);
             }
 
             // 节点信息 → 运行时消费：节点后附加操作 + 子流程触发（异常策略由 NodeActionExecutor 吸收）
@@ -1493,6 +1513,70 @@ public class WfTaskServiceImpl implements IWfTaskService {
             for (String rule : rules) {
                 checkFieldRule(data, rule);
             }
+        }
+    }
+
+    /** 从 Flowable 的 "Unknown property used in expression: ${xxx <= 3000}" 里提取首个变量名，用于中文报错 */
+    private static String extractUelVar(String raw) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("\\$\\{\\s*([A-Za-z_][A-Za-z0-9_]*)").matcher(raw);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * 网关出口条件（UEL）变量兜底：仅作用于「本次引擎提交的 variables」。
+     *
+     * <p><b>问题</b>：正式办理页提交时只上传「渲染包快照 + 本节点表单改动」。若某出口条件引用的字段
+     * 从未下发（脚本/接口发起的实例、该节点字段只读未回传、前序节点才填的值），Flowable 在排他网关
+     * 求值时抛 {@code Unknown property used in expression: ${eeramt <= 3000}}，整个提交 400 且流程卡死。</p>
+     *
+     * <p><b>口径（与测试态严格区分）</b>：测试态 {@code WfTestServiceImpl.deriveValues} 会反推「满足条件」
+     * 的样本值（如 eeramt=5000）只为跑分支覆盖；正式态绝不能注入这种假值去决定真实审批走向。
+     * 这里按以下优先级补齐，保证 UEL 可求值即可：</p>
+     * <ol>
+     *   <li>前端本次已提交的变量 → 原样保留（真实值优先，绝不覆盖）；</li>
+     *   <li>引擎实例上已有的持久变量 → 取真实值回填；</li>
+     *   <li>仍缺失 → 补中性默认值 0（让比较可求值；金额类条件会落到最低档/默认分支），并 warn 留痕。</li>
+     * </ol>
+     *
+     * <p><b>安全边界</b>：本方法在 {@code validateBeforeApprove} 之后调用，只修改 {@code vars}，
+     * 不写回 {@code wf_form_snapshot} / 业务表、不参与必填校验，因此不存在「样本值绕过金额必填」问题。</p>
+     */
+    private void supplyMissingConditionVars(Long defId, String engineInstId, Map<String, Object> vars) {
+        if (defId == null || vars == null) {
+            return;
+        }
+        List<WfNodeLink> links;
+        try {
+            links = linkMapper.selectList(Wrappers.<WfNodeLink>lambdaQuery()
+                .eq(WfNodeLink::getDefId, defId)
+                .isNotNull(WfNodeLink::getConditionExpr));
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 读取出口条件失败，跳过 UEL 变量兜底. defId={}, {}", defId, e.getMessage());
+            return;
+        }
+        if (links == null || links.isEmpty()) {
+            return;
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (WfNodeLink l : links) {
+            names.addAll(WfConditionVarUtil.extract(l.getConditionExpr()));
+        }
+        for (String name : names) {
+            if (vars.containsKey(name)) {
+                continue;
+            }
+            Object existing = processService.getVariable(engineInstId, name);
+            if (existing != null) {
+                vars.put(name, existing);
+                continue;
+            }
+            vars.put(name, 0L);
+            log.warn("[blade-workflow] 出口条件变量未随提交下发，已补中性默认值 0（仅引擎求值，不写回表单）. "
+                    + "defId={}, engineInstId={}, var={}", defId, engineInstId, name);
+            WfNoticeContext.add("出口条件引用的字段【" + name + "】未随本次表单提交下发，"
+                + "已按默认值 0 参与条件判断，审批路径可能与预期不符；请检查："
+                + "①该字段是否已在表单中配置 ②该字段是否设为必填 ③出口条件引用的字段名是否正确");
         }
     }
 
