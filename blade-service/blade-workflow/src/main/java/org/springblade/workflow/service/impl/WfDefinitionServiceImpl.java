@@ -472,6 +472,10 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         if (def == null) {
             throw new ServiceException("流程定义不存在");
         }
+        // 门禁：未关联流程表单（formId 为空）一律不准发布，否则发起后无业务表单可用
+        if (def.getFormId() == null) {
+            throw new ServiceException("流程未关联流程表单，无法发布，请先在「基础设置」选择对应表单");
+        }
         // BPMN 由流程设计器（bpmn-js）产出后，真正部署到 Flowable 引擎
         if (def.getBpmnXml() != null && !def.getBpmnXml().isBlank()) {
             if (def.getProcKey() == null || def.getProcKey().isBlank()) {
@@ -526,6 +530,10 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         if (def.getProcKey() == null || def.getProcKey().isBlank()) {
             throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
+        }
+        // 门禁：未关联流程表单（formId 为空）一律不准测试部署
+        if (def.getFormId() == null) {
+            throw new ServiceException("流程未关联流程表单，无法测试，请先在「基础设置」选择对应表单");
         }
         // 测试部署：注入出口条件 + 测试态消毒（businessRuleTask 降级等），不改 status、不激活版本。
         // ⚠️ 用独立 key（procKey + "__test"）：Flowable 的 startProcessInstanceByKey 取「该 key 最新部署」，
@@ -1463,6 +1471,10 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         }
         if (def.getProcKey() == null || def.getProcKey().isBlank()) {
             throw new ServiceException("流程定义缺少 procKey（应由画布 BPMN process id 提供）");
+        }
+        // 门禁：未关联流程表单（formId 为空）一律不准测试
+        if (def.getFormId() == null) {
+            throw new ServiceException("流程未关联流程表单，无法测试，请先在「基础设置」选择对应表单");
         }
         // 先确保已部署到测试引擎（独立 __test key，不顶正式版本、不激活版本）
         deployForTest(defId);
