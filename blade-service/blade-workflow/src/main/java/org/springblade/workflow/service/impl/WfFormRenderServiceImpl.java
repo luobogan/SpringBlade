@@ -145,6 +145,22 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             nodeKey = nodeKeyParam;
         }
 
+        // 归档/办结态 currentNodeKey 被清空（WfInstanceServiceImpl 注释：归档态 current_node_key 为空），
+        // 实例查看（通过/不通过/撤销/暂停等终态）无「当前节点」可渲染，若仍用空 nodeKey 取布局，
+        // getFormLayout(formId, type, "") 取不到任何布局，整张表单会退化为裸默认（兜底）表单，
+        // 即便归档节点（nodeType=3）已同步了专属布局也无从展示。此处回退到归档节点的 nodeKey，
+        // 使归档布局与字段权限在终态查看时正常生效。草稿(5)/运行中(0)保持原逻辑（前者走发起页、后者有活动任务节点）。
+        if ((nodeKey == null || nodeKey.isEmpty()) && inst.getStatus() != null
+            && inst.getStatus() != 0 && inst.getStatus() != 5) {
+            WfProcessNode archiveNode = nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
+                .eq(WfProcessNode::getDefId, inst.getDefId())
+                .eq(WfProcessNode::getNodeType, 3)
+                .last("LIMIT 1"));
+            if (archiveNode != null && archiveNode.getNodeKey() != null && !archiveNode.getNodeKey().isEmpty()) {
+                nodeKey = archiveNode.getNodeKey();
+            }
+        }
+
         FormRenderVO vo = new FormRenderVO();
         vo.setInstanceId(inst.getId());
         vo.setDefId(inst.getDefId());
