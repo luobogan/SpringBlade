@@ -25,6 +25,7 @@ import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
+import org.springblade.formmode.utils.LayoutFormulaResolver;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.IWfFormRenderService;
@@ -50,6 +51,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -348,6 +350,14 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             ? instanceMapper.selectById(dto.getInstanceId()) : null;
         boolean testInst = saveInst != null && saveInst.getIsTest() != null && saveInst.getIsTest() == 1;
 
+        // ★ 服务端按布局公式重算（对齐 E9「公式结果入库」）：
+        //   公式配置挂在布局 cellData[r][c].f + formulaCfg.destField 上，
+        //   保存前按当前节点布局重算一次，把结果写进目标字段（E9 destfield 语义）。
+        //   这样「业务表 / 快照 / 引擎变量」三处用同一份值，前端算错或被篡改都不会写入脏数据。
+        Map<String, Object> fieldValues = dto.getFieldValues() == null
+            ? new LinkedHashMap<>() : new LinkedHashMap<>(dto.getFieldValues());
+        applyLayoutFormulas(formId, resolveNodeKey(dto), fieldValues);
+
         // ① 写业务数据行（跨服务 formmode：dataId 为空=新建，非空=更新同一行）
         Long dataId;
         if (testInst) {
@@ -357,7 +367,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             FormDataSaveDTO saveDto = new FormDataSaveDTO();
             saveDto.setFormId(formId);
             saveDto.setDataId(dto.getDataId());
-            saveDto.setFieldValues(dto.getFieldValues() == null ? Map.of() : dto.getFieldValues());
+            saveDto.setFieldValues(fieldValues);
             R<Long> r = formmodeClient.saveBusinessData(saveDto);
             if (r == null || !r.isSuccess() || r.getData() == null) {
                 throw new ServiceException("保存业务数据失败：" + (r == null ? "无响应" : r.getMsg()));
@@ -367,13 +377,50 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
 
         // ② 办理态：同步当前节点快照（不改任务状态、不推进引擎）
         if (dto.getInstanceId() != null) {
-            String nodeKey = (dto.getNodeKey() != null && !dto.getNodeKey().isEmpty())
-                ? dto.getNodeKey() : currentNodeKey(dto.getInstanceId());
-            upsertSnapshot(dto.getInstanceId(), nodeKey, dto.getFieldValues());
+            String nodeKey = resolveNodeKey(dto);
+            upsertSnapshot(dto.getInstanceId(), nodeKey, fieldValues);
         }
         log.info("[blade-workflow] 表单已保存（未流转）. instId={}, formId={}, dataId={}",
             dto.getInstanceId(), formId, dataId);
         return String.valueOf(dataId);
+    }
+
+    /**
+     * 保存/重算用的节点 Key：优先取请求里的 nodeKey，缺省回退到实例当前节点。
+     */
+    private String resolveNodeKey(FormSaveDTO dto) {
+        if (dto.getNodeKey() != null && !dto.getNodeKey().isEmpty()) {
+            return dto.getNodeKey();
+        }
+        return dto.getInstanceId() != null ? currentNodeKey(dto.getInstanceId()) : "";
+    }
+
+    /**
+     * 按当前节点布局重算公式，把结果写进目标字段（服务端权威口径）。
+     *
+     * <p>布局读取失败 / 无公式 / 公式出错时均<b>降级跳过</b>：保留前端提交的值，
+     * 不阻断整表保存（与 E9「公式算错只影响该公式」的行为一致）。</p>
+     */
+    private void applyLayoutFormulas(Long formId, String nodeKey, Map<String, Object> fieldValues) {
+        try {
+            R<org.springblade.formmode.vo.FormLayoutVO> layoutResult =
+                formmodeClient.getFormLayout(formId, 0, nodeKey);
+            if (layoutResult == null || !layoutResult.isSuccess() || layoutResult.getData() == null) {
+                return;
+            }
+            String layoutJson = layoutResult.getData().getLayoutJson();
+            if (layoutJson == null || layoutJson.isEmpty()) {
+                return;
+            }
+            Map<String, Object> computed = LayoutFormulaResolver.resolve(layoutJson, fieldValues);
+            if (!computed.isEmpty()) {
+                fieldValues.putAll(computed);
+                log.info("[blade-workflow] 布局公式已重算. formId={}, nodeKey={}, fields={}",
+                    formId, nodeKey, computed.keySet());
+            }
+        } catch (Exception e) {
+            log.warn("[blade-workflow] 布局公式重算失败，已降级为直接保存. formId={}, nodeKey={}", formId, nodeKey, e);
+        }
     }
 
     /**

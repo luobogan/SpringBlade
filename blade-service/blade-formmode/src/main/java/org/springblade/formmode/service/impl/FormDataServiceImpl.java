@@ -16,9 +16,12 @@ import org.springblade.formmode.mapper.WorkflowBillMapper;
 import org.springblade.formmode.mapper.WorkflowBillFieldMapper;
 import org.springblade.formmode.service.IApprovalTriggerService;
 import org.springblade.formmode.service.IFormDataService;
+import org.springblade.formmode.service.IFormLayoutService;
 import org.springblade.formmode.service.IFormModeService;
 import org.springblade.formmode.service.IFormRightService;
+import org.springblade.formmode.entity.FormLayout;
 import org.springblade.formmode.utils.BizValueCoercer;
+import org.springblade.formmode.utils.LayoutFormulaResolver;
 import org.springblade.formmode.utils.TableNameContextHolder;
 import org.springblade.formmode.utils.TableNameUtil;
 import org.springblade.formmode.vo.DataScope;
@@ -56,7 +59,50 @@ public class FormDataServiceImpl implements IFormDataService {
     private final IFormModeService formModeService;
     private final IApprovalTriggerService approvalTriggerService;
     private final IFormRightService formRightService;
+    private final IFormLayoutService formLayoutService;
     private final JdbcTemplate jdbcTemplate;
+
+    /**
+     * 按表单布局重算公式，返回「目标字段 → 计算结果」。
+     *
+     * <p>布局读取失败 / 无公式时返回空 Map（调用方按「无公式字段」处理，行为不变）。</p>
+     */
+    private Map<String, Object> resolveLayoutFormulas(Long formId, Map<String, Object> fieldValues) {
+        if (formId == null) {
+            return Collections.emptyMap();
+        }
+        try {
+            List<FormLayout> layouts = formLayoutService.listByFormId(formId, null, null);
+            if (layouts == null || layouts.isEmpty()) {
+                return Collections.emptyMap();
+            }
+            Map<String, Object> merged = new LinkedHashMap<>();
+            for (FormLayout layout : layouts) {
+                String layoutJson = layout == null ? null : layout.getLayoutJson();
+                if (layoutJson == null || layoutJson.isEmpty()) {
+                    continue;
+                }
+                Map<String, Object> computed = LayoutFormulaResolver.resolve(layoutJson, fieldValues);
+                computed.forEach((k, v) -> merged.putIfAbsent(k, v));
+            }
+            return merged;
+        } catch (Exception e) {
+            log.warn("[formmode] 布局公式重算失败，跳过公式字段. formId={}, err={}", formId, e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /** 该字段是否为公式赋值字段（目标字段清单命中字段名或物理列名） */
+    private boolean isFormulaDestField(Set<String> destFields, WorkflowBillField field) {
+        if (destFields == null || destFields.isEmpty() || field == null) {
+            return false;
+        }
+        if (field.getFieldname() != null && destFields.contains(field.getFieldname())) {
+            return true;
+        }
+        return field.getFielddbname() != null && destFields.contains(field.getFielddbname().toLowerCase());
+    }
+
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -97,6 +143,14 @@ public class FormDataServiceImpl implements IFormDataService {
         // 解析字段值
         Map<String, Object> fieldValues = formDataDTO.getFieldValues();
         if (fieldValues == null) fieldValues = new HashMap<>();
+
+        // ★ 公式赋值字段：按布局服务端重算（权威口径），并纳入「可保存字段清单」
+        //   （对齐 E9 FieldInfo.getFormulaNew：把公式 destfield 并入可保存字段列表）。
+        //   公式目标字段在布局里通常是「只读」——若沿用只读裁剪，算好的值会被丢掉；
+        //   故这里单独标记：不被裁剪，且写入的是服务端重算的值（不信任客户端传值，防篡改）。
+        Map<String, Object> formulaValues = resolveLayoutFormulas(billId, fieldValues);
+        Set<String> formulaDestFields = new HashSet<>(formulaValues.keySet());
+
 
         // ── 字段级权限裁剪（P2-2 Step3：防越权写隐藏/只读字段）──
         // 解析权限所属模块：优先 DTO.modeid，否则由 formId/billId 反查；
@@ -192,10 +246,14 @@ public class FormDataServiceImpl implements IFormDataService {
             String dbName = field.getFielddbname();
             if (dbName == null || !tableCols.contains(dbName.toLowerCase())) continue;
 
-            // 字段权限裁剪：隐藏/只读字段受控
+            // 公式赋值字段：服务端算出来的值，优先于客户端传值
+            boolean isFormulaField = isFormulaDestField(formulaDestFields, field);
+
+            // 字段权限裁剪：隐藏/只读字段受控（公式赋值字段例外：它是算出来的，不是用户填的）
             FieldPermVO perm = permMap.get(field.getFieldname());
             boolean controlled = perm != null
-                && (!Boolean.TRUE.equals(perm.getVisible()) || !Boolean.TRUE.equals(perm.getEditable()));
+                && (!Boolean.TRUE.equals(perm.getVisible()) || !Boolean.TRUE.equals(perm.getEditable()))
+                && !isFormulaField;
             if (controlled) {
                 // 新建时跳过写入（防恶意注入隐藏字段）；编辑时保留 DB 原值（防篡改）
                 if (!isCreate && originalRow != null) {
@@ -209,7 +267,14 @@ public class FormDataServiceImpl implements IFormDataService {
 
             columns.append(",").append(dbName);
             placeholders.append(",?");
-            Object value = fieldValues.get(dbName);
+            Object value = null;
+            if (isFormulaField) {
+                value = formulaValues.get(field.getFieldname());
+                if (value == null) value = formulaValues.get(dbName.toLowerCase());
+            }
+            if (value == null) {
+                value = fieldValues.get(dbName);
+            }
             if (value == null) {
                 value = fieldValues.get(field.getFieldname());
             }
@@ -250,9 +315,12 @@ public class FormDataServiceImpl implements IFormDataService {
                     String dbName = field.getFielddbname();
                     if (dbName == null || !tableCols.contains(dbName.toLowerCase())) continue;
 
+                    boolean isFormulaField = isFormulaDestField(formulaDestFields, field);
+
                     FieldPermVO perm = permMap.get(field.getFieldname());
                     boolean controlled = perm != null
-                        && (!Boolean.TRUE.equals(perm.getVisible()) || !Boolean.TRUE.equals(perm.getEditable()));
+                        && (!Boolean.TRUE.equals(perm.getVisible()) || !Boolean.TRUE.equals(perm.getEditable()))
+                        && !isFormulaField;
                     if (controlled) {
                         // 只读/隐藏：保留 DB 原值（不取请求值），防篡改
                         Object dbVal = originalRow != null ? originalRow.get(dbName.toLowerCase()) : null;
@@ -262,7 +330,12 @@ public class FormDataServiceImpl implements IFormDataService {
                     }
 
                     setParts.add("`" + dbName + "`=?");
-                    Object value = finalFieldValues.get(dbName);
+                    Object value = null;
+                    if (isFormulaField) {
+                        value = formulaValues.get(field.getFieldname());
+                        if (value == null) value = formulaValues.get(dbName.toLowerCase());
+                    }
+                    if (value == null) value = finalFieldValues.get(dbName);
                     if (value == null) value = finalFieldValues.get(field.getFieldname());
                     updateValues.add(BizValueCoercer.coerce(colMeta.get(dbName.toLowerCase()), value));
                 }
