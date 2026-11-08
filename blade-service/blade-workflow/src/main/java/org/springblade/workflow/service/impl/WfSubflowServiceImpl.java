@@ -13,6 +13,7 @@ import org.springblade.workflow.mapper.WfSubflowRequestMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfSubflowService;
+import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springframework.stereotype.Service;
 
@@ -34,6 +35,7 @@ public class WfSubflowServiceImpl implements IWfSubflowService {
     private final WfInstanceMapper instanceMapper;
     private final WfTaskMapper taskMapper;
     private final IWfInstanceService instanceService;
+    private final WfTaskActReader taskActReader;
 
     @Override
     public void record(Long mainInstId, Long subInstId, Long subDefId, WfProcessNode node) {
@@ -149,6 +151,12 @@ public class WfSubflowServiceImpl implements IWfSubflowService {
     private Long resolveMainNodeOperator(Long mainInstId, String mainNodeKey) {
         if (mainNodeKey == null) {
             return 0L;
+        }
+        // 【③ 第 8 项】读源=act 时改查 ACT_HI_TASKINST（同实例同节点、最近办结人）；
+        // 经 ACT_HI_PROCINST.BUSINESS_ID_ 关联 blade 实例，开关=wf 时回退 wf_task（与历史口径一致）。
+        if (taskActReader.actRead()) {
+            Long op = taskActReader.nodeOperatorFromAct(mainInstId, mainNodeKey);
+            return op == null ? 0L : op;
         }
         WfTask task = taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, mainInstId)

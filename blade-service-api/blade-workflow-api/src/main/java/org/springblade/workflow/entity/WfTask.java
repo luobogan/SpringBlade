@@ -18,6 +18,22 @@ import java.util.Date;
  * <p>status 对齐 ecology {@code isremark}：0待办 2已办 4办结 6自动提交
  * 7协办 8抄送 11传阅。</p>
  * <p>engine_task_id 为 Flowable 任务ID（弱关联）；original_user 用于代理人代办场景。</p>
+ *
+ * <p><b>【表退役暂缓 · 2026-11-08 决策】</b>本表<b>不删</b>、也<b>不停写</b>。
+ * 原 P6 计划是「退役 wf_task → 删 Entity/Mapper/Service → DROP 表」，现<b>暂缓</b>，
+ * 原因是「去 wf_ 表」全量盘点（2026-11-08）确认了三类 ACT 无法表达、必须由本表承载的业务语义：</p>
+ * <ol>
+ *   <li><b>blade 扩展任务</b>：协办(7)/抄送(8)/传阅(11) 是 blade 业务产物，引擎无原生物；
+ *       且历史抄送以本表行为权威存储（{@code ACT_RU_IDENTITYLINK} 任务完成后会被清理）。</li>
+ *   <li><b>无引擎任务的合成待办</b>：草稿待办、退回发起人重提交（{@code engine_task_id} 为空）。</li>
+ *   <li><b>blade 6 态语义</b>：{@code BUSINESS_STATUS_} 只是本表 {@code status} 的投影，
+ *       引擎先删 {@code ACT_RU_TASK}、事件再反写 sync，中间存在漂移窗口。</li>
+ * </ol>
+ * <p><b>重启退役的条件</b>：① blade 扩展任务迁到独立表或 ACT 新增承载列；
+ * ② 合成待办有替代载体；③ blade 6 态的权威存储定案（见
+ * {@code doc/md/去wf_表-任务读源翻源上线检查.md} §7.10）。</p>
+ * <p><b>注意</b>：{@code WfTaskActWriter} 的 N:1 守卫每次双写都要
+ * {@code SELECT COUNT(*) FROM wf_task WHERE engine_task_id = ?} → 本表在被替换前<b>不能物理删除</b>。</p>
  */
 @Data
 @EqualsAndHashCode(callSuper = true)

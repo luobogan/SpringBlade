@@ -8,14 +8,15 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springblade.workflow.entity.WfInstance;
-import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfInstanceMapper;
-import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.odoc.dto.OdocListQuery;
+import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.odoc.entity.WfOdocRequest;
 import org.springblade.workflow.odoc.mapper.WfOdocRequestMapper;
 import org.springblade.workflow.odoc.service.IWfOdocTodoService;
 import org.springblade.workflow.odoc.vo.OdocTodoVO;
+import org.springblade.workflow.service.IWfTaskService;
+import org.springblade.workflow.vo.WfTaskVO;
 import org.springblade.workflow.utils.WfAuthUtil;
 
 import java.util.ArrayList;
@@ -37,9 +38,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class WfOdocTodoServiceImpl implements IWfOdocTodoService {
 
-	private final WfTaskMapper taskMapper;
 	private final WfInstanceMapper instanceMapper;
 	private final WfOdocRequestMapper requestMapper;
+	private final IWfTaskService wfTaskService;
 
 	@Override
 	public IPage<OdocTodoVO> pageTodo(OdocListQuery query) {
@@ -71,7 +72,7 @@ public class WfOdocTodoServiceImpl implements IWfOdocTodoService {
 		Map<Long, WfOdocRequest> reqMap = batchRequest(instIds);
 		List<OdocTodoVO> rows = new ArrayList<>(page.getRecords().size());
 		for (WfInstance inst : page.getRecords()) {
-			rows.add(toVO(null, inst, reqMap.get(inst.getId())));
+			rows.add(toVO(inst, reqMap.get(inst.getId())));
 		}
 		Page<OdocTodoVO> voPage = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
 		voPage.setRecords(rows);
@@ -86,59 +87,92 @@ public class WfOdocTodoServiceImpl implements IWfOdocTodoService {
 		return new Page<>(cur, size);
 	}
 
-	/** 待办/已办：分页查 wf_task，再批量回查实例与公文属性。 */
+	/**
+	 * 待办/已办：复用通用列表的混合分页（ACT 主表 + wf_task 扩展任务兜底，见 {@link WfTaskServiceImpl#page}），
+	 * 经 {@code wf_odoc_request} 收敛公文维度（offical_type / secret_level 下推为 instance_id 范围），
+	 * 公文属性批量回查镜像表。读源=act 时本方法不再直接查 {@code wf_task}（仅兜底残留仍回查）。
+	 */
 	private IPage<OdocTodoVO> pageTasks(OdocListQuery query, boolean todo) {
 		Long target = WfAuthUtil.resolveSelfIfNotAdmin(query.getAssignee());
-		List<Integer> statuses = todo
-			? List.of(WfTask.STATUS_TODO)
-			: List.of(WfTask.STATUS_DONE, WfTask.STATUS_FINISHED, WfTask.STATUS_AUTO_SUBMIT,
-				WfTask.STATUS_COADJUTANT, WfTask.STATUS_CIRCULATE, WfTask.STATUS_READ);
-
-		LambdaQueryWrapper<WfTask> qw = Wrappers.<WfTask>lambdaQuery()
-			.eq(WfTask::getAssignee, target)
-			.in(WfTask::getStatus, statuses)
-			.eq(WfTask::getIsTest, 0);
-		qw.inSql(WfTask::getInstId, requestScopeSql(query));
-		applyTitleScopeTask(qw, query);
-		if (query.getBeginTime() != null) {
-			qw.ge(todo ? WfTask::getReceiveTime : WfTask::getOperateTime, query.getBeginTime());
+		// 公文维度：wf_odoc_request 的 instance_id 集合（offical_type / secret_level 过滤）
+		List<Long> instIds = requestScopeIds(query);
+		if (instIds.isEmpty()) {
+			Page<OdocTodoVO> empty = new Page<>(query.getCurrent(), query.getSize());
+			empty.setRecords(Collections.emptyList());
+			empty.setTotal(0L);
+			return empty;
 		}
-		if (query.getEndTime() != null) {
-			qw.le(todo ? WfTask::getReceiveTime : WfTask::getOperateTime, query.getEndTime());
-		}
-		qw.orderByDesc(todo ? WfTask::getReceiveTime : WfTask::getOperateTime);
-
-		Page<WfTask> page = taskMapper.selectPage(pageOf(query), qw);
-		List<Long> instIds = page.getRecords().stream()
-			.map(WfTask::getInstId).filter(Objects::nonNull).distinct().collect(Collectors.toList());
-		Map<Long, WfInstance> instMap = batchInstance(instIds);
-		Map<Long, WfOdocRequest> reqMap = batchRequest(instIds);
-
+		WfTaskListFilter f = new WfTaskListFilter();
+		f.setInstIds(instIds);
+		f.setTitle(query.getTitle());
+		f.setBeginTime(query.getBeginTime());
+		f.setEndTime(query.getEndTime());
+		IPage<WfTaskVO> page = todo
+			? wfTaskService.todoPage(target, f, query.getCurrent(), query.getSize())
+			: wfTaskService.donePage(target, f, query.getCurrent(), query.getSize());
+		List<Long> ids = page.getRecords().stream()
+			.map(WfTaskVO::getInstId).filter(Objects::nonNull).distinct().collect(Collectors.toList());
+		Map<Long, WfInstance> instMap = batchInstance(ids);
+		Map<Long, WfOdocRequest> reqMap = batchRequest(ids);
 		List<OdocTodoVO> rows = new ArrayList<>(page.getRecords().size());
-		for (WfTask t : page.getRecords()) {
-			rows.add(toVO(t, instMap.get(t.getInstId()), reqMap.get(t.getInstId())));
+		for (WfTaskVO v : page.getRecords()) {
+			rows.add(toVO(v, instMap.get(v.getInstId()), reqMap.get(v.getInstId())));
 		}
 		Page<OdocTodoVO> voPage = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
 		voPage.setRecords(rows);
 		return voPage;
 	}
 
-	private void applyTitleScopeTask(LambdaQueryWrapper<WfTask> qw, OdocListQuery query) {
-		if (!StringUtils.hasText(query.getTitle())) {
-			return;
+	/** 从 WfTaskVO（混合分页结果）组装公文 VO，补实例与公文属性。 */
+	private OdocTodoVO toVO(WfTaskVO v, WfInstance inst, WfOdocRequest req) {
+		OdocTodoVO vo = new OdocTodoVO();
+		if (v != null) {
+			vo.setTaskId(v.getId());
+			vo.setTaskStatus(v.getStatus());
+			vo.setReceiveTime(v.getReceiveTime());
+			vo.setOperateTime(v.getOperateTime());
 		}
-		List<Long> instIds = instanceMapper.selectObjs(Wrappers.<WfInstance>lambdaQuery()
-				.select(WfInstance::getId)
-				.like(WfInstance::getTitle, query.getTitle())
-				.eq(WfInstance::getIsTest, 0))
-			.stream()
+		if (inst != null) {
+			vo.setInstanceId(inst.getId());
+			vo.setDefId(inst.getDefId());
+			vo.setTitle(inst.getTitle());
+			vo.setCurrentNodeKey(inst.getCurrentNodeKey());
+			vo.setStarter(inst.getStarter());
+		}
+		if (req != null) {
+			vo.setOfficalType(req.getOfficalType());
+			vo.setIssuedNum(req.getIssuedNum());
+			vo.setReceiveNum(req.getReceiveNum());
+			vo.setIssuedUnit(req.getIssuedUnit());
+			vo.setReceiveUnit(req.getReceiveUnit());
+			vo.setSecretLevel(req.getSecretLevel());
+			vo.setUrgency(req.getUrgency());
+			vo.setTopicType(req.getTopicType());
+			vo.setWrittenDate(req.getWrittenDate());
+			vo.setIssuedDate(req.getIssuedDate());
+			vo.setDocId(req.getDocId());
+		}
+		return vo;
+	}
+
+	/** 公文维度实例范围：从 wf_odoc_request 取 instance_id（offical_type / secret_level 过滤）。 */
+	private List<Long> requestScopeIds(OdocListQuery query) {
+		com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfOdocRequest> qw =
+			Wrappers.<WfOdocRequest>lambdaQuery()
+				.eq(WfOdocRequest::getIsDeleted, 0)
+				.select(WfOdocRequest::getInstanceId);
+		if (query.getOfficalType() != null && query.getOfficalType() > 0) {
+			qw.eq(WfOdocRequest::getOfficalType, query.getOfficalType());
+		} else {
+			qw.gt(WfOdocRequest::getOfficalType, 0);
+		}
+		if (query.getSecretLevels() != null && !query.getSecretLevels().isEmpty()) {
+			qw.in(WfOdocRequest::getSecretLevel, query.getSecretLevels());
+		}
+		List<Object> ids = requestMapper.selectObjs(qw);
+		return ids.stream()
 			.map(o -> o instanceof Number ? ((Number) o).longValue() : null)
 			.filter(Objects::nonNull).distinct().collect(Collectors.toList());
-		if (instIds.isEmpty()) {
-			qw.eq(WfTask::getId, -1L); // 无命中实例 → 恒不成立，避免全表
-			return;
-		}
-		qw.in(WfTask::getInstId, instIds);
 	}
 
 	/**
@@ -181,14 +215,8 @@ public class WfOdocTodoServiceImpl implements IWfOdocTodoService {
 			.stream().collect(Collectors.toMap(WfOdocRequest::getInstanceId, Function.identity(), (a, b) -> a));
 	}
 
-	private OdocTodoVO toVO(WfTask task, WfInstance inst, WfOdocRequest req) {
+	private OdocTodoVO toVO(WfInstance inst, WfOdocRequest req) {
 		OdocTodoVO vo = new OdocTodoVO();
-		if (task != null) {
-			vo.setTaskId(task.getId());
-			vo.setTaskStatus(task.getStatus());
-			vo.setReceiveTime(task.getReceiveTime());
-			vo.setOperateTime(task.getOperateTime());
-		}
 		if (inst != null) {
 			vo.setInstanceId(inst.getId());
 			vo.setDefId(inst.getDefId());

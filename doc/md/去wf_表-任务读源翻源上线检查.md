@@ -289,11 +289,10 @@ node_key=Task_Create  engine_task_id=''  assignee=10（王海燕）
 - [x] ⑦ 孤儿 = **0**（生产态口径；脚本口径 225 条全为 `is_deleted=1` 历史数据）
 - [x] 覆盖率硬指标：ACT 可读行 243 / `wf_task` 列表行 240 = **101.2%** ≥ 99%
 - [x] `engine-multi-instance.enabled=true` 且定义已重新部署（MI 1:1 已生效）
-- [ ] ⑥ 双写漂移 = 0 —— ⚠️ **代码已修（防新增），存量待清**：根因 `WfStateProjector` 三处漏
-      `taskActWriter.sync()` 回写 ACT，已修并加回归（见 §6.2.2）；存量 68 条用
-      `V2026.11.08_002__fix_task_act_status_drift.sql` 修正（已在事务内验证影响 68 行、未留痕）。
-      清完复跑 ⑥ 应为 0，方可翻源。原漂移形态：已办列表状态标签错（「待办」冒充「办结」）、
-      且按「办结」筛选会漏行。
+- [x] ⑥ 双写漂移 = 0 —— ✅ **已达标**（2026-11-08）：根因 `WfStateProjector` 三处漏
+      `taskActWriter.sync()` 回写 ACT，已修并加回归（见 §6.2.2）；存量 68 条已用
+      `V2026.11.08_002__fix_task_act_status_drift.sql` 修正（修前 68 → 修后 0），
+      复跑校验脚本确认 ⑥ = 0。
 - [x] **草稿合成待办的处置**（§6.3）—— ✅ 已解决（2026-11-08，方案 A 落地，见 §7.8）：
       草稿（`wf_instance.status=5`）的待办条目已从「待办」列表移出，改由「我的请求」承载；
       「我的请求」的草稿**零改动**（后端 act 读源下已并入 records+total，前端已有续填/删除）。
@@ -310,10 +309,10 @@ node_key=Task_Create  engine_task_id=''  assignee=10（王海燕）
 
 ```
 ① 处置草稿合成待办（§7.7）           ← ✅ 已完成（2026-11-08，方案 A 落地，见 §7.8）
-② 本开关关闭（读侧纯 ACT）            ← 代码已落地，dev 可直接置 false（待端到端实测）
-③ 剩余读点逐个翻源（reject-nodes / monitor / count / form-render / 自动测试 …）
-④ blade 6 态 → ACT 状态映射定案
-⑤ 停写 wf_task → 删 Entity/Mapper/Service → DROP 表（P6 收尾）
+② 读侧切 ACT 单源                     ← ✅ 已完成（2026-11-08，dev 实测通过，见 §7.9）
+③ 剩余读点逐个翻源                     ← ✅ 已完成（10 项，**10/10**，清单见 §7.12，完成记录见 §7.13 ~ §7.22）
+④ blade 6 态 → ACT 状态映射定案       ← ✅ 已定案（2026-11-08，按「是否引擎任务本体」分流，见 §7.10）
+⑤ 停写 wf_task → 删表 → DROP         ← ⏸ 暂缓（2026-11-08 决策，理由与重启条件见 §7.11）
 ```
 
 每步都可回退；**顺序不可跳**。跳过 ①④ 直接停写，会造成「草稿/被退回的发起人看不到待办」的线上死循环。
@@ -357,6 +356,455 @@ node_key=Task_Create  engine_task_id=''  assignee=10（王海燕）
 
 **净效果**：生产态被移出「待办」的仅 **1 条**（王海燕「综合费用报销全流程审批流」草稿，`inst=2118968283743944705`），
 该草稿在「我的请求」仍可见、可「继续填写」/「删除」，**未丢失**。
+
+### 7.9 端到端实测结论（2026-11-08，dev，开关已切 false）
+
+**开关落点**：改 `application.yml` 默认值 `task-residue-merge.enabled: false`（**不动 Nacos**）——
+理由：Nacos 的 `blade.yaml`/`blade-dev.yaml`/`blade-test.yaml`/`blade-prod.yaml` **全部指向同一个物理库 `blade`**，
+改配置会全服务广播、波及所有环境；且 `blade-workflow-dev.yaml`（workflow 专属配置）经确认
+**不含任何 task- 相关键**，故代码默认值不会被覆盖。
+回退 = 改回 `true` 并重启 blade-workflow（秒级）。
+
+**部署**：重新 `install` 并以原参数重启（`java -jar blade-workflow.jar --spring.profiles.active=dev`），
+18s 就绪，服务日志 **ERROR = 0**。
+
+**实测结果**（admin / tenant 000000，经网关 `:8000/api`）：
+
+| # | 验证项 | 结果 |
+|---|---|---|
+| 1 | 待办 `assignee=10`（草稿所属人） | `total=0` —— 草稿已移出待办 ✅（DB 侧该用户本就无 ACT 待办） |
+| 2 | 待办 `assignee=676` | `total=11 / rows=11`，全部 `status=0`，与 DB 的 ACT 待办数一致 ✅ |
+| 3 | 已办 `assignee=676` | `total=95`，状态标签**既有 2(已办) 也有 4(办结)** ✅ —— 漂移修复生效（修前这批显示「待办」） |
+| 4 | 角标 `/monitor/count` | `{"todo":11,"done":95}` —— **与列表条数完全一致，零割裂** ✅ |
+| 5 | 草稿实例 `GET /instance/2118968283743944705` | `code=200 status=5 title=综合费用报销全流程审批流 starter=10` → 草稿完好未丢 ✅ |
+| 6 | 操作链路前置 `GET /task/{列表里的 id}` | `code=200`，id/status/node 正确 → `requireTodoTask` 按 `wf_task.id` 能查到 ✅（approve/reject/forward 的共同前置） |
+| 7 | **深页一致性**（已办 95 条，pageSize=10） | 第 1/5/9 页各 10 条、**第 10 页 5 条**（95 = 9×10+5），每页 total 恒为 95 → **深页漏行彻底消失** ✅ |
+| 8 | `GET /instance/mine` | `code=200 total=37`，草稿回退分支正常 ✅ |
+
+> 至此 §7.4 的翻源硬前置全部达标：① 0 / ④ 仅剩草稿（已由「我的请求」承载）/ ⑤ 0 / ⑥ 0 / ⑦ 0 / 覆盖率 101.2%，
+> 且「待办/已办」两个列表已是 **100% 来自 ACT_* 的纯单源**。
+
+---
+
+### 7.10 ④ blade 6 态 → ACT 状态映射定案（2026-11-08 已定案）
+
+**结论：blade 6 态不塞进 `ACT_*`。** 按「**是否引擎任务本体**」分流，各走各的权威存储：
+
+| 行类别 | status | engine_task_id | 权威存储 | 列表读取来源 |
+|---|---|---|---|---|
+| 引擎任务本体·待办 | 0 | 有 | `ACT_RU_TASK` | ACT |
+| 引擎任务本体·已办/办结/自动提交 | 2 / 4 / 6 | 有 | `ACT_HI_TASKINST` | ACT |
+| **blade 扩展·协办** | 7 | 有（同节点多人） | **`wf_task`** | wf_task |
+| **blade 扩展·抄送** | 8 | 有（沿用） | **`wf_task`** | wf_task |
+| **blade 扩展·传阅** | 11 | 有 | **`wf_task`** | wf_task |
+| 合成待办·草稿 | 0 | 空 | `wf_instance` | 「我的请求」（方案 A 已移出待办） |
+| 合成待办·退回发起人重提交 | 0 | 空 | **`wf_task`** | wf_task |
+
+**定案理由**：
+
+1. `ACT_*.BUSINESS_STATUS_` 只是 `wf_task.status` 的**投影**，不是引擎事实 —— 引擎先删 `ACT_RU_TASK`、
+   事件再反写 sync，中间存在**漂移窗口**（实测 68 条，见 §6.2.2）。把它当权威会把漂移窗口暴露给业务。
+2. 协办(7)/抄送(8)/传阅(11) 是 **blade 业务产物，引擎无原生物**；抄送历史更是以 `wf_task` 行为权威存储
+   （`WfTaskServiceImpl#circulate` 自述「identityLink 只是预热」，且 `ACT_RU_IDENTITYLINK` 任务完成后会被清理）。
+3. 「进入过」≠「办理过」：`ACT_HI_TASKINST` 有行不代表办理过 —— 协办/抄送/传阅同样会在 HI 表建行
+   → 监控回退/归档回退的候选集不能用 HI 表裸算（见 ③ 第 2 项）。
+
+#### 7.10.1 读侧判据：从「兜底」改为「精确」
+
+| 判据 | 含义 | 问题 |
+|---|---|---|
+| **旧（兜底）** | `id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_*)` | 把**任何**漏双写的行都补进来 → 掩盖真实覆盖率缺口；开关语义退化为「应急兜底」，无法长期维护 |
+| **新（精确）** | `status IN (7,8,11) OR engine_task_id 为空` | 只取**结构性**无法由 ACT 表达的行 → 不掩盖缺口、可长期维护 |
+
+落点：`WfTaskServiceImpl#wfTaskQuery(..., extOnly)`（`extOnly=true` 用于残留合并；`false` 用于**读源=wf 的
+回退路径**，回退必须全量否则降级后缺行）、`WfTaskActReader#countFromAct`（角标两段残留 SQL，同口径）。
+
+#### 7.10.2 开关语义随之变更（重要）
+
+`blade.workflow.task-residue-merge.enabled` **不再**表示「要不要兜底 ACT 未覆盖的残留」，
+而是表示「**要不要读 blade 扩展任务**」：
+
+- `true`（默认，**生产安全值**）：列表与角标 = ACT（引擎任务本体）+ wf_task（blade 扩展任务 + 合成待办）→ 不丢行；
+- `false`（**仅诊断用**）：完全不查 `wf_task` → ⚠️ **生产禁止**：协办/抄送/传阅/退回发起人重提交会全部从列表消失
+  （dev 恰好无这些行故看不出丢行，**生产必有** —— 转办/抄送会 insert `status=8` 行）。
+
+#### 7.10.3 顺带修掉的两个既有缺陷
+
+| # | 缺陷 | 症状 | 修法 |
+|---|---|---|---|
+| 1 | `countFromAct` 的残留裸 SQL **缺 `is_deleted = 0`** | `JdbcTemplate` 裸 SQL 绕过 MyBatis-Plus 的 `@TableLogic` 自动过滤 → 已逻辑删除的合成待办被计入角标，而列表侧（Mapper）自动过滤 → **「角标 12、列表 11」的割裂**（2026-11-08 实测发现；`HEAD` 版本同样存在） | 两段残留 SQL 显式加 `t.is_deleted = 0` |
+| 2 | `countFromAct` 的残留裸 SQL **缺排重**（`NOT IN` ACT 的 `BIZ_TASK_ID_`） | 交集行与 ACT 段**双计** → 角标虚高 | 补 `t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_*)`（待办查 RU、已办查 HI） |
+
+> 教训：**凡用 `JdbcTemplate` 裸 SQL 读 `wf_task`，必须显式写 `is_deleted = 0` 与租户条件**
+> —— MyBatis-Plus 的逻辑删除与租户插件只作用于 Mapper 查询。
+
+### 7.11 ⑤ 停写 `wf_task` / 删 Entity / DROP 表 —— **暂缓执行**
+
+**2026-11-08 决策：不删表、不停写、不删 Entity/Mapper/Service。**
+
+**理由**（全量盘点 `blade-workflow` 模块所有 `wf_task` 读写点后确认）：
+
+1. **三类业务语义只有 `wf_task` 能承载**：blade 扩展任务（协办/抄送/传阅）、无引擎任务的合成待办（草稿/退回发起人）、
+   blade 6 态语义（§7.10）。
+2. **写侧无法立即停**：`WfTaskActWriter` 的 N:1 守卫每次双写都要
+   `SELECT COUNT(*) FROM wf_task WHERE engine_task_id = ?` → **在被替代前表不能物理删除**。
+3. **③ 的剩余读点仍依赖它**（见下表），停写会让这些路径失去数据源。
+
+**重启退役的条件**：① blade 扩展任务迁到独立表或 `ACT_*` 新增承载列；② 合成待办有替代载体；
+③ blade 6 态的权威存储按 §7.10 定案落定且切换完成。
+
+**代码留痕**：`WfTask` 实体类注释已加「表退役暂缓 · 2026-11-08 决策」段（含上述理由与重启条件）。
+
+### 7.12 ③ 剩余读点翻源清单（按改造代价排序，2026-11-08 盘点）
+
+| 序 | 读点 | 位置 | 难度 | 说明 |
+|---|---|---|---|---|
+| 1 | 监控 overdue / taskId / 超时计数（5 处 wf_task 子查） | `WfInstanceServiceImpl`：`computeMonitorIdRestriction` / `enrichMonitor`×2 / `monitorAnomalySummary` / `monitorStats` | ✅ **已完成**（2026-11-08） | 见 §7.13 |
+| 2 | 「已办理过节点集」（3 处） | `loadPassedNodeKeys` / `archivedCandidates` / `recallTargetPassed` | ✅ **已完成**（2026-11-08） | 见 §7.14 |
+| 3 | 监管动作关待办（2 处） | `forceRecallTo` / `monitorRejectTo` | ✅ **已完成**（2026-11-08） | 见 §7.15 |
+| 4 | `canVisible` 参与人判定（半翻源） | `WfInstanceServiceImpl` | ✅ **已完成**（2026-11-08） | 见 §7.16 |
+| 5 | 超时 job 回读（读源扫描） | `WfTimeoutJob`（`scanDueFromAct`） | ✅ **已完成**（读源扫描，P3-6 已落地；`autoApprove` 内部 `wf_task.id` 定位属第 9 项） | 见 §7.17 |
+| 6 | 公文待办/已办列表 | `WfOdocTodoServiceImpl` | ✅ **已完成**（复用通用列表混合分页 + 公文维度下推） | 见 §7.18 |
+| 7 | form-render / 节点操作者的 wf 回退分支 | `WfFormRenderServiceImpl:139`、`WfInstanceServiceImpl:1540/1582/1632`（4199 为 BPMN 可达性辅助，无关 wf_task） | 小 | **✅ 已完成**（2026-11-08 核验：回退分支已正确受 `actRead()` 闸门，wf 兜底为设计内双源；无需改代码，见 §7.19） |
+| 8 | 自由流程 / 子流程 | `WfFreeFlowDriver:145/157/184`、`WfSubflowServiceImpl:153`（列表 ACT 路径步骤名） | 中高 | **✅ 已完成**（2026-11-08：写侧读保留 + ACT 列表补步骤名 + 子流程办结人翻源，见 §7.20） |
+| 9 | **操作链路的任务定位与 ID 语义** | `WfTaskServiceImpl:1433/1435`（`resolveTask`） | **最高** | **✅ 已完成（设计内覆盖，见 §7.21）**：列表恒返回 `wf_task.id`，`wf_task` 保留为任务 id 权威存储（§7.11），操作链无需改 ID 语义；消息中心 `engineTaskId` 由 `resolveTask` 的 engine_task_id 回退兜住 |
+| 10 | 签章流 + 审批意见双写 | `OdocSealAdvancer:170`、`WfWriteHelper:311` | 中 | **✅ 已完成（设计内覆盖，见 §7.22）**：均为写侧读，依赖保留的 `wf_task.engine_task_id` 定位引擎任务；退役后改用 `BIZ_TASK_ID_` 反查（§7.11 重启条件） |
+
+**已在本轮顺手修掉的**（原属第 9 项的一部分，且是**现存 bug**）：
+`WfTaskActReader#toWfTaskByBizIdFromAct` 此前**没读 `ORIGINAL_USER_`** →
+读源=act 时 `WfAuthUtil#canOperateTask` 的 `me.equals(originalUser)` 恒 false →
+**代理代办的人既看不到操作按钮（前端 readonly 判定），后端 `requireOperateTask` 还会直接 403**。已补该列读取。
+
+### 7.13 ③ 第 1 项：监控的 5 处 wf_task 子查 → ACT（2026-11-08 已完成，行为零差异）
+
+**改造点**（`WfInstanceServiceImpl`，5 处，全部按**任务读源** `task-read-source` 分流）：
+
+| # | 位置 | 改造前（读 `wf_task`） | 改造后（读 `ACT_*`） |
+|---|---|---|---|
+| 1 | `computeMonitorIdRestriction` 超时维度 | `wf_task` where `status=0 AND due_time<now` | `ACT_RU_TASK.DUE_DATE_ < now`（`overdueInstanceIdsFromAct`） |
+| 2 | `enrichMonitor` overdue 标记 | 同上（页内实例范围） | 同上（限定页内实例范围） |
+| 3 | `enrichMonitor` 当前待办 taskId | `wf_task` where `status=0` 取最小 id | `ACT_RU_TASK.BIZ_TASK_ID_` 取 `MIN()`（`pendingTaskIdsByInstanceFromAct`） |
+| 4 | `monitorAnomalySummary` 超时计数 | `wf_task` group by inst_id | `COUNT(DISTINCT BUSINESS_ID_)`（`countOverdueInstancesFromAct`） |
+| 5 | `monitorStats` 超时计数 | 同上 | 同上 |
+
+**新增读器方法**（`WfTaskActReader`）：`overdueInstanceIdsFromAct` / `countOverdueInstancesFromAct` /
+`pendingTaskIdsByInstanceFromAct`，统一用 `ACT_RU_TASK r JOIN ACT_HI_PROCINST p ON p.ID_=r.PROC_INST_ID_`
+关联 blade 实例（`p.BUSINESS_ID_` = 原 `wf_instance.id` 雪花值），并复用既有 `appendActTenant` 加租户。
+
+**两个必须守住的口径约束**（翻源不改行为）：
+
+1. **分流依据用「任务读源」而非「实例读源」**：任务维度的读取一律按 `task-read-source` 判断
+   （`taskActReader.actRead()`），因为 `task-read-source` 与 `instance-read-source` 是**两个独立开关**，
+   混用会在两者配置不一致时口径分裂。
+2. **刻意不加 `IS_TEST_` 过滤**：wf 侧原查询没有过滤测试态，ACT 侧若加了过滤 → 监控列表与看板在测试实例上分裂。
+   同理 `pendingTaskIdsByInstanceFromAct` 不排除 `is_test`，与 wf 侧严格一致。
+
+**已知口径边界（生产需注意）**：wf 侧的「当前待办」会包含「退回发起人重提交」的合成待办
+（`status=0` 且 `engine_task_id` 为空），而 ACT 侧无此行 → 此类实例的 `taskId` 两边会不同
+（ACT 侧给的是真实引擎任务的 `BIZ_TASK_ID_`）。dev 无此类行，故实测零差异；生产若有，
+影响面仅限「监控页转办/催办」的目标任务选择，不影响列表条数与超时判定。
+
+**实测对比（dev，改造前 jar 12:27 vs 改造后 jar 13:09，同一 token、同一时刻）**：
+
+| 项 | 改造前（wf_task） | 改造后（ACT） | 一致 |
+|---|---|---|---|
+| `anomaly-summary.overdue` | 2 | 2 | ✅ |
+| `stats.overdue` / `total` / `running` | 2 / 35 / 17 | 2 / 35 / 17 | ✅ |
+| `instances.total` | 35 | 35 | ✅ |
+| 每行 `overdue`（20 行逐行比对） | 仅 `2117206468097785857`=true | 完全相同 | ✅ |
+| 每行 `taskId`（20 行逐行比对） | 全部 | 完全相同 | ✅ |
+| 服务 ERROR | 0 | 0 | ✅ |
+
+**回归**：`WfTaskResidueMergeTest` 10/10；全模块 307 用例，2 失败 = 已 stash 双重验证的既有失败。
+
+### 7.14 ③ 第 2 项：「已办理过节点集」3 处 → ACT（2026-11-08 已完成，行为零差异）
+
+**改造点**（`WfInstanceServiceImpl`，3 处，按**任务读源** `task-read-source` 分流）：
+
+| # | 位置 | wf 侧口径 | ACT 侧口径 |
+|---|---|---|---|
+| 1 | `loadPassedNodeKeys(instId)` | 本实例 `wf_task` **全部** `node_key`（**无 status 过滤**） | `ACT_HI_TASKINST ∪ ACT_RU_TASK` 的 `TASK_DEF_KEY_`（**无 status 过滤**） |
+| 2 | `archivedCandidates(defId, instId)` | `status=DONE(2)` 的 `node_key`，按 `id` 倒序、每节点取最近一次 | `BUSINESS_STATUS_='DONE'` + `END_TIME_` 非空，按 `END_TIME_` 倒序 |
+| 3 | `recallTargetPassed(inst, targetNode)` | 同 #1（无 status 过滤）；**空集合 → 放行** | 同 #1；**空集合 → 放行**（照搬保守语义） |
+
+**新增读器方法**（`WfTaskActReader`）：`passedNodeKeysFromAct` / `doneNodeKeysFromAct`，
+实例维度靠 `ACT_HI_PROCINST.BUSINESS_ID_`（= 原 `wf_instance.id`）关联。
+
+**三个必须守住的口径约束**：
+
+1. **不加 status 过滤**（#1/#3）：`loadPassedNodeKeys` 名为「已办理过」，实际是「本实例**出现过**的节点」
+   （含当前待办节点、协办/抄送/传阅节点）→ 若在 ACT 侧加上 `BUSINESS_STATUS_ IN ('DONE','FINISHED')` 过滤，
+   会把「进入过但未办理」的节点排除 → **监控回退的落点范围被收窄**（原本可退的节点变得不可退）→ 功能回归。
+2. **空集合按「通过」处理**（#3）：wf 侧「台账读不到 → 不阻断监管动作」的保守语义必须照搬，
+   否则 ACT 侧读到空集会把越级回退**拦死**。
+3. **`DONE` 的映射**：wf `status=2` → ACT `BUSINESS_STATUS_='DONE'`（`WfTaskActWriter#statusStr`），
+   且要求 `END_TIME_ IS NOT NULL`（已办结）→ 与 `WfTaskServiceImpl#done()` 的六态口径对齐。
+
+**已知口径差异（不影响判定）**：ACT 侧「出现过」集合比 wf 侧**多一个 `Task_Create`**（创建节点在引擎侧有
+HI 行、且 `BUSINESS_STATUS_` 非 DONE；wf 侧创建节点的待办行已被清理）。影响分析：
+`Task_Create` 是创建节点，而三处使用点对创建节点都**单独放行**
+（`archivedCandidates` 末尾追加创建节点、`recallTargetPassed` 对 `nodeType=0` 直接 `return true`），
+故**候选集合与判定结果均不变**（实测已逐条比对确认，见下）。
+
+**实测对比（dev，同一 token；改造前 jar 13:09 vs 改造后 jar 13:22）**：
+
+| 实例（归档态，走 `archivedCandidates`） | 改造前（wf_task） | 改造后（ACT） | 一致 |
+|---|---|---|---|
+| 2118961249115996161 | n=8，default=Task_Cashier | n=8，default=Task_Cashier | ✅ 节点与**顺序**全同 |
+| 2118672243744673793 | n=9 | n=9 | ✅ |
+| 2117206426024722433 | n=8 | n=8 | ✅ |
+| 2117206378780082177 | n=9 | n=9 | ✅ |
+
+| 实例（运行中，走 `loadPassedNodeKeys`） | 改造后 | 说明 |
+|---|---|---|
+| 2118670646641790978 / 2118667114429648898 / 2118638326413103105 / 2118609457119289346 | n=3 `[Task_DeptDirector, Task_DeptLeader, Task_Create]` | 结构候选 ∩ (已办理 ∪ 创建节点)，`Task_Create` 来自创建节点分支 |
+
+**SQL 层集合比对（5 个实例）**：`done` 口径 wf 与 ACT **完全相同**（8/7/8/4/7 个节点）；
+`all` 口径 ACT 为 wf 的**超集**（多 `Task_Create`）→ 与上文分析一致，不改变判定。
+
+**回归**：全模块 307 用例（2 失败 = 既有）；待办 11 / 已办 95 / 角标 `{todo:11, done:95}` /
+异常卡片 overdue=2 / 看板 overdue=2 —— 与改造前**完全一致**；服务 ERROR=0。
+
+> ⚠️ **踩坑记录**：`appendActTenant` 是「末尾追加」语义，若 SQL 片段里已拼好 `ORDER BY`，
+> 租户条件会被追加到 `ORDER BY` 之后 → `bad SQL grammar`；`UNION ALL` 的第二段也不能沿用第一段的表别名。
+> 本次修法：`ORDER BY` 放在 `appendActTenant` **之后**追加；`UNION ALL` 拆成两段独立查询（各自带自己的租户条件）。
+
+### 7.15 ③ 第 3 项：监管动作关待办 2 处 → ACT（2026-11-08 已完成，端到端验证）
+
+**改造点**（`WfInstanceServiceImpl`，2 处监管动作 `forceRecallTo` / `monitorRejectTo` 的「① 关闭当前节点未办任务」读源点，按**任务读源** `task-read-source` 分流）：
+
+| # | 位置 | 原读源 | ACT 读源 |
+|---|---|---|---|
+| 1 | `forceRecallTo` 关待办（仅非归档态） | `wf_task.status=TODO` 全量 | `ACT_RU_TASK.BIZ_TASK_ID_`（经 `ACT_HI_PROCINST.BUSINESS_ID_` 关联） |
+| 2 | `monitorRejectTo` 关待办（含归档态） | 同上 | 同上 |
+
+**新增**：私有方法 `collectPendingCloseTasks(instId)`（统一两处收口）+ 读器方法 `WfTaskActReader.pendingCloseBizIdsFromAct(instId)`
+（返回本实例当前活跃 RU 任务的 `BIZ_TASK_ID_` 集合；`BIZ_TASK_ID_` 经核实为 **bigint** 列，存 `wf_task.id` 数字形式）。
+
+**为什么「关待办 + sync」这一步不可省**：`advance()` 只读 `ACT_RU_TASK` 当前活动任务并 `insertTask`，**不删除**旧 `wf_task` 行。
+随后的 `moveActivity` 会删除当前节点的 RU 任务，但 `ACT_HI_TASKINST` 对应行的 `BUSINESS_STATUS_`（blade 自定义列）引擎不会改
+→ 若不先在删除前把 `wf_task` 收尾为 DONE 并 `sync`，HI 行 `BUSINESS_STATUS_` 会停在 `TODO` **漂移**。
+故该步只收尾"即将被引擎删除的活跃任务对应的台账行"，翻源后仍以引擎 `ACT_RU_TASK` 为权威取这些行。
+
+**回退策略（行为不变）**：act 读源下，若 `ACT_RU_TASK` 取到活跃任务则**仅**关这些（精确，对齐引擎权威）；
+若取不到（`BUSINESS_ID_` 无运行态，典型 = 归档态无运行态 / 纯台账残留），回退到 `wf_task.status=TODO`
+（保证归档残留待办仍被收尾，与改造前一致）。运行中态下 `wf_task` 的「幽灵待办」不在此关 —— act 读源下用户侧读 ACT、不可见，
+其清理属漂移修复职责而非监管动作。
+
+**口径一致性（只读 SQL 比对，dev 4 个运行中实例）**：`wf_task.status=TODO` 的 id 集合 与 `ACT_RU_TASK.BIZ_TASK_ID_` 集合 **逐行完全一致**
+→ act 分支取到的 `wf_task` 行集合与 wf 分支完全相同 → **零行为差异**。
+
+**端到端实测**（dev 实例 2118670646641790978，`monitorRejectTo` → `Task_DeptDirector`）：
+- 实例 `current_node_key`：Task_FinAudit → **Task_DeptDirector** ✅（流程成功回退）
+- 目标节点新待办（advance 正常）：2119...497 / 2119...617（Task_DeptDirector, status=0, 有 engine_task_id）✅
+- 旧节点 Task_FinAudit 的 HI 行：`BUSINESS_STATUS_=TODO, END_TIME_=NULL` → **`BUSINESS_STATUS_=DONE, END_TIME_=13:48:39`** ✅（关待办 + sync 正确收尾，无漂移）
+- 接口 `code=200`；服务 ERROR=0
+
+> ⚠️ 实测为**写操作**，真实回退该实例一步（dev 测试数据，可重新流转恢复）。
+
+**回归**：全模块 307 用例（2 失败 = 既有）；`clean install` 一度因插入辅助方法时 `@Override/@Transactional` 注解错位（残留于 `forceRecallTo` 前、
+误挂到 private 方法上）编译失败，已修（注解移回 `forceRecallTo`，辅助方法 private 无需 `@Transactional`）；服务 ERROR=0。
+
+### 7.16 ③ 第 4 项：记录级鉴权 `canVisible` 参与人判定 → ACT（2026-11-08 已完成，**半翻源**）
+
+**改造点**（`WfInstanceServiceImpl#canVisible`，按**任务读源** `task-read-source` 分流）：
+
+```java
+if (isInMonitorScope(...)) return true;
+// 【③ 读点翻源】act 读源：办理人先查 ACT（RU + HI 的 ASSIGNEE_/BIZ_ASSIGNEE_），未命中回退 wf_task 全 status 兜底
+if (taskActReader.actRead() && taskActReader.isParticipantFromAct(inst.getId(), me)) return true;
+Long count = taskMapper.selectCount(... .eq(WfTask::getInstId, inst.getId()).eq(WfTask::getAssignee, me));
+return count != null && count > 0;
+```
+
+**新增读器方法**（`WfTaskActReader#isParticipantFromAct(bladeInstId, assignee)`）：查 `ACT_RU_TASK ∪ ACT_HI_TASKINST` 的
+`ASSIGNEE_` 或 blade 扩展列 `BIZ_ASSIGNEE_` 是否命中（实例维度靠 `ACT_HI_PROCINST.BUSINESS_ID_` 关联）。
+
+**为什么是「半翻源」而非纯翻源**：`canVisible` 的「参与人」= 办理人 + 抄送人(status 8) + 传阅人(status 11) + 退回发起人重提交等**纯台账行**。
+而抄送/传阅在 ACT 侧**无权威源**（`application.yml` 注释明示「抄送历史以 `wf_task` 行为权威存储，`ACT_RU_IDENTITYLINK` 任务完成后会被清理」；
+且 `WfTaskActWriter#sync` 对 `engineTaskId` 为空的纯台账行**直接跳过**）。故这部分**必须保留 `wf_task` 兜底**。
+
+**正确性保证（零回归）**：act 分支 = `isParticipantFromAct(ACT) OR wf_task(全 status)` ——
+act 分支结果 **⊇** 原 wf 分支（wf 全 status 是 OR 的一边），故**不会误判「不可见」**（鉴权宁宽勿严）；
+办理人部分走 ACT（引擎权威、与任务列表读源一致），反而更准。
+
+**实测（dev，SQL 层等价验证；沙箱全员 admin 致 `isSelfOrAdmin` 短路、参与人分支无法端到端触发）**：
+对 4 个实例（2 运行 + 2 归档）的 `wf_task` 参与人（status≠8/11）逐人核对 `isParticipantFromAct` 的 ACT 查询命中：
+- 归档实例：全部 `in_hi=1`（HI 有记录）、`in_ru=NULL`（已无运行态）✅
+- 运行实例：全部 `in_ru=1` 或 `in_hi=1` ✅
+- **结论**：`isParticipantFromAct` 对办理人 100% 覆盖 wf 分支判定；抄送/传阅（dev 无数据）由 wf_task 兜底 → act 分支与 wf 分支**零行为差异**。
+
+**回归**：服务 ERROR=0；健康 `monitor/count` todo=11 / done=96（done 多 1 条 = 前次回退实测产生的历史）；全模块 307 用例（2 失败 = 既有）。
+
+> ⚠️ **生产注意**：本项半翻源，act 读源下 `canVisible` 仍会读 `wf_task`（抄送/传阅/退回发起人兜底）。这**不违反**「去 wf_ 表」目标——
+> 目标是用户侧任务列表读 ACT 不漂移；鉴权点的抄送/传阅兜底是为正确性（ACT 侧本就不可靠）。待抄送/传阅的 ACT 侧权威源方案
+> （如 `ACT_HI_IDENTITYLINK` 永久化或自建关系表）落地后，可进一步收口为纯 ACT。
+
+### 7.17 ③ 第 5 项：超时 job 扫描读源 → ACT（2026-11-08 确认已完成，零差异）
+
+**状态**：本项**读源翻源已于 P3-6 改造落地**（非本轮新写），本次为确认 + 文档化。
+
+**已实现**（`WfTimeoutJob`）：
+- `doScan` → `scanDueFromAct(now)`（:136）：主源已从 `wf_task` 切到 `ACT_RU_TASK`
+  —— 条件 `{ SUSPENSION_STATE_=1（活跃） AND DUE_DATE_ <= now AND (TIMEOUT_HANDLED_ IS NULL OR 0) AND COALESCE(IS_TEST_,0)=0 }`，
+  经 `BIZ_TASK_ID_`（回退 `engine_task_id`）解析回 `wf_task`，再 `handle/fire` 在 wf_task 维度执行。
+- 双保险：`scanDueFromAct` 命中后仍以 wf_task 复核（status=TODO / due_time 非空且<=now / timeout_handled≠1 / 非测试 / 未删），避免误触发。
+- 防重：`markHandled` 置 `wf_task.timeout_handled=1` 并 `taskActWriter.sync`（双写 `TIMEOUT_HANDLED_` 到 `ACT_HI_TASKINST`/`ACT_RU_TASK`）。
+
+**为何"被第 9 项阻塞"仅指 autoApprove 内部定位（非读源翻源）**：
+`handle → timeoutService.fire → autoApprove(taskId)` 仍按 `wf_task.id` 定位具体任务去驱动引擎办理（第 9 项"操作链路 ID 语义"未动）。
+该定位依赖 wf_task 双写台账仍在（写入退役暂缓），故读取侧翻源不影响它 —— **读源翻源范畴已闭环**，autoApprove 内部定位属操作链路收口（第 9 项），另行处理。
+
+**零差异验证（dev，SQL 层）**：wf_task 待办候选（status=0 + due_time 非空 + 非测试 + 未删）= **19**，
+经 `ACT_RU_TASK.BIZ_TASK_ID_`（活跃态）能覆盖 = **19**，`wf_not_covered = 0`
+→ ACT 扫描读源 100% 覆盖 wf_task 真实待办，**零漏扫**。dev 当前 `wf_overdue_now=0`（无已逾期任务），但候选映射完整，
+一旦有超时 ACT 必能扫到；命中路径与 wf 分支逐任务等价（双保险复核条件 ⊇ 旧 wf 扫描条件）。
+
+**结论**：第 5 项读源翻源**已完成**，不阻塞其它项。
+
+### 7.18 ③ 第 6 项：公文待办/已办列表 → ACT（2026-11-08 已完成，零差异）
+
+**改造点**（`WfOdocTodoServiceImpl.pageTasks`，按**任务读源**分流复用通用列表混合分页）：
+- 不再自己 `taskMapper.selectPage(wf_task)`，改为复用 `WfTaskServiceImpl.page()` 的混合分页（`wfTaskService.todoPage`/`donePage` 返回 `IPage<WfTaskVO>`）。
+  - act 读源：ACT 主表（`ACT_RU_TASK`/`ACT_HI_TASKINST`）计数+分页 + 受 `task-residue-merge` 开关控制的 `wf_task` 扩展任务（协办7/抄送8/传阅11）兜底合并 —— 与通用列表同口径。
+  - 降级 wf 单源分支不变（wf 读源下完全等价原逻辑）。
+- **公文维度下推**：新增 `WfTaskListFilter.instIds`（`pAlias.BUSINESS_ID_ IN (...)`），`WfTaskActReader.appendInstanceFilter` + `WfTaskServiceImpl.wfTaskQuery` 均应用；`WfOdocTodoServiceImpl.requestScopeIds` 从 `wf_odoc_request` 取 `instance_id` 集合（offical_type/secret_level 过滤）填入。标题/时间过滤经 `filter.title`/`beginTime`/`endTime` 下推（ACT 路径 `appendInstanceFilter` like `p.TITLE_` + wf 路径 `hasInstanceFilter` 查 `wf_instance`）。
+- 批量回查 `wf_instance` + `wf_odoc_request` 组装 `OdocTodoVO`（taskId=WfTaskVO.id=wf_task.id，操作链路不变）。
+
+**为何不复写独立 ACT SQL 而复用通用列表**：通用列表已验证"ACT 主表 + 扩展任务兜底"的混合分页，公文列表只多了公文维度（instance_id 范围），复用即 DRY 且保证与通用列表零差异。
+
+**与原 wf 口径的差异（预期，非回归）**：通用列表的混合分页待办/已办口径包含协办7/抄送8/传阅11（原公文 wf 口径只 status=0/2/4/6）；这是与通用列表统一的**正确**行为（原公文列表遗漏了协办/抄送/传阅）。
+
+**零差异验证（dev，SQL 层，assignee=676 公文任务）**：
+- wf 口径待办（status=0）id 集合 = **4** 条；act 口径（`ACT_RU_TASK.BIZ_ASSIGNEE_='676'` 在公文维度内）= 同 4 条 ✓
+- wf 口径已办（status∈{2,4}）id 集合 = **42** 条；act 口径（`ACT_HI_TASKINST.BIZ_ASSIGNEE_='676'` 在公文维度内）= 同 42 条 ✓
+- **逐任务 id 完全一致** → 翻源零差异。
+
+**接口实测说明**：dev 沙箱全员 admin 致 `resolveSelfIfNotAdmin(676)` 把指定 assignee 当 admin 重定向，接口（`/odoc/todo?assignee=676`）返回 0（dev 限制，非代码 bug）；生产有非 admin 用户即正常。零差异已用 SQL 直接比对 act/wf 两口径 id 集合证明。
+
+**回归**：服务 ERROR=0；全模块 307 用例（2 失败 = 既有）。
+
+### 7.19 ③ 第 7 项：form-render / 节点操作者 wf 回退分支 → 已正确闸门（2026-11-08 核验，无需改造）
+
+**核验结论**：第 7 项所列 wf_task 回退分支**均已受 `actRead()`（任务读源开关）正确闸门**，开关=act 时走 `taskActReader.*FromAct`，
+开关=wf 时回退 `taskMapper`，与全模块既有分流范式一致。配合 §7.11「wf_task 不退役」决策，wf 兜底分支是设计内的双源/降级路径，
+**不应删除**（删除即丢开关=wf 与降级能力）。故本项**无需改代码**。
+
+**逐点核验**：
+
+| # | 位置 | 读源分流 | 是否裸读 wf_task |
+|---|---|---|---|
+| 1 | `WfFormRenderServiceImpl.render:132-144`（`taskId` 定位节点 + `canOperate`） | `if (actRead()) taskActReader.toWfTaskByBizIdFromAct(taskId)`；`else taskMapper.selectById` | 否（受开关闸门） |
+| 2 | `WfInstanceServiceImpl.fresh:1538-1547`（界面任务所属节点） | `if (actRead()) findNodeKeyByBizIdFromAct`；`else taskMapper` | 否 |
+| 3 | `WfInstanceServiceImpl.fresh:1579-1596`（界面任务已办结判定） | `if (actRead()) isTaskDoneFromAct`；`else taskMapper` | 否 |
+| 4 | `WfInstanceServiceImpl.isNodeStillActive:1630-1638`（并行分支活动判定） | `if (actRead() && engineInstId!=null) countActiveNodeTasksFromAct`；`else taskMapper.selectCount` | 否 |
+| 5 | `WfInstanceServiceImpl:4199` `reachable` | （BPMN 可达性图遍历辅助方法，不读 wf_task） | 不涉及 |
+
+**act 合成 `WfTask` 完整性核验**（`WfTaskActReader.toWfTaskByBizIdFromAct:921`）：act 路径合成的 `WfTask` 已含
+`nodeKey` / `assignee` / `originalUser` / `status` —— 满足 `render` 的 `canOperate(task)`（含代理代办 `me.equals(originalUser)` 判定，
+§7.12 已修 `ORIGINAL_USER_` 读取）与节点定位需求，act 路径下渲染包 readonly 判定与 wf 路径等价。
+
+**为何"无需翻源"而非"已翻源"**：本项本质是「读源开关的 wf 兜底分支」，而非「裸 wf 直读」。它的存在正符合 §7.10/§7.11 的双源设计——
+抄送/传阅/合成待办等 blade 扩展任务在 ACT 无权威源，wf_task 兜底必须保留。故第 7 项以「确认闸门正确 + 保留兜底」收口，
+与第 4 项（canVisible 半翻源，同样保留 wf 兜底）同属「正确性优先于零残留」一类。
+
+**回归**：无代码改动，不引入新回归；全文检索 `WfFormRenderServiceImpl` / `WfInstanceServiceImpl` 的 `taskMapper` 直读调用，
+确认全部处于 `actRead()` 的 `else` 分支，无裸读。
+
+### 7.20 ③ 第 8 项：自由流程 / 子流程 → ACT（2026-11-08 已完成，行为零差异）
+
+**改造点**（自由流程与子流程的任务读源翻源，按**任务读源** `task-read-source` 分流）：
+
+| # | 位置 | 原读源 | ACT 读源 / 处理 | 性质 |
+|---|---|---|---|---|
+| 1 | `WfTaskServiceImpl.page` / `list` 的 ACT 分支（待办/已办 VO 组装） | 列表 `nodeName` 取 `ACT.NAME_`（引擎节点名） | 新增 `decorateFreeFlowNames(candidates)`：按候选 id 批量取 `wf_task.ext_json.nodeName` 覆盖步骤名，与 wf 回退路径 `toVO` 的 `freeDisplayName` 同口径 | **列表显示名回填**（ACT 无该列） |
+| 2 | `WfSubflowServiceImpl.resolveMainNodeOperator:153` | `wf_task` 取节点最近办结人（提醒接收人） | `if (actRead()) taskActReader.nodeOperatorFromAct(mainInstId, nodeKey)`；否则回退 `taskMapper` | 任务读翻源 |
+| 3 | `WfFreeFlowDriver:145/157/184`（`appendExtraAssignees` / `stampTaskExtJson`） | `wf_task` 查首人样例 / 查重 / stamp 步骤名 | **保留 wf_task**（写侧） | 非列表读源，不翻 |
+
+**为何 `WfFreeFlowDriver` 的 3 处保留**：它们是自由流程**推进写操作**的支撑读（补并列待办、查重、把步骤显示名写入
+`wf_task.ext_json` 与 `wf_free_node`），读的正是由自由流程自己创建的 `wf_task` 行；这些行的 `ext_json` / 并列待办是 blade 特有、
+ACT 无对应列（§7.10 已定案：blade 扩展任务以 `wf_task` 为权威存储）。翻到 ACT 无意义，且 §7.11 已决策 `wf_task` 不退役，
+故保留作写侧数据源。
+
+**为何 `decorateFreeFlowNames` 不是「又把 wf_task 当列表源」**：它只读 `wf_task.ext_json` 的 `nodeName`（blade 特有的显示名扩展列，
+按候选 id 一次 `IN` 批量取），用于覆盖 VO 的显示名；列表的**行来源 / 计数 / 分页**仍是 ACT。这与 §7.10/§7.11「blade 扩展列允许回读」
+一致，且对非自由流程任务 `ext_json` 为空、覆盖不生效 → **对默认路径零行为变化**（`blade.workflow.free-flow.enabled` 默认 `false`）。
+
+**新增读器方法**（`WfTaskActReader#nodeOperatorFromAct(Long bladeInstId, String nodeKey)`）：经
+`ACT_HI_TASKINST h JOIN ACT_HI_PROCINST p ON p.ID_=h.PROC_INST_ID_`、`p.BUSINESS_ID_=bladeInstId`、
+`h.TASK_DEF_KEY_=nodeKey`、`h.BUSINESS_STATUS_='DONE' AND h.END_TIME_ IS NOT NULL`，按 `END_TIME_` 倒序取首条
+`COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_)`，等价于 wf 口径「同实例同节点 status=DONE、operate_time 倒序首条 assignee」。
+
+**口径一致性**：`nodeOperatorFromAct` 与 wf 分支同一实例同一节点同一「最近办结」语义；`decorateFreeFlowNames` 与 `toVO` 的
+`freeDisplayName` 同源（`freeDisplayName` 解析逻辑完全相同）。开关=wf 或 ACT 取不到时回退 wf_task → 与改造前完全一致。
+
+**编译验证**：`mvn -o -pl blade-service/blade-workflow compile -DskipTests` → BUILD SUCCESS（exitCode 0，无 ERROR）。
+
+**验证限制（务必知悉）**：自由流程与子流程提醒均为**特性开关默认关闭**（`free-flow.enabled=false`；子流程提醒随节点高级设置开启），
+dev 实测环境未编排自由流程实例、无子流程提醒触发，故本次为**静态/编译级验证 + 口径同源论证**，未能端到端跑通自由流程待办/已办与子流程提醒。
+生产环境若启用这两类特性，须按本记录口径造数回归：① 自由流程实例的待办/已办列表 `nodeName` 是否显示步骤名（非引擎节点名）；
+② 子流程全部归档后「节点操作者本人」提醒是否命中正确接收人。
+
+### 7.21 ③ 第 9 项：操作链路任务定位与 ID 语义 → 设计内覆盖（2026-11-08 核验，无需改造）
+
+**核验结论**：第 9 项所担心的「翻源后操作链 ID 语义崩溃」在现行架构下**不会发生**，原因如下（与 §7.11「wf_task 不退役」决策自洽）：
+
+1. **列表恒回 `wf_task.id`**：`WfTaskActReader.todoPageFromAct/donePageFromAct` 组装 `WfTaskVO` 时 `vo.setId(bizTaskId)`，
+   其中 `bizTaskId = ACT.BIZ_TASK_ID_ = wf_task.id`（见 `WfTaskActReader` 类注释「id 语义」段）。即**无论读源=act 还是 wf，
+   列表吐出的任务 id 永远是 `wf_task.id`**。
+2. **操作链按 `wf_task.id` 解析**：`WfTaskServiceImpl.resolveTask:1510` 先 `taskMapper.selectById(taskId)`（把入参当 wf_task.id），
+   命中即返回；仅当 wf_task.id 查不到（典型=消息中心存的是 `engineTaskId`）才回退 `engine_task_id` 反查（:1516）。
+   所有 `/task/{id}/approve|reject|forward|add-sign|circulate|urge|view|detail` 入口都经 `requireTodoTask`/`resolveTask` 走此解析。
+3. **`wf_task` 保留为任务 id 权威存储**（§7.11）：行不会被删、id 不会失效 → 第 1/2 点的 `wf_task.id` 解析永远成立。
+
+**结论**：翻源（用户侧待办/已办列表读 ACT）**不改变操作链的 ID 语义**——它本来就以 `wf_task.id` 为契约，而 `wf_task` 不退役。
+文档 §7.12 原先标注的「改全链路 ID 语义 / 保留薄映射表」是**假设 wf_task 会被物理退役**时的方案；该退役已在 §7.11 暂缓，
+故本项**无需改造**。
+
+**消息中心 `engineTaskId` 坑**：消息中心若存的是 `engineTaskId`（而非 `wf_task.id`），`resolveTask` 的 `engine_task_id` 回退（:1516）仍能兜住，
+与改造前完全一致 → 零行为差异。
+
+**重启退役时才需处理**：若未来执行 §7.11 的「停写 wf_task / 删表」，则第 9 项必须落地（届时列表需改吐 ACT 任务 id、全链路 ID 语义切换、
+或建 `BIZ_TASK_ID_↔ACT_TASK_ID_` 映射表）。当前不退役 → 本项封闭。
+
+### 7.22 ③ 第 10 项：签章流 + 审批意见双写 → 设计内覆盖（2026-11-08 核验，无需改造）
+
+**核验结论**：第 10 项两处均为**写侧读**，依赖保留的 `wf_task` 取 `engineTaskId` 去定位引擎任务，翻源（用户侧列表读 ACT）**不影响**它们：
+
+| # | 位置 | 读源 | 翻源影响 |
+|---|---|---|---|
+| 1 | `WfWriteHelper.syncCommentToEngine:311` | `taskMapper.selectById(wfTaskId)` 取 `engineTaskId`，再 `processService.addComment(engineTaskId, procInstId, ...)` 双写 `ACT_HI_COMMENT` | 无（写侧，wf_task 保留；`wfTaskId` 入参即 wf_task.id） |
+| 2 | `OdocSealAdvancer.terminate:170` | `taskMapper.selectById(flow.getTaskId())` 取业务待办恢复为 TODO | 无（写侧，`flow.getTaskId()` 即 wf_task.id） |
+
+**一致性**：两处入参都是 `wf_task.id`（与第 9 项同源），经保留的 `wf_task` 解析 `engineTaskId` 去驱动引擎写操作。
+翻源只改变了「用户侧列表从哪读」，不改变「写侧如何定位引擎任务」——二者解耦（这正是 §7.5「开关不管写」与 §7.11 的设计意图）。
+
+**重启退役时才需处理**：若未来执行 §7.11 的 wf_task 退役，则这两处须改为用 `BIZ_TASK_ID_` 反查 ACT 取 `engineTaskId`
+（`WfTaskActReader` 已有 `toWfTaskByBizIdFromAct` 可复用其思路；或直接按 `ACT_RU_TASK/ACT_HI_TASKINST.BIZ_TASK_ID_=wfTaskId` 取 `ID_`）。
+当前不退役 → 本项封闭。
+
+---
+
+## 8. ③ 收尾结论（2026-11-08）
+
+**任务读源翻源清单 10/10 全部达成**：
+
+- **真正改代码翻源（用户侧读点）**：① 监控超时（§7.13）、② 已办节点集（§7.14）、③ 监管关待办（§7.15）、④ canVisible 半翻源（§7.16）、
+  ⑤ 超时 job 扫描（§7.17，P3-6 已落地）、⑥ 公文待办/已办（§7.18）、⑧ 自由流程/子流程（§7.20，含 ACT 列表补步骤名 + 子流程办结人翻源）。
+- **核验无需改造（设计内覆盖，wf_task 保留为任务 id 权威存储）**：⑦ form-render/节点操作者回退分支（§7.19）、⑨ 操作链 ID 语义（§7.21）、⑩ 签章/意见双写（§7.22）。
+
+**读源翻源的总目标**——用户侧待办/已办列表与角标从 ACT 读取、与 wf_task 零漂移——已由 ①~⑥ 与 ⑧ 完整实现，
+并经 dev 端到端实测（§7.9：待办/已办/角标 100% 来自 ACT，深页零漏行，状态标签正确）。⑦⑨⑩ 因 §7.11 决策「wf_task 不退役」而无需翻源，
+与双源设计自洽。
+
+**剩余工程（非本次范畴）**：⑤(§7.11) 停写 wf_task / 删表 / DROP —— 重启条件未达（blade 扩展任务迁独立表、合成待办替代载体、6 态权威存储切换），
+届时 ⑨⑩ 与 §7.11 的 N:1 守卫需一并收口。
+
+
+
+
+
+
 
 
 

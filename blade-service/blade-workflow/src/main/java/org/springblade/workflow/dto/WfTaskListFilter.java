@@ -43,6 +43,9 @@ public class WfTaskListFilter implements Serializable {
 	 */
 	private Integer status;
 
+	/** 显式实例范围（如公文维度的 {@code wf_odoc_request.instance_id} 集合）；null/空 = 不限定 */
+	private List<Long> instIds;
+
 	/** 是否存在「需要跨实例维度过滤」的条件（标题 / 流程定义 / 表单） */
 	public boolean hasInstanceFilter() {
 		return (title != null && !title.isBlank()) || defId != null || formId != null;
@@ -102,5 +105,13 @@ public class WfTaskListFilter implements Serializable {
 
 	public void setStatus(Integer status) {
 		this.status = status;
+	}
+
+	public List<Long> getInstIds() {
+		return instIds;
+	}
+
+	public void setInstIds(List<Long> instIds) {
+		this.instIds = instIds;
 	}
 }

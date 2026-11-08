@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springblade.workflow.config.WfTaskResidueProperties;
+import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.service.helper.WfTaskActReader;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -51,7 +52,9 @@ class WfTaskResidueMergeTest {
 		jdbc.execute("CREATE TABLE ACT_HI_TASKINST (ID_ VARCHAR(64) PRIMARY KEY, BIZ_ASSIGNEE_ BIGINT, "
 			+ "IS_TEST_ TINYINT, TENANT_ID_ VARCHAR(32), BIZ_TASK_ID_ BIGINT, END_TIME_ TIMESTAMP)");
 		jdbc.execute("CREATE TABLE wf_task (id BIGINT PRIMARY KEY, assignee BIGINT, status INT, "
-			+ "is_test TINYINT, tenant_id VARCHAR(32), inst_id BIGINT)");
+			+ "is_test TINYINT, tenant_id VARCHAR(32), inst_id BIGINT, engine_task_id VARCHAR(64), "
+			// is_deleted 默认 0：现有 INSERT 不用改；逻辑删除的行需显式写 1（角标裸 SQL 必须自行过滤）
+			+ "is_deleted TINYINT DEFAULT 0)");
 		jdbc.execute("CREATE TABLE wf_instance (id BIGINT PRIMARY KEY, status INT, is_deleted TINYINT)");
 
 		reader = new WfTaskActReader(jdbc);
@@ -71,14 +74,22 @@ class WfTaskResidueMergeTest {
 			+ "VALUES (?,?,0,?,?)", engineId, assignee, bizTaskId, new Timestamp(System.currentTimeMillis()));
 	}
 
-	/** wf_task 残留行（未被 ACT 覆盖） */
+	/** wf_task 扩展任务行（无引擎任务 → 合成待办；精确判据命中） */
 	private void wfTask(long id, long assignee, int status) {
-		jdbc.update("INSERT INTO wf_task (id, assignee, status, is_test) VALUES (?,?,?,0)", id, assignee, status);
+		jdbc.update("INSERT INTO wf_task (id, assignee, status, is_test, engine_task_id) VALUES (?,?,?,0,'')",
+			id, assignee, status);
+	}
+
+	/** wf_task 行，带引擎任务ID（引擎任务本体的台账行） */
+	private void wfTaskWithEngine(long id, long assignee, int status, String engineTaskId) {
+		jdbc.update("INSERT INTO wf_task (id, assignee, status, is_test, engine_task_id) VALUES (?,?,?,0,?)",
+			id, assignee, status, engineTaskId);
 	}
 
 	/** 挂在某实例上的 wf_task 行（合成待办：engineTaskId 为空） */
 	private void wfTaskWithInst(long id, long assignee, int status, long instId) {
-		jdbc.update("INSERT INTO wf_task (id, assignee, status, is_test, inst_id) VALUES (?,?,?,0,?)",
+		jdbc.update("INSERT INTO wf_task (id, assignee, status, is_test, inst_id, engine_task_id) "
+			+ "VALUES (?,?,?,0,?,'')",
 			id, assignee, status, instId);
 	}
 
@@ -166,9 +177,49 @@ class WfTaskResidueMergeTest {
 	}
 
 	@Test
-	@DisplayName("开关类未被 Spring 装配时（手动 new）默认值仍为 true，避免静默关闭合并")
+	@DisplayName("精确判据：引擎任务本体（engineTaskId 非空）不计入扩展任务数 —— 与旧兜底判据的核心差异")
+	void excludesEngineTaskLedgerRows() {
+		// 引擎任务本体的台账行：有 engineTaskId。旧兜底判据（ACT 未覆盖）会把它当"残留"补进来
+		// → 掩盖真实覆盖率缺口；精确判据下它由 ACT 承载，不得重复计入。
+		wfTaskWithEngine(50L, USER, WfTask.STATUS_TODO, "T-ENGINE");
+		setMerge(true);
+
+		assertEquals(0L, reader.countFromAct(USER).get("todo"),
+			"引擎任务本体的台账行不属扩展任务，精确判据下不得计入");
+	}
+
+	@Test
+	@DisplayName("blade 扩展任务（协办7/抄送8/传阅11）：引擎无原生物，必须计入已办角标（否则已办列表丢行）")
+	void countsBladeExtensionTasks() {
+		// 协办(7)：有 engineTaskId（同节点多人），但引擎无原生物 → 扩展任务。
+		// 口径归属：协办/抄送/传阅 属「已办」六态（2/4/6/7/8/11，见 WfTaskServiceImpl#done），
+		// 故计入【已办】角标，不是待办段。
+		wfTaskWithEngine(60L, USER, WfTask.STATUS_COADJUTANT, "T-MI");
+		setMerge(true);
+
+		assertEquals(1L, reader.countFromAct(USER).get("done"),
+			"协办是 blade 扩展任务，引擎无原生物，必须计入否则已办列表丢行");
+		assertEquals(0L, reader.countFromAct(USER).get("todo"),
+			"协办不属待办段（待办段只含 status=0）");
+	}
+
+	@Test
+	@DisplayName("逻辑删除的行不计入角标（裸 SQL 不会自动过滤 is_deleted，必须显式加）")
+	void excludesLogicallyDeletedRows() {
+		// 已逻辑删除的合成待办：列表侧（Mapper）自动过滤 is_deleted=0，角标裸 SQL 必须自行过滤，
+		// 否则出现「角标 12、列表 11」的割裂（2026-11-08 实测发现）。
+		jdbc.update("INSERT INTO wf_task (id, assignee, status, is_test, engine_task_id, is_deleted) "
+			+ "VALUES (?,?,?,0,'',1)", 70L, USER, WfTask.STATUS_TODO);
+		setMerge(true);
+
+		assertEquals(0L, reader.countFromAct(USER).get("todo"),
+			"已逻辑删除的行不得计入角标（否则与列表割裂）");
+	}
+
+	@Test
+	@DisplayName("开关类未被 Spring 装配时（手动 new）默认值仍为 true，避免静默关闭扩展任务读取")
 	void defaultIsMergeOn() {
 		assertTrue(new WfTaskResidueProperties().isEnabled(),
-			"默认必须为 true（合并），否则未装配场景下残留合并会被静默关闭");
+			"默认必须为 true（读扩展任务），否则未装配场景下协办/抄送/传阅会被静默丢弃");
 	}
 }

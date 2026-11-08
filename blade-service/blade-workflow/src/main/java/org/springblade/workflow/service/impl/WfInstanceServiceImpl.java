@@ -31,6 +31,7 @@ import org.springblade.workflow.odoc.mapper.WfOdocDocMapper;
 import org.springblade.workflow.odoc.entity.WfOdocDoc;
 import org.springblade.workflow.vo.WfInstanceResourceVO;
 import java.util.LinkedHashMap;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import org.springblade.workflow.action.NodeActionExecutor;
 import org.springblade.workflow.dto.FormSaveDTO;
@@ -109,6 +110,7 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -1756,7 +1758,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             if (validIds.isEmpty()) {
                 return new Page<InstanceVO>(cur, size);
             }
-            List<Long> idRestriction = computeMonitorIdRestriction(q);
+            List<Long> idRestriction = computeMonitorIdRestriction(q, validIds);
             if (idRestriction == null) {
                 idRestriction = validIds;
             } else {
@@ -1843,7 +1845,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
 
         // 读源=wf（默认）：直接查 wf_instance，所有筛选列齐备
-        List<Long> idRestriction = computeMonitorIdRestriction(q);
+        List<Long> idRestriction = computeMonitorIdRestriction(q, null);
         if (idRestriction != null && idRestriction.isEmpty()) {
             return new Page<InstanceVO>(cur, size);
         }
@@ -1916,8 +1918,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return instanceMapper.selectObjs(wq).stream().map(this::toLong).collect(Collectors.toList());
     }
 
-    /** 计算「超时 + 异常」交叠后的实例ID约束（用于 wf 读源主查询）；无约束返回 null */
-    private List<Long> computeMonitorIdRestriction(MonitorInstanceQuery q) {
+    /**
+     * 计算「超时 + 异常」交叠后的实例ID约束（用于主查询下推）；无约束返回 null。
+     *
+     * @param actScopeInstIds act 读源下的实例范围限定（非删除实例ID集合）；null = 不限定。
+     *                          wf 读源不需要（超时子查询本身按 wf_task 走），传 null。
+     */
+    private List<Long> computeMonitorIdRestriction(MonitorInstanceQuery q, List<Long> actScopeInstIds) {
         List<Long> result = null;
         if (q.getAnomalyTypes() != null && !q.getAnomalyTypes().isEmpty()) {
             List<Integer> at = q.getAnomalyTypes();
@@ -1932,11 +1939,18 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             result = intersectIds(result, ids);
         }
         if (Boolean.TRUE.equals(q.getOverdue())) {
-            List<Long> ids = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
-                .select(WfTask::getInstId)
-                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-                .lt(WfTask::getDueTime, new Date())
-                .groupBy(WfTask::getInstId)).stream().map(this::toLong).collect(Collectors.toList());
+            // 【③ 读点翻源】超时维度：读源=act 走 ACT_RU_TASK.DUE_DATE_，不再读 wf_task。
+            // 口径与 wf 侧严格一致（DUE_DATE_ 是 wf_task.due_time 的投影，同样取 status=0 的运行中任务）。
+            List<Long> ids;
+            if (taskActReader.actRead()) {
+                ids = taskActReader.overdueInstanceIdsFromAct(new Date(), actScopeInstIds);
+            } else {
+                ids = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+                    .select(WfTask::getInstId)
+                    .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                    .lt(WfTask::getDueTime, new Date())
+                    .groupBy(WfTask::getInstId)).stream().map(this::toLong).collect(Collectors.toList());
+            }
             result = intersectIds(result, ids);
         }
         return result;
@@ -2034,12 +2048,18 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             }
             vo.setStarterName(nameCache.get(starter));
         }
-        List<Long> overdueIds = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
-            .select(WfTask::getInstId)
-            .in(WfTask::getInstId, ids)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .lt(WfTask::getDueTime, new Date())
-            .groupBy(WfTask::getInstId)).stream().map(this::toLong).collect(Collectors.toList());
+        // 【③ 读点翻源】overdue 标记：读源=act 走 ACT_RU_TASK.DUE_DATE_（限定在页内实例范围），不读 wf_task
+        List<Long> overdueIds;
+        if (taskActReader.actRead()) {
+            overdueIds = taskActReader.overdueInstanceIdsFromAct(new Date(), ids);
+        } else {
+            overdueIds = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+                .select(WfTask::getInstId)
+                .in(WfTask::getInstId, ids)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .lt(WfTask::getDueTime, new Date())
+                .groupBy(WfTask::getInstId)).stream().map(this::toLong).collect(Collectors.toList());
+        }
         Set<Long> ov = new HashSet<>(overdueIds);
         for (InstanceVO vo : records) {
             vo.setOverdue(ov.contains(vo.getId()));
@@ -2048,17 +2068,24 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // 会签等多待办场景取最小 ID 的一条，保证「有唯一可操作目标」。
         // 【草稿移出待办 · 方案 A】排除草稿实例的合成待办：草稿无引擎任务，转办/催办对它无意义，
         //   若挂上 taskId 会让监管动作对草稿实例产生「可催办」的假象。
-        Map<Long, Long> taskIdMap = new LinkedHashMap<>();
-        List<WfTask> pending = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .select(WfTask::getId, WfTask::getInstId)
-            .in(WfTask::getInstId, ids)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .notExists("SELECT 1 FROM wf_instance i WHERE i.id = inst_id "
-                + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0")
-            .orderByAsc(WfTask::getId));
-        for (WfTask t : pending) {
-            if (t.getInstId() != null && !taskIdMap.containsKey(t.getInstId())) {
-                taskIdMap.put(t.getInstId(), t.getId());
+        Map<Long, Long> taskIdMap;
+        if (taskActReader.actRead()) {
+            // 【③ 读点翻源】当前待办 taskId：读源=act 走 ACT_RU_TASK.BIZ_TASK_ID_（= wf_task.id）。
+            // 多待办取最小 id，与 wf 侧 orderByAsc(id) 取第一条同口径；草稿天然不在 ACT（无引擎任务）。
+            taskIdMap = taskActReader.pendingTaskIdsByInstanceFromAct(ids);
+        } else {
+            taskIdMap = new LinkedHashMap<>();
+            List<WfTask> pending = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .select(WfTask::getId, WfTask::getInstId)
+                .in(WfTask::getInstId, ids)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .notExists("SELECT 1 FROM wf_instance i WHERE i.id = inst_id "
+                    + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0")
+                .orderByAsc(WfTask::getId));
+            for (WfTask t : pending) {
+                if (t.getInstId() != null && !taskIdMap.containsKey(t.getInstId())) {
+                    taskIdMap.put(t.getInstId(), t.getId());
+                }
             }
         }
         for (InstanceVO vo : records) {
@@ -2202,6 +2229,33 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * 再 moveActivity 把 token 移回目标节点，最后 advance(REJECT) 按引擎当前活动任务重建待办。
      * 创建节点在新模型下已是 UserTask（nodeType=0），引擎可停在等待态并派发真实待办。</p>
      */
+
+    /**
+     * 收集「监管动作关待办」前需收尾的 wf_task 行。
+     *
+     * <p>【③ 读点翻源】读源=act：以引擎 {@code ACT_RU_TASK} 当前活跃任务为权威
+     * （{@code BIZ_TASK_ID_} → {@code wf_task.id}）；这些任务即将被随后的 {@code moveActivity} 删除，
+     * 须先把台账行收尾为 DONE 并 {@code sync} 到 {@code ACT_HI_TASKINST}，否则 HI 行的
+     * {@code BUSINESS_STATUS_} 会停在 TODO 漂移。写侧仍落 wf_task 台账（updateById + sync）。</p>
+     *
+     * <p>回退策略：act 读源下，若 {@code ACT_RU_TASK} 能取到活跃任务则<b>仅</b>关这些（精确）；
+     * 若取不到（归档态无运行态 / 纯台账残留），回退到 {@code wf_task.status=TODO}
+     * （保证归档残留待办仍被收尾，行为不变）。运行中态下 wf_task 的「幽灵待办」不在此关，
+     * 因 act 读源下用户侧读 ACT、不可见，且其清理属漂移修复职责而非监管动作。</p>
+     */
+    private List<WfTask> collectPendingCloseTasks(Long instId) {
+        if (taskActReader.actRead()) {
+            java.util.LinkedHashSet<Long> bizIds = taskActReader.pendingCloseBizIdsFromAct(instId);
+            if (!bizIds.isEmpty()) {
+                return taskMapper.selectBatchIds(bizIds);
+            }
+            // RU 为空（归档态无运行态 / 纯台账残留）→ 回退 wf_task.TODO，保证归档残留待办仍被收尾
+        }
+        return taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .eq(WfTask::getInstId, instId)
+            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean forceRecallTo(Long instId, String targetNodeKey, String opinion) {
@@ -2269,10 +2323,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         //    归档态无未办待办（归档时已被 terminate 关闭），故跳过。
         if (!archived) {
             Date now = new Date();
-            List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-                .eq(WfTask::getInstId, instId)
-                .eq(WfTask::getStatus, WfTask.STATUS_TODO));
-            for (WfTask t : todos) {
+            for (WfTask t : collectPendingCloseTasks(instId)) {
                 t.setStatus(WfTask.STATUS_DONE);
                 t.setOperateTime(now);
                 taskMapper.updateById(t);
@@ -2405,6 +2456,16 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             return true;
         }
         try {
+            // 【③ 读点翻源】读源=act 走 ACT_HI_TASKINST ∪ ACT_RU_TASK 的 TASK_DEF_KEY_，不读 wf_task。
+            // 口径与 wf 侧一致：同样【无 status 过滤】（本实例「出现过」的节点）。
+            // ⚠️ 空集合同样按「通过」处理（照搬 wf 侧语义：台账读不到 → 不阻断监管动作）。
+            if (taskActReader.actRead()) {
+                Set<String> keys = taskActReader.passedNodeKeysFromAct(inst.getId());
+                if (keys.isEmpty()) {
+                    return true;
+                }
+                return keys.contains(targetNode.getNodeKey());
+            }
             List<Object> passed = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
                 .select(WfTask::getNodeKey)
                 .eq(WfTask::getInstId, inst.getId())
@@ -2452,12 +2513,18 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
 
         Map<String, Object> data = new LinkedHashMap<>();
-        long overdue = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
-            .select(WfTask::getInstId)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .lt(WfTask::getDueTime, new Date())
-            .in(scopedIds != null, WfTask::getInstId, scopedIds)
-            .groupBy(WfTask::getInstId)).size();
+        // 【③ 读点翻源】超时计数：读源=act 走 ACT_RU_TASK.DUE_DATE_（COUNT DISTINCT 实例），不读 wf_task
+        long overdue;
+        if (taskActReader.actRead()) {
+            overdue = taskActReader.countOverdueInstancesFromAct(new Date(), scopedIds);
+        } else {
+            overdue = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+                .select(WfTask::getInstId)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .lt(WfTask::getDueTime, new Date())
+                .in(scopedIds != null, WfTask::getInstId, scopedIds)
+                .groupBy(WfTask::getInstId)).size();
+        }
         data.put("overdue", overdue);
         data.put("businessRowMissing", instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
             .eq(WfInstance::getBusinessRowReady, 0)
@@ -2538,12 +2605,18 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             }
         }
 
-        long overdue = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
-            .select(WfTask::getInstId)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .lt(WfTask::getDueTime, new Date())
-            .in(scopedIds != null, WfTask::getInstId, scopedIds)
-            .groupBy(WfTask::getInstId)).size();
+        // 【③ 读点翻源】超时计数：读源=act 走 ACT_RU_TASK.DUE_DATE_（COUNT DISTINCT 实例），不读 wf_task
+        long overdue;
+        if (taskActReader.actRead()) {
+            overdue = taskActReader.countOverdueInstancesFromAct(new Date(), scopedIds);
+        } else {
+            overdue = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
+                .select(WfTask::getInstId)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .lt(WfTask::getDueTime, new Date())
+                .in(scopedIds != null, WfTask::getInstId, scopedIds)
+                .groupBy(WfTask::getInstId)).size();
+        }
 
         List<Map<String, Object>> byDef = new ArrayList<>();
         if (!byDefMap.isEmpty()) {
@@ -2645,22 +2718,30 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * 7 网关，nodeType 未配置保守放行），保证弹窗里选得到的项回退时一定能通过硬校验。</p>
      */
     private List<WfProcessNode> archivedCandidates(Long defId, Long instId) {
-        // 按任务 id 倒序 ≈ 最近办理在前；LinkedHashMap putIfAbsent 保序去重（每节点取最近一次）
-        List<WfTask> doneTasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getStatus, WfTask.STATUS_DONE)
-            .isNotNull(WfTask::getNodeKey)
-            .orderByDesc(WfTask::getId));
-        Map<String, WfTask> latest = new LinkedHashMap<>();
-        for (WfTask t : doneTasks) {
-            if (t.getNodeKey() != null && !t.getNodeKey().isBlank()) {
-                latest.putIfAbsent(t.getNodeKey(), t);
+        // 【③ 读点翻源】读源=act：已办节点取 ACT_HI_TASKINST 的 BUSINESS_STATUS_='DONE' 行（按 END_TIME_ 倒序）；
+        // wf 侧为 status=DONE(2) 的行按 id 倒序 —— 集合等价，顺序仅影响候选弹窗展示次序。
+        Collection<String> doneNodeKeys;
+        if (taskActReader.actRead()) {
+            doneNodeKeys = taskActReader.doneNodeKeysFromAct(instId);
+        } else {
+            // 按任务 id 倒序 ≈ 最近办理在前；LinkedHashMap putIfAbsent 保序去重（每节点取最近一次）
+            List<WfTask> doneTasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, instId)
+                .eq(WfTask::getStatus, WfTask.STATUS_DONE)
+                .isNotNull(WfTask::getNodeKey)
+                .orderByDesc(WfTask::getId));
+            Map<String, WfTask> latest = new LinkedHashMap<>();
+            for (WfTask t : doneTasks) {
+                if (t.getNodeKey() != null && !t.getNodeKey().isBlank()) {
+                    latest.putIfAbsent(t.getNodeKey(), t);
+                }
             }
+            doneNodeKeys = latest.keySet();
         }
         Map<String, WfProcessNode> nodeMap = loadNodes(defId).stream()
             .collect(Collectors.toMap(WfProcessNode::getNodeKey, n -> n, (a, b) -> a));
         List<WfProcessNode> out = new ArrayList<>();
-        for (String key : latest.keySet()) {
+        for (String key : doneNodeKeys) {
             WfProcessNode n = nodeMap.get(key);
             if (n == null) {
                 continue;
@@ -2744,10 +2825,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             writeHelper.activate(inst);
         }
         // ① 关闭当前节点全部 TODO 待办（监管语义：整单收回该节点办理权），并同步业务列
-        List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
-        for (WfTask t : todos) {
+        for (WfTask t : collectPendingCloseTasks(instId)) {
             t.setStatus(WfTask.STATUS_DONE);
             t.setOperateTime(new Date());
             taskMapper.updateById(t);
@@ -2803,6 +2881,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
     /** 本实例「已办理过」的节点 Key 集合（wf_task 台账 node_key；该表仍在写） */
     private Set<String> loadPassedNodeKeys(Long instId) {
+        // 【③ 读点翻源】读源=act 走 ACT_HI_TASKINST ∪ ACT_RU_TASK 的 TASK_DEF_KEY_，不读 wf_task。
+        // 口径与 wf 侧严格一致：**无 status 过滤**（本实例「出现过」的节点，含当前待办与协办/抄送/传阅），
+        // 翻源不得改变语义 —— 否则监控回退的落点范围会被收窄。
+        if (taskActReader.actRead()) {
+            return taskActReader.passedNodeKeysFromAct(instId);
+        }
         List<Object> keys = taskMapper.selectObjs(Wrappers.<WfTask>lambdaQuery()
             .select(WfTask::getNodeKey)
             .eq(WfTask::getInstId, instId)
@@ -3628,6 +3712,12 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         // §1.3 委托监控：被授权用户可见其授权范围内的实例（即使非发起/办理人）
         if (isInMonitorScope(me, inst.getDefId(), inst.getStarter())) {
+            return true;
+        }
+        // 【③ 读点翻源】act 读源：办理人先查 ACT（RU + HI 的 ASSIGNEE_/BIZ_ASSIGNEE_，引擎权威、无漂移）；
+        // 抄送/传阅/退回发起人等纯台账行（引擎无任务、WfTaskActWriter#sync 跳过）在 ACT 不可靠，
+        // 故未命中时回退查 wf_task（全 status 兜底）。并集 ⊇ 原 wf 分支 → 不会误判「不可见」。
+        if (taskActReader.actRead() && taskActReader.isParticipantFromAct(inst.getId(), me)) {
             return true;
         }
         Long count = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()

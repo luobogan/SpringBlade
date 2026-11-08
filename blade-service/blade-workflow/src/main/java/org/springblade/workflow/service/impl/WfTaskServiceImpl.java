@@ -193,6 +193,16 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private WfTaskResidueProperties residueMerge = new WfTaskResidueProperties();
 
     /**
+     * 「blade 扩展任务」的状态集合：协办(7)/抄送(8)/传阅(11)。
+     *
+     * <p>这三类是 <b>blade 业务产物</b>，Flowable 引擎无原生物 → {@code ACT_*} 表达不了
+     * → 必须由 {@code wf_task} 承载（抄送历史更是以 wf_task 行为权威存储，见
+     * {@link #circulate} 的注释：identityLink 只是预热）。</p>
+     */
+    private static final List<Integer> EXT_TASK_STATUSES =
+        List.of(WfTask.STATUS_COADJUTANT, WfTask.STATUS_CIRCULATE, WfTask.STATUS_READ);
+
+    /**
      * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
      * 复用同一 engineTaskId 调 addUserIdentityLink(..., "circulate")，把抄送关系落到引擎身份关联。默认 false。
      * <p>identity link 不产生可办任务（符合迁移目标）；但 Flowable 的 ACT_RU_IDENTITYLINK 在任务完成后会被清理，
@@ -983,6 +993,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 List<WfTaskVO> candidates = new ArrayList<>(onlyTodo
                     ? taskActReader.todoPageFromAct(target, f, offset, pageSize)
                     : taskActReader.donePageFromAct(target, f, offset, pageSize));
+                // 【③ 第 8 项】自由流程步骤名从 wf_task.ext_json 回读覆盖（ACT 无该列），与 toVO 同口径
+                decorateFreeFlowNames(candidates);
 
                 // 兜底残留：ACT 单行表达不了的（存量 N:1 会签 / 孤儿 / 合成待办）。
                 // 排除条件下推进 count SQL，与列表查询同口径，避免重复计数。
@@ -1002,7 +1014,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     java.util.Set<Long> seen = candidates.stream().map(WfTaskVO::getId)
                         .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
                     List<WfTask> residue = taskMapper.selectList(
-                        wfTaskQuery(target, f.getStatuses(), f, seen));
+                        wfTaskQuery(target, f.getStatuses(), f, seen, true));
                     for (WfTask t : residue) {
                         candidates.add(toVO(t));
                     }
@@ -1024,7 +1036,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
         // 回退 wf_* 单源路径：MyBatis-Plus 物理分页，total 由 count 查询给出
         Page<WfTask> p = new Page<>(pageNo, pageSize);
-        IPage<WfTask> raw = taskMapper.selectPage(p, wfTaskQuery(target, f.getStatuses(), f, null));
+        IPage<WfTask> raw = taskMapper.selectPage(p, wfTaskQuery(target, f.getStatuses(), f, null, false));
         List<WfTaskVO> records = new ArrayList<>(raw.getRecords().size());
         for (WfTask t : raw.getRecords()) {
             records.add(toVO(t));
@@ -1039,7 +1051,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         String actTable = onlyTodo ? "ACT_RU_TASK" : "ACT_HI_TASKINST";
         String actEndCond = onlyTodo ? "" : " AND END_TIME_ IS NOT NULL";
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> qw =
-            wfTaskQuery(target, f.getStatuses(), f, null);
+            wfTaskQuery(target, f.getStatuses(), f, null, true);
         qw.notInSql(WfTask::getId, "SELECT BIZ_TASK_ID_ FROM " + actTable
             + " WHERE BIZ_TASK_ID_ IS NOT NULL" + actEndCond);
         Long n = taskMapper.selectCount(qw);
@@ -1060,6 +1072,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     && statuses.get(0) == WfTask.STATUS_TODO;
                 List<WfTaskVO> merged = new ArrayList<>(
                     onlyTodo ? taskActReader.todoFromAct(target, filter) : taskActReader.doneFromAct(target, filter));
+                // 【③ 第 8 项】自由流程步骤名从 wf_task.ext_json 回读覆盖（ACT 无该列），与 toVO 同口径
+                decorateFreeFlowNames(merged);
                 // 兜底合并：ACT 单行表达不了的场景仍从 wf_task 取，保证翻源【零丢单】：
                 //   ① 存量 N:1 会签（同一引擎任务多人，ACT 只有一行）—— 主要来源；
                 //   ② 孤儿（引擎侧已无对应任务）；③ 无 engineTaskId 的合成待办（草稿待办）。
@@ -1070,7 +1084,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 if (residueMerge.isEnabled()) {
                     java.util.Set<Long> seen = merged.stream().map(WfTaskVO::getId)
                         .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
-                    List<WfTask> residue = taskMapper.selectList(wfTaskQuery(target, statuses, filter, seen));
+                    List<WfTask> residue = taskMapper.selectList(wfTaskQuery(target, statuses, filter, seen, true));
                     if (!residue.isEmpty()) {
                         for (WfTask t : residue) {
                             merged.add(toVO(t));
@@ -1094,7 +1108,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 含已办(2)/办结(3)/自动提交(4)/协办(7)/传阅(8)/已读(9) —— 整组排除，
         // 其中「已办」最易漏：代跑会在真人名下留一条已办，平时无人细看，漏了就长期存在。
         // 注：wf_task.is_test 为 tinyint NOT NULL DEFAULT 0，不存在 NULL 漏网。
-        List<WfTask> tasks = taskMapper.selectList(wfTaskQuery(target, statuses, filter, null));
+        List<WfTask> tasks = taskMapper.selectList(wfTaskQuery(target, statuses, filter, null, false));
         List<WfTaskVO> result = new ArrayList<>(tasks.size());
         for (WfTask t : tasks) {
             result.add(toVO(t));
@@ -1108,9 +1122,12 @@ public class WfTaskServiceImpl implements IWfTaskService {
      * 与<b>时间范围</b>（待办=接收时间、已办=处理时间）。
      *
      * @param excludeIds 需排除的 ACT 已覆盖业务任务ID（兜底合并时传入，避免重复；null 不排）
+     * @param extOnly    true=只取「非引擎任务本体」的行（blade 扩展任务 + 无引擎任务的合成待办）；
+     *                   false=全量（读源=wf 的<b>回退路径必须全量</b>，否则降级后列表缺行）
      */
     private com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> wfTaskQuery(
-        Long target, List<Integer> statuses, WfTaskListFilter filter, java.util.Set<Long> excludeIds) {
+        Long target, List<Integer> statuses, WfTaskListFilter filter, java.util.Set<Long> excludeIds,
+        boolean extOnly) {
         boolean onlyTodo = statuses != null && statuses.size() == 1
             && statuses.get(0) != null && statuses.get(0) == WfTask.STATUS_TODO;
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> qw =
@@ -1118,6 +1135,19 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 .eq(WfTask::getAssignee, target)
                 .in(WfTask::getStatus, statuses)
                 .eq(WfTask::getIsTest, 0);
+        // 【精确判据 · ④ blade 6 态定案】extOnly=true 时只取「非引擎任务本体」的行：
+        //   ① blade 扩展任务（协办7/抄送8/传阅11）—— 引擎无原生物，ACT 表达不了；
+        //   ② 无引擎任务的合成待办（engineTaskId 为空）—— 草稿待办 / 退回发起人重提交。
+        //
+        // <p><b>与旧「兜底」判据的区别（关键）</b>：旧判据是「ACT 未覆盖」
+        // （{@code id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_*)}），那会把<b>任何</b>漏双写的行
+        // 一起补进来 → 既掩盖真实覆盖率缺口，又让开关语义变成"应急兜底"。
+        // 精确判据只取<b>结构性</b>无法由 ACT 表达的行 → 不掩盖缺口、可长期维护。</p>
+        if (extOnly) {
+            qw.and(w -> w.in(WfTask::getStatus, EXT_TASK_STATUSES)
+                .or().isNull(WfTask::getEngineTaskId)
+                .or().eq(WfTask::getEngineTaskId, ""));
+        }
         // 【草稿移出待办 · 方案 A】排除草稿实例（status=5）的待办行。
         //
         // <p>草稿「已保存未提交：不占引擎，关联发起人待办」（WfInstance.STATUS_DRAFT 注释）——
@@ -1137,6 +1167,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 前端列「状态」筛选下推：与 ACT 路径的 appendStatusFilter 同口径，保证 total 与记录一致
         if (filter != null && filter.getStatus() != null) {
             qw.eq(WfTask::getStatus, filter.getStatus());
+        }
+        // 显式实例范围（公文维度等）：instIds 直接给定（已从 wf_odoc_request 等算出），无需再查 wf_instance
+        if (filter != null && filter.getInstIds() != null && !filter.getInstIds().isEmpty()) {
+            qw.in(WfTask::getInstId, filter.getInstIds());
         }
         // 实例维度筛选：先取命中实例ID，再约束 wf_task.inst_id IN (...)。无命中则整体为空。
         if (filter != null && filter.hasInstanceFilter()) {
@@ -1244,6 +1278,53 @@ public class WfTaskServiceImpl implements IWfTaskService {
             return j.hasNonNull("nodeName") ? j.get("nodeName").asText() : null;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * 自由流程步骤显示名回填（ACT 读源路径专用）。
+     *
+     * <p>ACT→VO 映射里 {@code nodeName} 取自引擎 {@code NAME_}（静态节点池名），而自由流程的
+     * 步骤显示名（如「部门经理审批-张三自定义」）由 {@code WfFreeFlowDriver.stampTaskExtJson}
+     * 统一写入 {@code wf_task.ext_json.nodeName}（ACT 无对应列）。开关=act 时待办/已办若直接从 ACT 取，
+     * 会丢失步骤名、退化为引擎节点名。</p>
+     *
+     * <p>本方法按候选 id 批量取 {@code wf_task.ext_json} 回填 {@code nodeName}，与 wf 回退路径
+     * {@link #toVO(WfTask)} 的 {@code freeDisplayName} 同口径 —— 对<b>非自由流程</b>任务的
+     * {@code ext_json} 为空、覆盖不生效，故零行为变化。仅读取 blade 特有的显示名扩展列，
+     * 不把 wf_task 当作列表数据源（符合 §7.10/§7.11 的「blade 扩展列允许回读」约定）。</p>
+     */
+    private void decorateFreeFlowNames(List<WfTaskVO> vos) {
+        if (vos == null || vos.isEmpty()) {
+            return;
+        }
+        List<Long> ids = new ArrayList<>(vos.size());
+        for (WfTaskVO v : vos) {
+            if (v != null && v.getId() != null) {
+                ids.add(v.getId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return;
+        }
+        List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+            .select(WfTask::getId, WfTask::getExtJson)
+            .in(WfTask::getId, ids));
+        if (rows.isEmpty()) {
+            return;
+        }
+        Map<Long, String> extMap = new HashMap<>(rows.size());
+        for (WfTask r : rows) {
+            extMap.put(r.getId(), r.getExtJson());
+        }
+        for (WfTaskVO v : vos) {
+            if (v == null || v.getId() == null) {
+                continue;
+            }
+            String name = freeDisplayName(extMap.get(v.getId()));
+            if (name != null && !name.isBlank()) {
+                v.setNodeName(name);
+            }
         }
     }
 

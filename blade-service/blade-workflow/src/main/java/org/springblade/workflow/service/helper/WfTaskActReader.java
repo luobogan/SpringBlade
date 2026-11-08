@@ -15,7 +15,10 @@ import org.springframework.stereotype.Component;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 待办/已办「读源=act」时的 {@code ACT_RU_TASK} / {@code ACT_HI_TASKINST} 读取器 + 读源开关。
@@ -49,6 +52,16 @@ public class WfTaskActReader {
     /** 任务读源：wf=遗留 wf_task（默认，零行为变化）；act=原生 ACT_RU_TASK / ACT_HI_TASKINST */
     @Value("${blade.workflow.task-read-source:wf}")
     private String taskReadSource;
+
+    /**
+     * blade 扩展任务的状态集合（协办7/抄送8/传阅11）的 SQL 片段。
+     *
+     * <p>这三类是 blade 业务产物，Flowable 引擎无原生物 → {@code ACT_*} 表达不了
+     * → 读源=act 时只能从 {@code wf_task} 取（抄送历史更是以 wf_task 行为权威存储）。
+     * 故「读 ACT + 读扩展任务」是<b>功能需要</b>，不是「兜底残留」。</p>
+     */
+    private static final String EXT_TASK_STATUS_SQL =
+        WfTask.STATUS_COADJUTANT + "," + WfTask.STATUS_CIRCULATE + "," + WfTask.STATUS_READ;
 
     /**
      * 「wf_task 兜底残留合并」开关（去 wf_ 表 · P6 退役第一台阶）。
@@ -300,6 +313,18 @@ public class WfTaskActReader {
             sql.append(" AND ").append(pAlias).append(".FORM_ID_ = ?");
             args.add(f.getFormId());
         }
+        // 显式实例范围（公文维度等）：pAlias.BUSINESS_ID_ IN (...)。空集合不加（= 不限定）。
+        if (f.getInstIds() != null && !f.getInstIds().isEmpty()) {
+            sql.append(" AND ").append(pAlias).append(".BUSINESS_ID_ IN (");
+            for (int i = 0; i < f.getInstIds().size(); i++) {
+                if (i > 0) {
+                    sql.append(",");
+                }
+                sql.append("?");
+                args.add(f.getInstIds().get(i));
+            }
+            sql.append(")");
+        }
     }
 
     /** 追加时间范围筛选（待办=接收时间列；已办=处理时间列）。 */
@@ -419,6 +444,16 @@ public class WfTaskActReader {
 
             StringBuilder todoResSql = new StringBuilder("SELECT COUNT(*) FROM wf_task t "
                 + "WHERE t.assignee = ? AND t.status = 0 AND t.is_test = 0"
+                // ⚠️ 裸 SQL 必须显式过滤逻辑删除：wf_task extends TenantEntity（is_deleted 带 @TableLogic），
+                //   MyBatis-Plus 只对 Mapper 查询自动追加 is_deleted=0，JdbcTemplate 裸 SQL 不会。
+                //   漏掉 → 已删除的合成待办被计入角标，而列表侧（Mapper）自动过滤 → 「角标 12、列表 11」的割裂。
+                + " AND t.is_deleted = 0"
+                // 【精确判据 · ④】只计「非引擎任务本体」：blade 扩展任务(7/8/11) + 无引擎任务的合成待办。
+                //   旧口径是「ACT 未覆盖」（兜底），会把任何漏双写的行都算进来 → 掩盖真实覆盖率缺口。
+                + " AND (t.status IN (" + EXT_TASK_STATUS_SQL + ") "
+                + "OR t.engine_task_id IS NULL OR t.engine_task_id = '')"
+                // 排重：已被 ACT 覆盖的业务任务ID 不重复计（否则与 ACT 段双计 → 角标虚高）
+                + " AND t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_RU_TASK WHERE BIZ_TASK_ID_ IS NOT NULL)"
                 // 【草稿移出待办 · 方案 A】排除草稿实例的合成待办，与列表侧同口径
                 // （否则角标含草稿、待办列表不含 → 「角标 25、列表 24」的割裂）
                 + " AND NOT EXISTS (SELECT 1 FROM wf_instance i WHERE i.id = t.inst_id "
@@ -441,6 +476,13 @@ public class WfTaskActReader {
             // 与 WfTaskServiceImpl.done() 的 statuses（2,4,6,7,8,11）同口径，避免角标与列表不一致
             StringBuilder doneResSql = new StringBuilder("SELECT COUNT(*) FROM wf_task t "
                 + "WHERE t.assignee = ? AND t.status IN (2,4,6,7,8,11) AND t.is_test = 0"
+                // ⚠️ 同 todoResSql：裸 SQL 必须显式 is_deleted = 0（逻辑删除）
+                + " AND t.is_deleted = 0"
+                // 【精确判据 · ④】同 todoResSql：只计「非引擎任务本体」，旧口径会掩盖覆盖率缺口
+                + " AND (t.status IN (" + EXT_TASK_STATUS_SQL + ") "
+                + "OR t.engine_task_id IS NULL OR t.engine_task_id = '')"
+                // 排重：已被 ACT 覆盖的业务任务ID 不重复计（否则与 ACT 段双计 → 角标虚高）
+                + " AND t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_HI_TASKINST WHERE BIZ_TASK_ID_ IS NOT NULL)"
                 // 【草稿移出待办 · 方案 A】草稿不会有已办行，此处仅为口径对称、防止将来出现草稿已办态
                 + " AND NOT EXISTS (SELECT 1 FROM wf_instance i WHERE i.id = t.inst_id "
                 + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0)");
@@ -456,6 +498,276 @@ public class WfTaskActReader {
         r.put("todo", todoAct + todoResidue);
         r.put("done", doneAct + doneResidue);
         return r;
+    }
+
+    /**
+     * ACT 读源：<b>超时实例ID集合</b>（blade 实例维度）。
+     *
+     * <p>口径与 wf 侧严格对齐（翻源不改行为）：{@code wf_task.status=0 AND due_time < now}
+     * → {@code ACT_RU_TASK.DUE_DATE_ < now}（{@code DUE_DATE_} 是 {@code wf_task.due_time} 的投影）。
+     * 实例维度靠 {@code ACT_RU_TASK.PROC_INST_ID_ → ACT_HI_PROCINST.ID_ → BUSINESS_ID_}；
+     * {@code BUSINESS_ID_} 即原 {@code wf_instance.id} 雪花值（见 {@code ActHiProcinst#businessId}）。</p>
+     *
+     * <p>⚠️ <b>刻意不加 {@code IS_TEST_} 过滤</b>：wf 侧原查询（{@code WfInstanceServiceImpl#enrichMonitor}
+     * 与 {@code #monitorStats}）也没有过滤测试态 —— 翻源必须<b>严格同口径</b>，否则监控列表与看板会分裂。</p>
+     *
+     * @param now          判定时刻
+     * @param scopeInstIds 限定实例范围（null/空 = 不限定；act 读源传「非删除实例ID」集合）
+     */
+    public List<Long> overdueInstanceIdsFromAct(Date now, Collection<Long> scopeInstIds) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT DISTINCT p.BUSINESS_ID_ FROM ACT_RU_TASK r "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE r.DUE_DATE_ < ?");
+        List<Object> args = new ArrayList<>();
+        args.add(now);
+        appendActTenant(sql, args, "r");
+        appendInstScope(sql, args, scopeInstIds);
+        return jdbcTemplate.query(sql.toString(), (rs, i) -> {
+            long v = rs.getLong(1);
+            return rs.wasNull() ? null : v;
+        }, args.toArray()).stream().filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * ACT 读源：<b>超时实例数</b>（去重计数，与 {@link #overdueInstanceIdsFromAct} 同口径）。
+     * 用于监控异常卡片与看板统计（避免把实例ID全量拉进内存）。
+     */
+    public long countOverdueInstancesFromAct(Date now, Collection<Long> scopeInstIds) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(DISTINCT p.BUSINESS_ID_) FROM ACT_RU_TASK r "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE r.DUE_DATE_ < ?");
+        List<Object> args = new ArrayList<>();
+        args.add(now);
+        appendActTenant(sql, args, "r");
+        appendInstScope(sql, args, scopeInstIds);
+        Long n = jdbcTemplate.queryForObject(sql.toString(), Long.class, args.toArray());
+        return n == null ? 0L : n;
+    }
+
+    /**
+     * ACT 读源：<b>实例 → 当前待办 taskId</b>（{@code BIZ_TASK_ID_}，即 {@code wf_task.id}）。
+     *
+     * <p>供监控页的任务级监管动作（转办 {@code /task/{id}/forward}、催办 {@code /task/{id}/urge}）
+     * 定位可操作目标。多待办场景取<b>最小 id</b> 的一条，与 wf 侧
+     * {@code orderByAsc(WfTask::getId)} 取第一条<b>同口径</b>。</p>
+     *
+     * <p>草稿实例天然不在此结果里（草稿从未启动引擎、{@code ACT_RU_TASK} 无其行），
+     * 与 wf 侧显式排除草稿的意图一致。</p>
+     */
+    public Map<Long, Long> pendingTaskIdsByInstanceFromAct(Collection<Long> bladeInstIds) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT p.BUSINESS_ID_, MIN(r.BIZ_TASK_ID_) FROM ACT_RU_TASK r "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE r.BIZ_TASK_ID_ IS NOT NULL");
+        List<Object> args = new ArrayList<>();
+        appendActTenant(sql, args, "r");
+        appendInstScope(sql, args, bladeInstIds);
+        sql.append(" GROUP BY p.BUSINESS_ID_");
+        Map<Long, Long> out = new java.util.LinkedHashMap<>();
+        jdbcTemplate.query(sql.toString(), (rs, i) -> {
+            long instId = rs.getLong(1);
+            long taskId = rs.getLong(2);
+            if (!rs.wasNull()) {
+                out.put(instId, taskId);
+            }
+            return null;
+        }, args.toArray());
+        return out;
+    }
+
+    /**
+     * ACT 读源：本实例「<b>出现过</b>」的节点 Key 集合。
+     *
+     * <p>严格对齐 wf 侧 {@code WfInstanceServiceImpl#loadPassedNodeKeys} 的口径 ——
+     * <b>不加 status 过滤</b>（该方法就是「本实例出现过的所有 node_key」，含当前待办节点、
+     * 协办/抄送/传阅节点），翻源不得改变语义。</p>
+     *
+     * <p>取 {@code ACT_HI_TASKINST ∪ ACT_RU_TASK} 的 {@code TASK_DEF_KEY_}：
+     * Flowable 在任务创建时即写 HI 表（{@code END_TIME_} 为空）、完成时更新同一行 → HI 表覆盖全程；
+     * 但仍 UNION RU 表以防引擎侧行为差异，两者取并集不会引入多余节点。</p>
+     *
+     * <p>⚠️ 与 wf 侧的一处<b>已知差异</b>：草稿合成待办（{@code node_key='Task_Create'}、无引擎任务）
+     * 在 wf 侧会进此集合，ACT 侧没有 → 草稿实例的集合会少该节点。但草稿从未启动引擎，
+     * 不存在归档/回退/监控动作场景；且创建节点在 {@code recallTargetPassed} 里单独放行，实际无影响。</p>
+     */
+    public java.util.Set<String> passedNodeKeysFromAct(Long bladeInstId) {
+        java.util.Set<String> set = new java.util.LinkedHashSet<>();
+        if (bladeInstId == null) {
+            return set;
+        }
+        // HI 段（历史任务：含已完成与仍在办的行）
+        StringBuilder hi = new StringBuilder(
+            "SELECT h.TASK_DEF_KEY_ FROM ACT_HI_TASKINST h "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND h.TASK_DEF_KEY_ IS NOT NULL");
+        List<Object> hiArgs = new ArrayList<>();
+        hiArgs.add(bladeInstId);
+        appendActTenant(hi, hiArgs, "h");
+        for (String k : jdbcTemplate.query(hi.toString(), (rs, i) -> rs.getString(1), hiArgs.toArray())) {
+            if (k != null && !k.isBlank()) {
+                set.add(k);
+            }
+        }
+        // RU 段（运行中任务）：与 HI 段取并集，防引擎侧行为差异导致漏节点
+        StringBuilder ru = new StringBuilder(
+            "SELECT r.TASK_DEF_KEY_ FROM ACT_RU_TASK r "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND r.TASK_DEF_KEY_ IS NOT NULL");
+        List<Object> ruArgs = new ArrayList<>();
+        ruArgs.add(bladeInstId);
+        appendActTenant(ru, ruArgs, "r");
+        for (String k : jdbcTemplate.query(ru.toString(), (rs, i) -> rs.getString(1), ruArgs.toArray())) {
+            if (k != null && !k.isBlank()) {
+                set.add(k);
+            }
+        }
+        return set;
+    }
+
+    /**
+     * ACT 读源：本实例「<b>已办（DONE）</b>」的节点 Key，按办理完成时间<b>倒序</b>。
+     *
+     * <p>对齐 wf 侧 {@code WfInstanceServiceImpl#archivedCandidates}：
+     * {@code status = WfTask.STATUS_DONE(2)} → ACT 侧 {@code BUSINESS_STATUS_='DONE'}（映射见
+     * {@code WfTaskActWriter#statusStr}），并要求 {@code END_TIME_ IS NOT NULL}（已办结）。</p>
+     *
+     * <p>排序差异（可接受）：wf 侧按 {@code wf_task.id} 倒序（雪花 ID ≈ 创建序），
+     * ACT 侧按 {@code END_TIME_} 倒序（真实办理完成时间，更贴合「最近一次办理由近及远」的语义）。
+     * 最终输出是节点集合，顺序仅影响候选弹窗的展示次序。</p>
+     */
+    public java.util.LinkedHashSet<String> doneNodeKeysFromAct(Long bladeInstId) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        if (bladeInstId == null) {
+            return out;
+        }
+        StringBuilder sql = new StringBuilder(
+            "SELECT h.TASK_DEF_KEY_ FROM ACT_HI_TASKINST h "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND h.BUSINESS_STATUS_ = 'DONE' "
+                + "AND h.END_TIME_ IS NOT NULL AND h.TASK_DEF_KEY_ IS NOT NULL");
+        List<Object> args = new ArrayList<>();
+        args.add(bladeInstId);
+        appendActTenant(sql, args, "h");
+        // ⚠️ ORDER BY 必须放在租户条件之后：appendActTenant 是「末尾追加」，
+        //    若 ORDER BY 提前拼好，租户条件会被追加到 ORDER BY 之后 → SQL 语法错误。
+        sql.append(" ORDER BY h.END_TIME_ DESC");
+        for (String k : jdbcTemplate.query(sql.toString(), (rs, i) -> rs.getString(1), args.toArray())) {
+            if (k != null && !k.isBlank()) {
+                out.add(k);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * ACT 读源：取某实例某节点的「最近办结人」（子流程提醒接收人「节点操作者本人」用）。
+     *
+     * <p>等价于 wf_task 口径：同实例、同节点、status=DONE、operate_time 倒序首条的 assignee。
+     * ACT 侧取 {@code ACT_HI_TASKINST}（{@code BUSINESS_STATUS_='DONE'} 且 {@code END_TIME_} 非空）
+     * 经 {@code ACT_HI_PROCINST.BUSINESS_ID_} 关联 blade 实例，按 {@code END_TIME_} 倒序取首条
+     * {@code COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_)}。</p>
+     */
+    public Long nodeOperatorFromAct(Long bladeInstId, String nodeKey) {
+        if (bladeInstId == null || nodeKey == null || nodeKey.isBlank()) {
+            return null;
+        }
+        StringBuilder sql = new StringBuilder(
+            "SELECT COALESCE(h.BIZ_ASSIGNEE_, h.ASSIGNEE_) AS assignee FROM ACT_HI_TASKINST h "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND h.TASK_DEF_KEY_ = ? "
+                + "AND h.BUSINESS_STATUS_ = 'DONE' AND h.END_TIME_ IS NOT NULL");
+        List<Object> args = new ArrayList<>();
+        args.add(bladeInstId);
+        args.add(nodeKey);
+        appendActTenant(sql, args, "h");
+        sql.append(" ORDER BY h.END_TIME_ DESC LIMIT 1");
+        List<Long> rs = jdbcTemplate.query(sql.toString(), (rs2, i) -> getLong(rs2, "assignee"), args.toArray());
+        return rs.isEmpty() ? null : rs.get(0);
+    }
+
+    /**
+     * ACT 读源：本实例「当前活跃（未办）任务」对应的 {@code wf_task.id} 集合。
+     *
+     * <p>供监管动作（强制收回 / 监控回退）关待办前的对账：紧随其后的 {@code moveActivity} 会删除这些
+     * {@code ACT_RU_TASK} 行，须在删除前先把 {@code wf_task} 台账对应行收尾为 DONE 并
+     * {@code sync} 到 {@code ACT_HI_TASKINST}（否则 HI 行的 {@code BUSINESS_STATUS_} 会停在 TODO 漂移）。</p>
+     *
+     * <p>取 {@code ACT_RU_TASK r JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_}
+     * where {@code p.BUSINESS_ID_ = bladeInstId} 且 {@code r.BIZ_TASK_ID_ IS NOT NULL}
+     * （纯引擎任务无 {@code wf_task} 对应，跳过）。{@code BIZ_TASK_ID_} 是 bigint 列。</p>
+     */
+    public java.util.LinkedHashSet<Long> pendingCloseBizIdsFromAct(Long bladeInstId) {
+        java.util.LinkedHashSet<Long> set = new java.util.LinkedHashSet<>();
+        if (bladeInstId == null) {
+            return set;
+        }
+        StringBuilder sql = new StringBuilder(
+            "SELECT r.BIZ_TASK_ID_ FROM ACT_RU_TASK r "
+                + "JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND r.BIZ_TASK_ID_ IS NOT NULL");
+        List<Object> args = new ArrayList<>();
+        args.add(bladeInstId);
+        appendActTenant(sql, args, "r");
+        for (Object v : jdbcTemplate.query(sql.toString(), (rs, i) -> rs.getObject(1), args.toArray())) {
+            if (v != null) {
+                try {
+                    set.add(Long.parseLong(String.valueOf(v)));
+                } catch (NumberFormatException ignore) {
+                    // bigint 列不会是非数字；异常值跳过，不污染待关闭集合
+                }
+            }
+        }
+        return set;
+    }
+
+    /**
+     * ACT 读源：判断 {@code assignee} 是否为本实例的「办理参与人」（ACT_RU_TASK / ACT_HI_TASKINST 的
+     * {@code ASSIGNEE_} 或 blade 扩展列 {@code BIZ_ASSIGNEE_} 命中）。
+     *
+     * <p>供 {@code WfInstanceServiceImpl#canVisible} 的「参与人可见」判定（办理人分支）翻源。
+     * 抄送/传阅/退回发起人等<b>纯台账行</b>（引擎侧无任务、{@code WfTaskActWriter#sync} 会跳过）由调用方回退查
+     * {@code wf_task} 兜底，本方法只覆盖「引擎侧有记录」的办理人。</p>
+     */
+    public boolean isParticipantFromAct(Long bladeInstId, Long assignee) {
+        if (bladeInstId == null || assignee == null) {
+            return false;
+        }
+        String a = String.valueOf(assignee);
+        // 运行中任务（RU）
+        StringBuilder ru = new StringBuilder(
+            "SELECT 1 FROM ACT_RU_TASK r JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND (r.ASSIGNEE_ = ? OR r.BIZ_ASSIGNEE_ = ?)");
+        List<Object> ruArgs = new ArrayList<>();
+        ruArgs.add(bladeInstId);
+        ruArgs.add(a);
+        ruArgs.add(a);
+        appendActTenant(ru, ruArgs, "r");
+        if (!jdbcTemplate.query(ru.toString(), (rs, i) -> 1, ruArgs.toArray()).isEmpty()) {
+            return true;
+        }
+        // 已办任务（HI）
+        StringBuilder hi = new StringBuilder(
+            "SELECT 1 FROM ACT_HI_TASKINST h JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ? AND (h.ASSIGNEE_ = ? OR h.BIZ_ASSIGNEE_ = ?)");
+        List<Object> hiArgs = new ArrayList<>();
+        hiArgs.add(bladeInstId);
+        hiArgs.add(a);
+        hiArgs.add(a);
+        appendActTenant(hi, hiArgs, "h");
+        return !jdbcTemplate.query(hi.toString(), (rs, i) -> 1, hiArgs.toArray()).isEmpty();
+    }
+
+    /** 追加实例范围约束（{@code BUSINESS_ID_ IN (...)}）；范围为空则不加（= 不限定）。 */
+    private static void appendInstScope(StringBuilder sql, List<Object> args, Collection<Long> scopeInstIds) {
+        if (scopeInstIds == null || scopeInstIds.isEmpty()) {
+            return;
+        }
+        sql.append(" AND p.BUSINESS_ID_ IN (")
+            .append(String.join(",", java.util.Collections.nCopies(scopeInstIds.size(), "?")))
+            .append(")");
+        args.addAll(scopeInstIds);
     }
 
     private Long countOne(String sql, Object... args) {
@@ -622,21 +934,30 @@ public class WfTaskActReader {
     }
 
     /**
-     * 按业务任务ID 还原 {@link WfTask}（仅填 {@code canOperate} 消费的 id/nodeKey/assignee/status），
+     * 按业务任务ID 还原 {@link WfTask}（填 {@code canOperate} 消费的 id/nodeKey/assignee/originalUser/status），
      * 供 {@code render} 在 ACT 读源下判定「当前用户是否本节点待办人」。找不到返回 null。
+     *
+     * <p><b>必须读 {@code ORIGINAL_USER_}</b>（2026-11-08 修复）：{@code WfAuthUtil#canOperateTask} 的判定是
+     * {@code me.equals(assignee) || me.equals(originalUser)}，其中 {@code originalUser} 是
+     * <b>代理代办的原办理人</b>（转办时写入，见 {@code WfTaskServiceImpl#forward}）。
+     * 此前本方法没 SELECT 这一列 → 读源=act 时 {@code originalUser} 恒 null →
+     * 代理代办的人既看不到操作按钮（前端 readonly 判定），后端 {@code requireOperateTask} 还会直接 403。
+     * ACT 侧该列由 {@code WfTaskActWriter} 双写（VARCHAR 存数字ID，用 {@code getLong} 解析）。</p>
      */
     public WfTask toWfTaskByBizIdFromAct(Long bizTaskId) {
         if (bizTaskId == null) {
             return null;
         }
         WfTask ru = jdbcTemplate.query(
-            "SELECT TASK_DEF_KEY_ AS nodeKey, COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) AS assignee "
+            "SELECT TASK_DEF_KEY_ AS nodeKey, COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) AS assignee, "
+                + "ORIGINAL_USER_ AS originalUser "
                 + "FROM ACT_RU_TASK WHERE BIZ_TASK_ID_ = ? LIMIT 1",
             (rs, i) -> {
                 WfTask t = new WfTask();
                 t.setId(bizTaskId);
                 t.setNodeKey(rs.getString("nodeKey"));
                 t.setAssignee(getLong(rs, "assignee"));
+                t.setOriginalUser(getLong(rs, "originalUser"));
                 t.setStatus(WfTask.STATUS_TODO);
                 return t;
             }, String.valueOf(bizTaskId)).stream().findFirst().orElse(null);
@@ -645,12 +966,14 @@ public class WfTaskActReader {
         }
         return jdbcTemplate.query(
             "SELECT TASK_DEF_KEY_ AS nodeKey, COALESCE(BIZ_ASSIGNEE_, ASSIGNEE_) AS assignee, "
-                + "BUSINESS_STATUS_ AS taskStatus FROM ACT_HI_TASKINST WHERE BIZ_TASK_ID_ = ? LIMIT 1",
+                + "ORIGINAL_USER_ AS originalUser, BUSINESS_STATUS_ AS taskStatus "
+                + "FROM ACT_HI_TASKINST WHERE BIZ_TASK_ID_ = ? LIMIT 1",
             (rs, i) -> {
                 WfTask t = new WfTask();
                 t.setId(bizTaskId);
                 t.setNodeKey(rs.getString("nodeKey"));
                 t.setAssignee(getLong(rs, "assignee"));
+                t.setOriginalUser(getLong(rs, "originalUser"));
                 Integer st = taskStatus(rs.getString("taskStatus"));
                 t.setStatus(st == null ? WfTask.STATUS_DONE : st);
                 return t;
