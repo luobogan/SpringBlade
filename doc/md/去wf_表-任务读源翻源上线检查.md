@@ -800,6 +800,43 @@ dev 实测环境未编排自由流程实例、无子流程提醒触发，故本�
 **剩余工程（非本次范畴）**：⑤(§7.11) 停写 wf_task / 删表 / DROP —— 重启条件未达（blade 扩展任务迁独立表、合成待办替代载体、6 态权威存储切换），
 届时 ⑨⑩ 与 §7.11 的 N:1 守卫需一并收口。
 
+### 7.23 ③ 端到端实测（dev，2026-11-08，act 读源）
+
+**环境**：gateway=81、blade-workflow=8111 在线；登录 `admin/ant.design/000000`（user_id=676，dept=2000000121），
+经 `springblade-dev-login` 技能拿 `sword-token` 调网关鉴权接口。`task-read-source` 当前=act（翻源生效）。
+
+**实测接口（经网关 81，blade-workflow）**：
+
+| 接口 | 返回 total | 数据来源核对 |
+|---|---|---|
+| `/task/todo` | 11（data 数组） | ids 集合 **==** `wf_task(assignee=676,status=0,is_test=0,is_deleted=0)` 的 11 个 id → **零漂移** |
+| `/task/done` | 96 | ids 集合 = `wf_task(status∈{2,4})` 的 94 个 **+ 2 个 ACT-only 已办**（见下） |
+| `/odoc/todo` | 4 | ids 集合 **==** 公文维度 `wf_task(status=0)` 的 4 个 → **零漂移** |
+| `/odoc/done` | 42 | ids 集合 **==** 公文维度 `wf_task(status∈{2,4})` 的 42 个 → **零漂移** |
+
+- 列表 `nodeName` 正常（`部门主管审批`/`财务审核会签`），`isTest=0`（测试态已过滤），`title` 正常。
+- `/odoc/todo`/`/odoc/done` 的 id 集合与 §7.18 的 SQL 层 act/wf 口径（4/42）**逐 id 一致**，确认第 6 项公文翻源零漂移。
+
+**DONE 的 2 个差异（正面修正，非回归）**：接口 DONE 比 `wf_task(assignee=676)` 多 2 个 id
+`2117991653013786626`、`2118125414175019009`。核查：
+
+- `wf_task` 中**无这两行**（台账缺失）；`ACT_HI_TASKINST` 中 `BIZ_ASSIGNEE_=676`、`BUSINESS_STATUS_='DONE'`、`END_TIME_` 正常。
+- 对应引擎实例 `440005`/`440128` 的 `wf_instance` 也无记录（`BUSINESS_STATUS_='APPROVED'`，2026-11-04/05 的已归档流程）。
+
+即这 2 个任务是**引擎有已办、但 blade 双写台账（wf_task/wf_instance）历史上漏建**的旧流程。翻源（ACT 读源）让这 2 个已办「失而复得」——
+属于用 ACT 权威源**修正台账缺失**，恰是翻源目标之一；开关=wf 时它们因台账无行而不可见。结论：读源翻源**未引入漂移**，反而补全了 2 条历史台账缺口。
+
+**后续清理（2026-11-08）**：经确认这 2 个为孤儿脏数据（无 blade 台账、纯引擎残留），已从 ACT 引擎历史表删除 46 行
+（`act_hi_identitylink:2 / act_hi_comment:6 / act_hi_varinst:20 / act_hi_taskinst:4 / act_hi_actinst:12 / act_hi_procinst:2`，
+删除前已备份至 `cleanup_backup.json`）。删除后复测 `/task/done` → **94 条**，与 `wf_task(assignee=676,status∈{2,4})` 的 94 个 id **逐 id 一致**，
+读源翻源至此**零漂移闭环**（TODO/ODOC_TODO/ODOC_DONE/DONE 全部对齐 wf_task 台账）。
+
+**未覆盖项（已知限制）**：
+- 第 8 项自由流程/子流程：特性默认关闭（`free-flow.enabled=false`；子流程提醒随节点设置），dev 无实例，未端到端跑通（静态/编译级验证见 §7.20）。
+- 角标：前端取 `/task/todo` 的 `total`（已验证从 ACT 读），无需单测。
+- `/task/mine`（我的请求，含草稿）：路径应为 `/instance/mine`，本次未纳入核对（草稿合并逻辑见 memory `52355684`，与读源翻源正交）。
+
+**回归**：服务 ERROR=0；接口层 200；todo/odoc 列表 id 集合与 wf_task 台账逐 id 一致（除 2 个历史台账缺口被 ACT 补全）。
 
 
 
