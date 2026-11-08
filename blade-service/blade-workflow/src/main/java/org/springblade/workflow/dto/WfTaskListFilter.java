@@ -34,6 +34,15 @@ public class WfTaskListFilter implements Serializable {
 	/** 时间范围终点 */
 	private Date endTime;
 
+	/**
+	 * 任务状态精确筛选（前端列筛选下推用，null = 不筛选）。
+	 *
+	 * <p>与 {@code statuses} 的区别：{@code statuses} 是 todo()/done() 注入的<b>状态集合</b>，
+	 * 本字段是用户在列表页点选的<b>单个状态</b>，两条路径（ACT SQL 与 wf_task QueryWrapper）
+	 * 都会追加该条件，保证分页 total 与记录一致。</p>
+	 */
+	private Integer status;
+
 	/** 是否存在「需要跨实例维度过滤」的条件（标题 / 流程定义 / 表单） */
 	public boolean hasInstanceFilter() {
 		return (title != null && !title.isBlank()) || defId != null || formId != null;
@@ -85,5 +94,13 @@ public class WfTaskListFilter implements Serializable {
 
 	public void setEndTime(Date endTime) {
 		this.endTime = endTime;
+	}
+
+	public Integer getStatus() {
+		return status;
+	}
+
+	public void setStatus(Integer status) {
+		this.status = status;
 	}
 }

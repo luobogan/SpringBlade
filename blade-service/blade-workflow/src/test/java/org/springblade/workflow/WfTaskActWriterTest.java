@@ -42,7 +42,10 @@ class WfTaskActWriterTest {
 			jdbc.execute("CREATE TABLE " + t + " ("
 				+ "ID_ VARCHAR(64) PRIMARY KEY, BUSINESS_STATUS_ VARCHAR(32), IS_TEST_ TINYINT, "
 				+ "ORIGINAL_USER_ VARCHAR(64), SIGN_ORDER_ INT, VIEW_TIME_ TIMESTAMP, "
-				+ "TIMEOUT_HANDLED_ TINYINT, BIZ_TASK_ID_ BIGINT, BIZ_ASSIGNEE_ BIGINT, TENANT_ID_ VARCHAR(32))");
+				+ "TIMEOUT_HANDLED_ TINYINT, BIZ_TASK_ID_ BIGINT, BIZ_ASSIGNEE_ BIGINT, TENANT_ID_ VARCHAR(32), "
+				// DUE_DATE_ 必须与生产 ACT_* 表结构一致：WfTaskActWriter 的 UPDATE 会写该列，
+				// 缺列 → SQLException → 被写入器 catch 吞掉 → 两张表都没写（列于 4724fd1 加入写入、此处补齐建表）
+				+ "DUE_DATE_ TIMESTAMP)");
 		}
 
 		writer = new WfTaskActWriter(jdbc);

@@ -44,6 +44,20 @@ public class WfStateProjector {
     private final WfInstanceMapper instanceMapper;
     private final WfTaskMapper taskMapper;
 
+    /**
+     * 任务业务列双写收口器（把 wf_task 的状态/维度回写 ACT_*）。
+     *
+     * <p><b>为什么反写 wf_task 后必须再 sync 回 ACT</b>：读源=act 时待办/已办列表的状态列
+     * 取自 {@code ACT_*.BUSINESS_STATUS_}（{@code WfTaskActReader#taskStatus} 反解），
+     * 而 ACT 的该列是 {@code wf_task} 的<b>投影</b>。若「引擎事件驱动」的反写只更新 wf_task
+     * 而不回写 ACT，ACT 侧会停在旧值 —— 实测漂移 68 条（单一形态：wf_status=4(办结) vs ACT=TODO），
+     * 后果是「已办」列表状态标签显示「待办」，且按「办结」筛选会漏掉这批行。</p>
+     *
+     * <p>不违反本类「绝不回查 {@code ACT_RU_*}」的约束：{@code sync()} 是 UPDATE（RU 行命中 0 行属正常），
+     * 不是回查；同引擎任务多条 wf_task 时写入器内建守卫会保守跳过，绝不写坏。</p>
+     */
+    private final WfTaskActWriter taskActWriter;
+
     /** 差异计数（按事件类型分桶）：反写前先比对，不一致则计数并写为目标态，保留持续校验能力 */
     private final Map<String, AtomicLong> diffCounters = new ConcurrentHashMap<>();
 
@@ -147,6 +161,11 @@ public class WfStateProjector {
             patch.setStatus(WfTask.STATUS_DONE);
             patch.setOperateTime(now);
             taskMapper.updateById(patch);
+            // 回写 ACT 业务列：引擎事件驱动的反写同样要双写，否则 ACT 侧 BUSINESS_STATUS_ 停在旧值
+            // （漂移形态：wf_status=2 vs ACT=TODO → 已办列表状态标签错、按状态筛选漏行）
+            t.setStatus(WfTask.STATUS_DONE);
+            t.setOperateTime(now);
+            taskActWriter.sync(t);
             log.info("[WfStateProjector][write] TASK_COMPLETED -> wfTaskId={} 置已办(2)", t.getId());
         }
     }
@@ -187,6 +206,12 @@ public class WfStateProjector {
             patch.setStatus(WfTask.STATUS_FINISHED);
             patch.setOperateTime(now);
             taskMapper.updateById(patch);
+            // 回写 ACT 业务列：同 onTaskCompleted —— 不回写会让 ACT 停在 TODO，
+            // 读源=act 的已办列表会把「办结」显示成「待办」，按「办结」筛选也漏行。
+            // 该路径是 MI 或签「首人同意 → 引擎删除其余子任务」的主要来源（实测漂移主体）。
+            t.setStatus(WfTask.STATUS_FINISHED);
+            t.setOperateTime(now);
+            taskActWriter.sync(t);
             log.info("[WfStateProjector][write] 任务删除 -> wfTaskId={}（nodeKey={}）置办结(4)", t.getId(), t.getNodeKey());
         }
     }
@@ -308,14 +333,27 @@ public class WfStateProjector {
      * 且 {@code WfTaskServiceImpl#done()} 把 {@code STATUS_COADJUTANT} 计入「已办」，会污染已办列表。</p>
      */
     private void closeResidualTodos(Long instId, String event) {
-        int n = taskMapper.update(null, new LambdaUpdateWrapper<WfTask>()
-            .set(WfTask::getStatus, WfTask.STATUS_FINISHED)
-            .set(WfTask::getOperateTime, new Date())
-            .eq(WfTask::getInstId, instId)
-            .in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
-        if (n > 0) {
-            log.info("[WfStateProjector][write] {} -> 关闭残留待办 {} 条 (instId={})", event, n, instId);
-        }
+    	Date now = new Date();
+    	// 先查出待关闭的行：批量 UPDATE 只能改 wf_task，无法把业务列回写 ACT_*，
+    	// 而 ACT 的 BUSINESS_STATUS_ 是 wf_task 的投影 —— 不回写即产生漂移
+    	// （读源=act 的已办列表会把「办结」显示成「待办」、按「办结」筛选漏行）。
+    	List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+    		.eq(WfTask::getInstId, instId)
+    		.in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
+    	int n = taskMapper.update(null, new LambdaUpdateWrapper<WfTask>()
+    		.set(WfTask::getStatus, WfTask.STATUS_FINISHED)
+    		.set(WfTask::getOperateTime, now)
+    		.eq(WfTask::getInstId, instId)
+    		.in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
+    	if (n > 0) {
+    		// 回写 ACT 业务列（逐行 sync）：残留待办行数很少（通常 1~3 条），代价可忽略
+    		for (WfTask t : rows) {
+    			t.setStatus(WfTask.STATUS_FINISHED);
+    			t.setOperateTime(now);
+    			taskActWriter.sync(t);
+    		}
+    		log.info("[WfStateProjector][write] {} -> 关闭残留待办 {} 条 (instId={})", event, n, instId);
+    	}
     }
 
     private WfInstance findInstance(String procInstId, String event) {

@@ -1,5 +1,6 @@
 package org.springblade.workflow.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.springblade.workflow.dto.AddSignDTO;
 import org.springblade.workflow.dto.ApproveDTO;
 import org.springblade.workflow.dto.CirculateDTO;
@@ -37,6 +38,19 @@ public interface IWfTaskService {
      * @param filter   列表筛选条件（标题 / 流程定义 / 表单 / 时间范围，可 null）
      */
     List<WfTaskVO> done(Long assignee, WfTaskListFilter filter);
+
+    /**
+     * 我的待办（服务端真分页）。
+     *
+     * @param assignee 办理人（非管理员一律收敛为当前登录人）
+     * @param filter   列表筛选条件
+     * @param current  页码，从 1 开始
+     * @param size     每页条数（服务端收敛上限 200）
+     */
+    IPage<WfTaskVO> todoPage(Long assignee, WfTaskListFilter filter, long current, long size);
+
+    /** 我的已办（服务端真分页），参数语义同 {@link #todoPage}。 */
+    IPage<WfTaskVO> donePage(Long assignee, WfTaskListFilter filter, long current, long size);
 
     /**
      * 同意：按节点 sign_order 判定是否真正推进引擎

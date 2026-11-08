@@ -1,5 +1,6 @@
 package org.springblade.workflow.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -93,6 +94,61 @@ public class WfTaskController {
         filter.setBeginTime(beginTime);
         filter.setEndTime(endTime);
         return R.data(taskService.done(resolveAssignee(assignee), filter));
+    }
+
+    /**
+     * 我的待办（服务端真分页）。
+     *
+     * <p>与 {@link #todo} 并存：旧接口仍返回全量 List，供 Feign {@code WfTaskClient}、
+     * 办理页待办判断、业务引用选择器等既有调用方使用；列表页改用本接口。</p>
+     */
+    @GetMapping("/todo/page")
+    @Operation(summary = "我的待办（分页）", description = "服务端分页，筛选条件下推 SQL")
+    public R<IPage<WfTaskVO>> todoPage(
+        @RequestParam(value = "assignee", required = false) Long assignee,
+        @RequestParam(value = "current", required = false, defaultValue = "1") Long current,
+        @RequestParam(value = "pageSize", required = false, defaultValue = "20") Long pageSize,
+        @RequestParam(value = "title", required = false) String title,
+        @RequestParam(value = "status", required = false) Integer status,
+        @RequestParam(value = "defId", required = false) Long defId,
+        @RequestParam(value = "formId", required = false) Long formId,
+        @RequestParam(value = "beginTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date beginTime,
+        @RequestParam(value = "endTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date endTime) {
+        WfTaskListFilter filter = new WfTaskListFilter();
+        filter.setTitle(title);
+        filter.setStatus(status);
+        filter.setDefId(defId);
+        filter.setFormId(formId);
+        filter.setBeginTime(beginTime);
+        filter.setEndTime(endTime);
+        return R.data(taskService.todoPage(resolveAssignee(assignee), filter, current, pageSize));
+    }
+
+    /** 我的已办（服务端真分页），与 {@link #done} 并存。 */
+    @GetMapping("/done/page")
+    @Operation(summary = "我的已办（分页）", description = "服务端分页，筛选条件下推 SQL")
+    public R<IPage<WfTaskVO>> donePage(
+        @RequestParam(value = "assignee", required = false) Long assignee,
+        @RequestParam(value = "current", required = false, defaultValue = "1") Long current,
+        @RequestParam(value = "pageSize", required = false, defaultValue = "20") Long pageSize,
+        @RequestParam(value = "title", required = false) String title,
+        @RequestParam(value = "status", required = false) Integer status,
+        @RequestParam(value = "defId", required = false) Long defId,
+        @RequestParam(value = "formId", required = false) Long formId,
+        @RequestParam(value = "beginTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date beginTime,
+        @RequestParam(value = "endTime", required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date endTime) {
+        WfTaskListFilter filter = new WfTaskListFilter();
+        filter.setTitle(title);
+        filter.setStatus(status);
+        filter.setDefId(defId);
+        filter.setFormId(formId);
+        filter.setBeginTime(beginTime);
+        filter.setEndTime(endTime);
+        return R.data(taskService.donePage(resolveAssignee(assignee), filter, current, pageSize));
     }
 
     @PostMapping("/{id}/approve")

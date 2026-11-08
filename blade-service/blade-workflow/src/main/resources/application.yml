@@ -67,6 +67,24 @@ blade:
       # 与 wf_task 并存双写、互为校验；待读源切到 act 并验证无误后，才退役 wf_task。
       # 写失败仅告警不阻断主流程；会签 N:1（同一引擎任务多人）由写入器内建守卫跳过。
       enabled: true
+    # 「wf_task 兜底残留合并」开关（去 wf_ 表 P6 退役的第一台阶）。
+    # true  = 合并（默认，零行为变化）：待办/已办【列表】与顶栏【角标】都把「ACT 单行表达不了的行」
+    #         从 wf_task 补进来 —— ① 存量 N:1 会签 ② 孤儿 ③ 无 engineTaskId 的合成待办，
+    #         保证翻源【零丢单】，角标数字与翻源前一致。
+    # false = 纯 ACT 单源：列表与角标 100% 来自 ACT_*，完全不查 wf_task。
+    #   ⚠️ 关闭前须按 doc/md/去wf_表-任务读源翻源上线检查.md §2 校验达标阈值：
+    #      活跃 N:1=0、孤儿=0（孤儿含 is_test=0 真实数据的须先修复）、双写漂移=0、
+    #      ACT 可读行 ≥ wf_task 列表行 99%。
+    #   ⚠️ 合成待办（草稿待办、退回发起人重提交）永远不在 ACT 里 —— 关闭后这些行会从待办列表
+    #      消失（发起人被退回却看不到待办 = 死循环），必须先确认业务上可接受。
+    #   ✅ 关闭后的收益：① total 严格等于 ACT count，与实际可翻行数一致，消除
+    #      「actTotal + residueTotal」错位导致的深页漏行；② 真实暴露 ACT 覆盖率缺口
+    #      （否则名义读 ACT、实际绕回 wf_task，掩盖缺口）。
+    # 注：本开关只管读侧合并，【不控制 wf_task 的写入】；写入退役属 P6，须先解决合成待办归属
+    #   与 blade 6 态（待办/已办/撤销/办结/协办/传阅/已读）到 ACT 的映射。
+    # 注：Nacos blade-workflow-dev.yaml 若配了该键以 Nacos 为准（届时需同步）。
+    task-residue-merge:
+      enabled: true
     # 实例/审批日志读源（WfApprovalLogActReader 消费，默认 wf）：
     #   act = 台账/mine/getByBiz 读 ACT_HI_PROCINST；logs/node-operators 读 ACT_HI_COMMENT。
     # 2026-09-30 翻 act：ACT_HI_PROCINST 业务列 34/35 回填完整（1 个孤儿引擎实例置 CANCELED 不可见）；

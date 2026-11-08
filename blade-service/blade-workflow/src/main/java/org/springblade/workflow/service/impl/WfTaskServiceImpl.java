@@ -1,6 +1,8 @@
 package org.springblade.workflow.service.impl;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.SecureUtil;
@@ -56,6 +58,7 @@ import org.springblade.workflow.utils.WfConditionVarUtil;
 import org.springblade.workflow.utils.WfNodeSettingsUtil;
 import org.springblade.workflow.utils.WfNoticeContext;
 import org.springblade.workflow.config.WfRetirementProperties;
+import org.springblade.workflow.config.WfTaskResidueProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springblade.workflow.vo.RejectCandidateVO;
 import org.springblade.workflow.vo.RejectCandidatesVO;
@@ -172,6 +175,22 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
     @Autowired
     private WfRetirementProperties retirement = new WfRetirementProperties();
+
+    /**
+     * 「wf_task 兜底残留合并」开关（去 wf_ 表 · P6 退役第一台阶）。
+     *
+     * <p>true（默认，零行为变化）：列表/分页把「ACT 单行表达不了的行」（存量 N:1 会签 / 孤儿 / 合成待办）
+     * 从 {@code wf_task} 补进来，角标同口径（{@code WfTaskActReader#countFromAct} 共用本开关），
+     * 保证零丢单。</p>
+     *
+     * <p>false（纯 ACT 单源）：完全不查 {@code wf_task}，{@code total} 严格等于 ACT count，
+     * 消除「actTotal + residueTotal」与实际可翻行数的错位（深页漏行的根因之一）。</p>
+     *
+     * <p>关闭前须按 {@code doc/md/去wf_表-任务读源翻源上线检查.md} §2 校验达标阈值，
+     * 并确认合成待办（草稿待办 / 退回发起人重提交）从待办列表消失在业务上可接受。</p>
+     */
+    @Autowired
+    private WfTaskResidueProperties residueMerge = new WfTaskResidueProperties();
 
     /**
      * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
@@ -919,6 +938,114 @@ public class WfTaskServiceImpl implements IWfTaskService {
         return result;
     }
 
+    // ------------------------------------------------------------------ 服务端真分页（2026-11-08）
+
+    @Override
+    public IPage<WfTaskVO> todoPage(Long assignee, WfTaskListFilter filter, long current, long size) {
+        return page(assignee, filter, current, size, true);
+    }
+
+    @Override
+    public IPage<WfTaskVO> donePage(Long assignee, WfTaskListFilter filter, long current, long size) {
+        return page(assignee, filter, current, size, false);
+    }
+
+    /**
+     * 待办/已办服务端分页。
+     *
+     * <p>两源归并（ACT 主表 + wf_task 兜底残留）采用文档 8.3.2 口径 a 的修正版：
+     * {@code total} 由两源各自<b>同口径 count 相加</b>，绝不使用「减 seen」的错误公式
+     * （seen 只是当前页 id，用于排重，不能用于全量计数）。</p>
+     *
+     * <p>残留行只在<b>第一页</b>并入候选集，归并排序后截前 {@code size} 行；
+     * 深页仅取 ACT 主表。dev 实测残留 = 0（5.4.1），生产造数需验证两源有交集的用例。</p>
+     */
+    private IPage<WfTaskVO> page(Long assignee, WfTaskListFilter filter, long current, long size, boolean onlyTodo) {
+        Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
+        WfTaskListFilter f = filter == null ? new WfTaskListFilter() : filter;
+        if (f.getStatuses() == null || f.getStatuses().isEmpty()) {
+            f.setStatuses(onlyTodo
+                ? List.of(WfTask.STATUS_TODO)
+                : List.of(WfTask.STATUS_DONE, WfTask.STATUS_FINISHED,
+                    WfTask.STATUS_AUTO_SUBMIT, WfTask.STATUS_COADJUTANT,
+                    WfTask.STATUS_CIRCULATE, WfTask.STATUS_READ));
+        }
+        long pageNo = Math.max(current, 1);
+        long pageSize = Math.min(Math.max(size, 1), 200);
+        long offset = (pageNo - 1) * pageSize;
+        Page<WfTaskVO> result = new Page<>(pageNo, pageSize);
+
+        if (taskActReader.actRead()) {
+            try {
+                long actTotal = onlyTodo
+                    ? taskActReader.countTodoFromAct(target, f)
+                    : taskActReader.countDoneFromAct(target, f);
+                List<WfTaskVO> candidates = new ArrayList<>(onlyTodo
+                    ? taskActReader.todoPageFromAct(target, f, offset, pageSize)
+                    : taskActReader.donePageFromAct(target, f, offset, pageSize));
+
+                // 兜底残留：ACT 单行表达不了的（存量 N:1 会签 / 孤儿 / 合成待办）。
+                // 排除条件下推进 count SQL，与列表查询同口径，避免重复计数。
+                //
+                // 【残留合并开关】关闭时（纯 ACT 单源）：完全不查 wf_task，residueTotal 恒 0，
+                //   故 total 严格等于 actTotal —— 消除「actTotal + residueTotal」与实际可翻行数的
+                //   错位（即「残留只在第一页并入、深页取 ACT 连续切片」导致的深页漏行）。
+                boolean mergeResidue = residueMerge.isEnabled();
+                long residueTotal = mergeResidue ? countResidue(target, f, onlyTodo) : 0L;
+                if (residueTotal > 0) {
+                    // 口径 a 的已知取舍：残留只在第一页并入，深页 offset 仍按 ACT 主表计算，
+                    // 两源有交集时深页可能重复/漏行。dev 实测残留 = 0，生产需造数验证该场景。
+                    log.warn("[blade-workflow] 分页存在 wf_task 兜底残留 {} 条，深页归并口径需造数验证. assignee={}",
+                        residueTotal, target);
+                }
+                if (mergeResidue && pageNo == 1 && residueTotal > 0) {
+                    java.util.Set<Long> seen = candidates.stream().map(WfTaskVO::getId)
+                        .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
+                    List<WfTask> residue = taskMapper.selectList(
+                        wfTaskQuery(target, f.getStatuses(), f, seen));
+                    for (WfTask t : residue) {
+                        candidates.add(toVO(t));
+                    }
+                }
+                candidates.sort(java.util.Comparator.comparing(
+                    v -> onlyTodo ? v.getReceiveTime() : v.getOperateTime(),
+                    java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+                if (candidates.size() > pageSize) {
+                    candidates = new ArrayList<>(candidates.subList(0, (int) pageSize));
+                }
+                result.setRecords(candidates);
+                result.setTotal(actTotal + residueTotal);
+                return result;
+            } catch (Exception e) {
+                log.warn("[blade-workflow] 读源=act 分页读取失败，降级走 wf_task 分页. assignee={}, {}",
+                    target, e.getMessage());
+            }
+        }
+
+        // 回退 wf_* 单源路径：MyBatis-Plus 物理分页，total 由 count 查询给出
+        Page<WfTask> p = new Page<>(pageNo, pageSize);
+        IPage<WfTask> raw = taskMapper.selectPage(p, wfTaskQuery(target, f.getStatuses(), f, null));
+        List<WfTaskVO> records = new ArrayList<>(raw.getRecords().size());
+        for (WfTask t : raw.getRecords()) {
+            records.add(toVO(t));
+        }
+        result.setRecords(records);
+        result.setTotal(raw.getTotal());
+        return result;
+    }
+
+    /** 兜底残留条数：把「ACT 已覆盖的 BIZ_TASK_ID_」排除条件下推进 count SQL。 */
+    private long countResidue(Long target, WfTaskListFilter f, boolean onlyTodo) {
+        String actTable = onlyTodo ? "ACT_RU_TASK" : "ACT_HI_TASKINST";
+        String actEndCond = onlyTodo ? "" : " AND END_TIME_ IS NOT NULL";
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> qw =
+            wfTaskQuery(target, f.getStatuses(), f, null);
+        qw.notInSql(WfTask::getId, "SELECT BIZ_TASK_ID_ FROM " + actTable
+            + " WHERE BIZ_TASK_ID_ IS NOT NULL" + actEndCond);
+        Long n = taskMapper.selectCount(qw);
+        return n == null ? 0L : n;
+    }
+
     // ------------------------------------------------------------------ 私有方法
 
     private List<WfTaskVO> list(Long assignee, WfTaskListFilter filter) {
@@ -938,15 +1065,19 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 //   ② 孤儿（引擎侧已无对应任务）；③ 无 engineTaskId 的合成待办（草稿待办）。
                 // 随存量 N:1 自然办结、新会签已是 1:1，兜底贡献逐步趋零，wf_task 才真正退役。
                 // 兜底查询须与原 ACT 路径【同口径】施加筛选（实例维度 + 时间范围），否则会混入未命中筛选的残留行。
-                java.util.Set<Long> seen = merged.stream().map(WfTaskVO::getId)
-                    .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
-                List<WfTask> residue = taskMapper.selectList(wfTaskQuery(target, statuses, filter, seen));
-                if (!residue.isEmpty()) {
-                    for (WfTask t : residue) {
-                        merged.add(toVO(t));
+                //
+                // 【残留合并开关】关闭时（纯 ACT 单源）：整段跳过，不查 wf_task。
+                if (residueMerge.isEnabled()) {
+                    java.util.Set<Long> seen = merged.stream().map(WfTaskVO::getId)
+                        .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
+                    List<WfTask> residue = taskMapper.selectList(wfTaskQuery(target, statuses, filter, seen));
+                    if (!residue.isEmpty()) {
+                        for (WfTask t : residue) {
+                            merged.add(toVO(t));
+                        }
+                        log.info("[blade-workflow] 读源=act 兜底合并 wf_task 残留 {} 条（N:1/孤儿/合成待办）. assignee={}",
+                            residue.size(), target);
                     }
-                    log.info("[blade-workflow] 读源=act 兜底合并 wf_task 残留 {} 条（N:1/孤儿/合成待办）. assignee={}",
-                        residue.size(), target);
                 }
                 // 合并后统一按时间倒序（待办按接收时间、已办按处理时间），与翻源前观感一致
                 merged.sort(java.util.Comparator.comparing(
@@ -987,6 +1118,26 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 .eq(WfTask::getAssignee, target)
                 .in(WfTask::getStatus, statuses)
                 .eq(WfTask::getIsTest, 0);
+        // 【草稿移出待办 · 方案 A】排除草稿实例（status=5）的待办行。
+        //
+        // <p>草稿「已保存未提交：不占引擎，关联发起人待办」（WfInstance.STATUS_DRAFT 注释）——
+        // 它靠一条 engineTaskId 为空的 wf_task 合成待办出现在「待办」里，而 ACT 侧永远没有这行。
+        // 方案 A 把草稿改由「我的请求」的草稿箱承载（后端 /instance/mine 已能回退查出草稿），
+        // 目的是让「待办」列表 100% 来自 ACT_*，从而移除 P6 退役 wf_task 的最后一个读源依赖。</p>
+        //
+        // <p><b>判据必须用「所属实例 status=5」而非「engineTaskId 为空」</b>：后者会误伤
+        // 「退回发起人重提交」的合成待办 —— 那是<b>运行中</b>实例的正常待办，必须留在待办列表。</p>
+        //
+        // <p><b>为什么用 NOT EXISTS 而不是 NOT IN (子查询)</b>：{@code NOT IN} 遇 {@code inst_id IS NULL}
+        // 会因三值逻辑（UNKNOWN）把该行<b>误排</b>；NOT EXISTS 语义正确（无匹配即保留）。
+        // 子查询里的 {@code inst_id} 故意<b>不限定外层表名</b>：MyBatis-Plus 生成的外层查询
+        // （{@code FROM wf_task}）默认无别名，不限定才能同时兼容「有/无别名」两种形态。</p>
+        qw.notExists("SELECT 1 FROM wf_instance i WHERE i.id = inst_id "
+            + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0");
+        // 前端列「状态」筛选下推：与 ACT 路径的 appendStatusFilter 同口径，保证 total 与记录一致
+        if (filter != null && filter.getStatus() != null) {
+            qw.eq(WfTask::getStatus, filter.getStatus());
+        }
         // 实例维度筛选：先取命中实例ID，再约束 wf_task.inst_id IN (...)。无命中则整体为空。
         if (filter != null && filter.hasInstanceFilter()) {
             com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfInstance> iq =

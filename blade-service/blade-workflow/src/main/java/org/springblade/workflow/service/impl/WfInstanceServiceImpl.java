@@ -2046,11 +2046,15 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
         // 当前待办任务ID：供任务级监管动作（转办 /task/{id}/forward、催办 /task/{id}/urge）使用。
         // 会签等多待办场景取最小 ID 的一条，保证「有唯一可操作目标」。
+        // 【草稿移出待办 · 方案 A】排除草稿实例的合成待办：草稿无引擎任务，转办/催办对它无意义，
+        //   若挂上 taskId 会让监管动作对草稿实例产生「可催办」的假象。
         Map<Long, Long> taskIdMap = new LinkedHashMap<>();
         List<WfTask> pending = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .select(WfTask::getId, WfTask::getInstId)
             .in(WfTask::getInstId, ids)
             .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+            .notExists("SELECT 1 FROM wf_instance i WHERE i.id = inst_id "
+                + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0")
             .orderByAsc(WfTask::getId));
         for (WfTask t : pending) {
             if (t.getInstId() != null && !taskIdMap.containsKey(t.getInstId())) {
