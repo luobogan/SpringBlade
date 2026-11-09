@@ -836,7 +836,348 @@ dev 实测环境未编排自由流程实例、无子流程提醒触发，故本�
 - 角标：前端取 `/task/todo` 的 `total`（已验证从 ACT 读），无需单测。
 - `/task/mine`（我的请求，含草稿）：路径应为 `/instance/mine`，本次未纳入核对（草稿合并逻辑见 memory `52355684`，与读源翻源正交）。
 
+---
+
+## 9. ⑤ 重启：wf_task 退役 + 扩展任务独立承载（具体方案 · 2026-11-08 起草）
+
+> 背景：`③ 读源翻源` 已让**普通审批任务**的列表/角标/计数 100% 来自 `ACT_*`，但仍有 3 类读点依赖 `wf_task`
+> （混合分页扩展任务补齐 / `countFromAct` 残留 / `decorateFreeFlowNames` 步骤名）。要使"连扩展任务也彻底不读 wf_task"，
+> 必须先把 §7.11 的退役重启条件（① 扩展任务迁独立表或 `ACT_*` 承载列 ② 合成待办替代载体 ③ 6 态权威存储切换）落地。
+> 本章给出**可分步执行、每步可独立回滚**的具体方案。
+
+### 9.1 目标与边界
+
+| 项 | 目标 |
+|---|---|
+| 读侧 | 列表（待办/已办/公文）、角标、监管关待办、监管已办节点集 —— **零 `wf_task` 读取** |
+| 写侧 | `WfTaskActWriter` 不再双写 `wf_task`；`forward/addSign/circulate/patch` 不再 `INSERT wf_task` |
+| 操作链 | `resolveTask` 不再以 `wf_task.id` 为唯一契约；`WfWriteHelper`/`OdocSealAdvancer` 用 `BIZ_TASK_ID_` 反查 |
+| 终态 | 删除 `WfTask` Entity/Mapper/Service 中退役相关引用，最终 `DROP wf_task`（保留历史备份） |
+
+**非目标**：不动引擎事实源（`ACT_*` 仍是引擎任务本体权威）。6 态仍按 §7.10 已定案分流，不塞进 `ACT_*`。
+
+### 9.2 现状精确盘点（四类语义 + 依赖点）
+
+`wf_task` 当前实际承载 4 类行（对应 §7.10/§7.11）：
+
+| 类 | 行特征 | 引擎事实 | 写入点 | 退役后归属 |
+|---|---|---|---|---|
+| **A 引擎任务台账** | `engine_task_id` 有值、`status∈{0,2,4,6}` | 有对应 `ACT_RU_TASK`/`ACT_HI_TASKINST` | `WfTaskActWriter.sync`（doApprove/reject/advance 经它） | ACT 已是权威 → **停写 wf_task 行** |
+| **B1 协办/加签协办式** | 多人共享同一 `engine_task_id`（`addSign`/`forward` 沿用原 `engineTaskId`） | N:1，**ACT 单行表达不了** | `addSign`(796)/`forward`(766) | 改为 ACT 原生多实例/候选人，或 `wf_ext_task` 承载协办办理态 |
+| **B2 抄送/传阅/已读** | `status∈{8,11,已读}`、`engine_task_id` 沿用 | 无（纯 blade 知会） | `circulate`(831) / `patch`(896) | `wf_ext_task`（或 `ACT_*_IDENTITYLINK` + 已读标记） |
+| **C 合成待办** | `engine_task_id` 空 | 无 | 草稿（已迁 `wf_instance`）、退回发起人重提交（新模型走真实 ACT 任务，**仅存量老数据**） | `wf_instance`（草稿）+ 真实 ACT 任务（退回） |
+
+**依赖 `wf_task` 的代码点（须逐个改造）**：
+- 读：`WfTaskActReader` 残留 SQL(445/477)、`countFromAct` 残留段、`decorateFreeFlowNames`(1310)、混合分页 `wfTaskQuery(extOnly)`。
+- 写：`WfTaskActWriter` N:1 守卫(110 `SELECT COUNT(*) FROM wf_task WHERE engine_task_id=?`)、`forward/addSign/circulate/patch` 的 `taskMapper.insert`。
+- 操作链：`resolveTask`(1514)、`WfWriteHelper.syncCommentToEngine`(314)、`OdocSealAdvancer.terminate`(170)、`WfFreeFlowDriver`(145/157/184)。
+
+### 9.3 载体设计
+
+**核心载体：新建 `wf_ext_task` 表**（承载 B1/B2 类 + C 类残量），字段建议：
+
+```
+wf_ext_task
+  id              BIGINT PK (雪花，沿用 wf_task.id 语义，避免 ID 契约大改)
+  inst_id         BIGINT      关联 wf_instance.id
+  engine_task_id  VARCHAR     关联原审批引擎任务(BIZ_TASK_ID_ 对应的 ACT 任务)，B1 共享、B2 沿用
+  node_key        VARCHAR     节点
+  type            TINYINT     1=协办 2=加签协办 3=抄送 4=传阅 5=已读 6=退回重提交
+  assignee        BIGINT      接收人
+  original_user   BIGINT      原办理人(协办/转办回溯用)
+  title           VARCHAR
+  opinion         VARCHAR     抄送/传阅意见
+  status          TINYINT     0=待办/待阅 1=已办/已读 2=已拒 (按 type 解释)
+  ext_json        VARCHAR     自由流程步骤名等 blade 扩展显示列(替代 wf_task.ext_json)
+  is_test         TINYINT
+  is_deleted      TINYINT
+  tenant_id       BIGINT
+  create_time / operate_time / receive_time
+```
+
+**为何独立表而非复用 `ACT_*_IDENTITYLINK`**：
+- 抄送/传阅历史需持久：`ACT_RU_IDENTITYLINK` 任务完成后被清理（§7.10 已记），抄送历史权威只能落 `ACT_HI_IDENTITYLINK` 或 blade 侧。
+- 协办/加签**有办理态**（协办人可办理并回流），identityLink 只表达"关联"不表达"办理"，`wf_ext_task.status` 才能承载协办办理态。
+- 与引擎解耦：blade 扩展语义演进不受 Flowable 身份模型约束。
+
+### 9.4 N:1 硬门槛的消除（B1 类最难，决定退役可行性）
+
+`WfTaskActWriter:110` 的 N:1 守卫存在，是因为 `addSign`/`forward` 用"同一 `engine_task_id` + 多条 `wf_task` 行"表达"同一节点多人办"。
+**退役前提 = 让 N 人办同一节点在 ACT 原生表达**，二选一：
+
+- **方案 X（推荐）：改用 Flowable 多实例/候选人。** 协办、加签协办式统一建模为节点的 candidate/participant 或 MI 集合，
+  ACT 原生支持 N 人、N 行 `ACT_RU_TASK`/`ACT_HI_TASKINST` → 守卫自然消除（新会签已是 1:1，见 §7.10 注释）。代价：改 `addSign`/`forward` 的引擎调用（改 `processService` 加候选人/启 MI），非纯数据迁移。
+- **方案 Y（最小改造）：B1 迁 `wf_ext_task` 承载"协办办理态"。** 加签/协办仍由 blade 创建 `wf_ext_task` 行（type=1/2），
+  引擎侧保持单列（或仍用现有 N:1 守卫但改查 `wf_ext_task`）。代价：N:1 守卫从 `wf_task` 挪到 `wf_ext_task`，未根治但解耦了退役表。
+
+> 推荐 X：它把"N 人同节点"回归引擎事实源，与 §7.10「引擎任务本体→ACT」定案自洽，且让 `WfTaskActWriter` 的 N:1 守卫可整体删除（A 类停写后无需该守卫）。
+> 若工期紧，可先用 Y 让 wf_task 退役、N:1 守卫迁 `wf_ext_task`，X 作为后续优化。
+>
+> ⚠️ **【§10.7 修正】** 本节"**A 类停写后**无需该守卫"的前提**不成立**：A 类台账必须保留写入
+> （是 ACT 业务列与 `BIZ_TASK_ID_` 的唯一来源，见 §10.7 决策 1）。2026-11-09 实际落地为
+> **方案 Y 的保守变体**：N:1 守卫保留，但统计源改为 `wf_task` + `wf_ext_task` 两表合并
+> （排除 type=7 装饰行），避免扩展任务迁出后守卫失效。本次不改引擎调用方式。
+
+### 9.5 6 态权威存储切换（落地 §7.10 定案）
+
+| 行类别 | 权威存储（退役后） | 列表读取 |
+|---|---|---|
+| 引擎任务本体（含 forward 改派、正常审批、加签产生的真实子任务） | `ACT_RU_TASK`/`ACT_HI_TASKINST` | ACT（已落地） |
+| 协办/加签协办式 | `wf_ext_task`（方案 X 下部分回归 ACT MI） | `wf_ext_task` |
+| 抄送/传阅/已读 | `wf_ext_task` | `wf_ext_task` |
+| 草稿 | `wf_instance` | 「我的请求」（方案 A 已移出待办） |
+| 退回发起人重提交 | 真实 ACT 任务（新模型） | ACT |
+
+### 9.6 分阶段迁移（每阶段可独立灰度/回滚）
+
+- **阶段 0 · 双写校验**：① 新建 `wf_ext_task` 表 + Entity/Mapper；② `circulate/addSign/forward/patch` 在写 `wf_task` 的同时写 `wf_ext_task`（兼容双写）；
+  ③ 开启已预埋的 `ccIdentityLinkEnabled`（`circulate` 双写 ACT identityLink，仅预热）；④ 跑校验任务比对两表 B 类行一致。读仍走 `wf_task`。
+- **阶段 1 · 读切换**：列表/角标/混合分页残留/`countFromAct` 残留从 `wf_task` 切到 `wf_ext_task`（精确判据 `type IN (协办,抄送,传阅,已读)`）；`decorateFreeFlowNames` 改读 `wf_ext_task.ext_json`。ACT 段不变。灰度验证零漂移。
+- **阶段 2 · 写切换（A 类停写）**：`WfTaskActWriter.sync` 对 A 类不再写 `wf_task` 行（ACT 已是权威）；`forward` 改调 `processService` 改 ACT assignee（方案 X）。B 类只写 `wf_ext_task`（停写 `wf_task`）。
+- **阶段 3 · N:1 根治（可选，对应 §9.4 X）**：`addSign`/协办改为 ACT 多实例/候选人，`wf_ext_task` 中 B1 类逐步清零，N:1 守卫删除。
+- **阶段 4 · 操作链/ID 语义（第 9 项重启）**：`resolveTask` 按 `wf_ext_task.id` 或 `engineTaskId/BIZ_TASK_ID_` 解析；列表改吐统一任务 id 契约；
+  `WfWriteHelper`/`OdocSealAdvancer` 用 `BIZ_TASK_ID_` 反查 ACT 取 `engineTaskId`（§7.22 已规划）。
+- **阶段 5 · 历史数据迁移 + 收口**：存量 `wf_task` 的 B/C 类行迁 `wf_ext_task`（A 类行标记废弃不读）；删除 `WfTask` Entity/Mapper/Service 退役相关；最终 `DROP wf_task`（备份留存）。
+  开关 `task-residue-merge.enabled` 语义随之变为"是否读 `wf_ext_task` 扩展任务"（等价于现在控制 wf_task 扩展）。
+
+### 9.7 关键改造点清单（具体到方法）
+
+| 模块 | 方法/位置 | 改动 |
+|---|---|---|
+| `WfTaskServiceImpl` | `forward`(766)/`addSign`(796) | 停写 `wf_task`；改 ACT assignee/MI（方案 X）或写 `wf_ext_task`（方案 Y） |
+| | `circulate`(831)/`patch`(896) | 停写 `wf_task`，写 `wf_ext_task`（+ 已预埋 identityLink） |
+| | `decorateFreeFlowNames`(1310) | `taskMapper` → `extTaskMapper` 读 `ext_json` |
+| `WfTaskActReader` | 残留 SQL(445/477)、`countFromAct`(445/477) | `FROM wf_task` → `FROM wf_ext_task`，精确 `type` 判据 |
+| | 混合分页 `wfTaskQuery(extOnly)` | `status IN(7,8,11)` → `wf_ext_task.type IN(...)` |
+| `WfTaskActWriter` | N:1 守卫(110) | A 类停写后删除；或改查 `wf_ext_task`（方案 Y） |
+| `WfTaskServiceImpl` | `resolveTask`(1514) | 解析契约改 `wf_ext_task.id` / `BIZ_TASK_ID_` |
+| `WfWriteHelper` | `syncCommentToEngine`(314) | `BIZ_TASK_ID_` 反查 ACT 取 `engineTaskId` |
+| `OdocSealAdvancer` | `terminate`(170) | 同上 |
+| `WfFreeFlowDriver` | (145/157/184) | 自由流程步骤名/并列待办写 `wf_ext_task` |
+
+### 9.8 风险与核对点
+
+1. **协办办理态回流**：协办人"办理"后如何推进原任务？需 `wf_ext_task` 承载协办完成 → 触发原 ACT 任务流转；方案 X 下协办即 ACT 候选人，天然回流。
+2. **抄送/传阅"已读"**：需 `wf_ext_task.status=已读` 或独立 `wf_read_log`；前端"未读红点"依赖此状态，迁移不能丢未读标记。
+3. **历史数据迁移完整性**：存量 `wf_task` 行分类迁 `wf_ext_task`，须与"零漂移"原则一致（迁后列表 id 集合不变）；阶段 0/1 双写校验 + 阶段 5 迁后比对。
+4. **N:1 守卫时序**：阶段 2 A 类停写后守卫(110) 必须先于 `DROP` 处理，否则存量 N:1 加签数据在阶段 0 双写时漏迁 `wf_ext_task` → 阶段 1 读切换丢行。
+5. **回归面**：协办/抄送/传阅/转办/加签/退回重提交 6 条国产 OA 语义全要造数回归；角标与列表数字必须再次一致（§7.10 教训：裸 SQL 必带 `is_deleted=0`/租户）。
+
+### 9.9 与 §7.10/§7.11 的关系
+
+- §7.11 重启条件 ①③ 在本章给出落地路径；② 合成待办替代载体（草稿→`wf_instance`、退回→真实 ACT 任务）在新模型下已大半具备，仅存量老数据需阶段 5 迁移。
+- 完成本章即达成"连扩展任务也彻底不读 wf_task"，与 `③ 读源翻源` 的"纯 ACT 普通任务"形成完整闭环。
+
 **回归**：服务 ERROR=0；接口层 200；todo/odoc 列表 id 集合与 wf_task 台账逐 id 一致（除 2 个历史台账缺口被 ACT 补全）。
+
+---
+
+## 10. ⑤ 重启落地（一次性切换版 · 2026-11-08 按用户指令调整）
+
+> 用户指令：① 无需双写，一次性完成；② 删除现有数据迁移功能，不再保留；③ 清空旧数据并重新创建，生成大量新测试数据验证；先出方案。
+> 相对 §9（渐进式：双写校验 + 存量迁移）的**调整**：跳过 §9 阶段0 双写校验、阶段5 存量迁移，改为"清空旧数据 + 脚本造大量新数据"直接验证。
+
+### 10.1 迁移功能标记弃用（不删除，统一 `@Deprecated`）
+
+> 按用户指令：**代码不物理删除，保留可追溯**，仅加 `@Deprecated` 注解 + 注释说明弃用原因/日期。
+
+| 目标 | 位置 | 处理 |
+|---|---|---|
+| 迁移端点 | `WfMigrationController`（`/migration` backfill/reconcile） | 加 `@Deprecated` + 注释「已弃用：wf_task 退役(2026-11-08)，双写/回填/对账不再需要；保留仅供追溯」；端点保留但标注不可用 |
+| 迁移实现 | `WfDefinitionBackfillJob`（backfillAll/reconcileAll） | 加 `@Deprecated`；若含「流程定义初始化」依赖则保留该方法、仅标记迁移方法弃用 |
+| 双写校验开关 | `circulate` 里的 `ccIdentityLinkEnabled` 阶段3 双写校验（§9.4 X 路径预留） | 标记 `@Deprecated`，默认不触发（保留开关位，不再启用） |
+
+### 10.2 代码改造清单（一次性，不双写；旧路径 `@Deprecated` 不删）
+
+> **弃用标记总原则**：所有被新逻辑替代的 `wf_task` 读写路径**保留代码、加 `@Deprecated` 注解 + 注释（弃用原因/日期）**，不物理删除。新逻辑走 `wf_ext_task`；旧 `wf_task` 分支标注后不再被调用（或短路为 no-op 并注释）。
+
+1. **建表**：`doc/sql/blade/blade-2026-11-09-wf-ext-task.sql` 建 `wf_ext_task`（含 `biz_task_id` 宿主关联列 +
+   `idx_assignee_type_status`/`idx_inst_node`/`idx_engine_task`/`idx_biz_task_type` 四个索引）；
+   新增 `WfExtTask` 实体（extends `TenantEntity`）与 `WfExtTaskMapper`。已在 dev 执行。
+2. **扩展任务写**：`circulate`(抄送) 与 `WfInstanceServiceImpl#createCoadjutantTasks/closeCoadjutantTasks`(协办)
+   改为写 `wf_ext_task`；旧 `wf_task` 抄送写入抽成 `@Deprecated` 方法 `insertCirculateToWfTaskDeprecated` 保留。
+   ⚠️ `forward`/`addSign`/`markViewed` **不迁**（A 类可办理待办，见 §10.7 决策 3）。
+3. **读源切换**：`WfTaskActReader#countFromAct` 两段残留 SQL 与 `WfTaskServiceImpl` 的
+   `extTaskQuery`/`countResidue`/列表兜底合并统一改读 `wf_ext_task`，判据为 `type` 集合；
+   两侧严格同口径（角标=列表）。`decorateFreeFlowNames` 改按 `biz_task_id` 读 `wf_ext_task.ext_json`。
+   `wfTaskQuery(extOnly=true)` 分支与 `EXT_TASK_STATUSES` 标 `@Deprecated` 保留。
+4. **写侧收口**：`WfTaskActWriter` 的 N:1 守卫保留（A 类台账必须写），统计源改为
+   `wf_task` + `wf_ext_task` 两表合并（排除 type=7 装饰行）；`detail`/`markViewed` 新增
+   `resolveExtTask` 分流支持扩展任务 id；`WfWriteHelper#syncCommentToEngine` 改用
+   `WfTaskActReader#findEngineTaskIdByBizId` 按 `BIZ_TASK_ID_` 反查 ACT（wf_task 台账兜底）。
+   ⚠️ `OdocSealAdvancer:170` **未改**（见 §10.7 决策 4）。
+5. **自由流程**：`WfFreeFlowDriver#stampTaskExtJson` 把步骤显示名写入 `wf_ext_task` 的
+   `type=7` 装饰行（`biz_task_id` = 宿主 `wf_task.id`）；并列待办本身仍写 `wf_task`（A 类可办理）。
+6. **弃用标记**：`WfMigrationController`、`WfDefinitionBackfillJob`、`ccIdentityLinkEnabled`
+   加 `@Deprecated`；`WfTaskMapper`/`WfTask`/`WfTaskResidueProperties` 注释更新职责边界。
+
+### 10.3 数据重置（清空 + 造大量新测试数据）
+
+- **清空（破坏性，dev `127.0.0.1:3306` 库 `blade`）**：`ACT_*`（ACT_RU_*/ACT_HI_*/ACT_RE_*/ACT_GE_* 全清）+ `wf_instance` + `wf_task`；`wf_ext_task` 新建后为空。
+- **造数（Python/SQL 脚本直接 INSERT）**：生成**大量**流程，覆盖场景——
+  - 普通待办 / 普通已办 / 办结；
+  - **会签 N:1**（同一 `engine_task_id` 多人，验证 N:1 守卫删除后无碍）；
+  - 子流程；
+  - **扩展任务**：协办 / 抄送 / 传阅 / 已读 / 退回重提交（写入 `wf_ext_task`）；
+  - 须保证 `ACT_RU_TASK`/`ACT_HI_TASKINST`/`ACT_HI_PROCINST`/`ACT_HI_IDENTITYLINK` 多表一致性（BIZ_TASK_ID_/BUSINESS_ID_ 关联正确、IS_TEST_ 标记继承）。
+- **自由流程场景**：临时开启 `free-flow.enabled=true` 造数，验证 `ext_json` 迁 `wf_ext_task` 后 `nodeName` 装饰正常。
+
+### 10.4 验证计划
+
+| 项 | 预期 |
+|---|---|
+| 待办/已办/公文列表 | 从 ACT 读，与造数一致，零漂移 |
+| 角标 | 与列表数字一致（§7.10 教训：裸 SQL 必带 `is_deleted=0`/租户） |
+| 扩展任务 | 协办/抄送/传阅/已读正确出现在列表与角标 |
+| 6 条国产 OA 语义 | 协办/抄送/传阅/转办/加签/退回重提交造数全回归 |
+| 自由流程 | `nodeName` 正常（ext_json 迁 wf_ext_task 生效） |
+
+### 10.5 风险与执行顺序
+
+1. **破坏性清空**：dev 共享库，执行前**二次确认范围**（是否含 `ACT_*` 全清、是否影响他人数据）。
+2. **造数保真**：脚本 INSERT 须手动保证 ACT 多表一致性（尤其 N:1 会签、`identityLink`），否则读源翻源会漏行/双计。
+3. **执行顺序**：建 `wf_ext_task` 表 → 改代码（旧路径 `@Deprecated`）并编译通过 → 清空旧数据 → 跑造数脚本 → 启动服务 → 调接口验证（§7.23 同法：登录 admin 经网关调 `/task/todo`/`/task/done`/`/odoc/*` + 角标）。
+4. **N:1 守卫保留**：`WfTaskActWriter` 守卫(110) **不弃用**，统计源改为 `wf_task` + `wf_ext_task` 合并
+   （见 §10.7 决策 1/2）；A 类双写继续生效。
+5. **弃用标记可溯**：所有 `@Deprecated` 旧路径保留，便于回滚/追溯；确认长期稳定后（P6 终态）再考虑物理删除。
+
+### 10.6 ext_json 影响（见前述分析）
+
+- **任务级** `wf_task.ext_json`（仅自由流程写自定义步骤名）迁 `wf_ext_task.ext_json`，`decorateFreeFlowNames` 改查 `wf_ext_task`，查询逻辑不变、不受影响。
+- **`WfProcessNode.ext_json`**（节点定义：operateMenu/reject/timeout 等，大量使用）与本次无关、**不受影响**——勿混淆两张表。
+- 自由流程默认关闭，短期零实际影响；造数时开启验证即可。
+
+### 10.7 关键决策修正（实施期核对代码后定案 · 2026-11-09）
+
+> 计划（§9/§10 早期草稿）有三处与代码现实不符，实施时按**不破坏功能 + 零漂移**原则修正，记录如下。
+
+#### 决策 1：A 类台账**不可停写**（修正 §9.2/§10.2 的「A 类停写」表述）
+
+`WfTaskActWriter.sync` 把 `wf_task` 行的 `status/is_test/sign_order/view_time/timeout_handled/
+original_user/assignee/due_time` 投影到 `ACT_RU_TASK`/`ACT_HI_TASKINST` 自定义列，
+并把 `wf_task.id` 写成 `BIZ_TASK_ID_`——后者是**列表 VO 的 id** 与**操作链**
+（`approve`/`forward`/`reject` → `requireTodoTask` → `taskMapper.selectById`）的唯一契约。
+
+若停写 A 类：ACT 自定义列断供 → 列表 `status`/`assignee` 为空、角标为 0、办理报「任务不存在」。
+故本次 `wf_task` **职责收敛为「仅引擎任务本体台账」，继续写入**；达成的是
+「**扩展任务**不再读/写 wf_task」，而非 `wf_task` 物理退役。彻底退役需另立
+「创建引擎任务时直写 ACT 业务列 + 全链路 ID 语义切换」的 P6 后续改造。
+
+#### 决策 2：`type` 分类 + 独立 `status`，VO 映射回原 6 态
+
+`wf_ext_task.type` 是不可变语义类别，`status` 是行自身状态（0 待处理/未读、1 已处理/已读、2 已拒绝）；
+`WfExtTask#toWfTaskStatus()` 负责映射回原 `WfTask.status` 语义，**前端零改动**：
+
+| type | 含义 | 原 `WfTask.status` | 列表段 | 写入点 |
+|---|---|---|---|---|
+| 1 | 协办 / 征询意见 | 7 | **已办** | `WfInstanceServiceImpl#createCoadjutantTasks` |
+| 2 | 加签协办（可办理） | 0 待办 / 2 已办 | 待办 | 预留（当前 `addSign` 仍写 A 类） |
+| 3 | 抄送 | 8 | **已办** | `WfTaskServiceImpl#circulate` |
+| 4 | 传阅 | 11 | **已办** | 预留 |
+| 5 | 已读 | 11 | **已办** | `markViewed` 扩展任务分支 |
+| 6 | 退回发起人重提交 | 0 待办 / 2 已办 | 待办 | 预留（新模型走真实 ACT 任务） |
+| 7 | 自由流程步骤名**装饰行** | — | **不进列表** | `WfFreeFlowDriver#stampTaskExtJson` |
+
+> ⚠️ 协办是 `status=7`，落在 `done()` 的 statuses（2,4,6,7,8,11）→ **已办段**。
+> 早期草稿误把待处理协办映射到 0（待办段），已修正，否则会漂移。
+> `type=7` 装饰行不是列表条目，`isTodoType/isDoneType`、两段残留 SQL、`extTaskQuery`
+> **全部显式排除**，避免多算行。
+
+**读源两段判据（角标 `countFromAct` 与列表 `extTaskQuery` 严格同口径）**：
+- 待办段：`type IN (2,6) AND status = 0`；
+- 已办段：`type IN (1,3,4,5)`（未读也进已办侧，与原 status=7/8/11 行为一致）；
+- 两段都带 `is_test=0` + `is_deleted=0` + 租户条件 + 草稿实例排除。
+
+#### 决策 3：`forward`/`addSign`/`markViewed`/自由流程并列待办**不迁**（A 类）
+
+这四类产生的都是 `status=0` 且 `engine_task_id` 非空的**可办理引擎任务本体**：
+- `approve` → `requireTodoTask` → `resolveTask` 按 `wf_task.id` 定位，迁走会断办理链；
+- `WfTaskActWriter.sync` 需要它们把业务列投影到 ACT。
+
+按 §7.10.1 精确判据（`status IN (7,8,11) OR engine_task_id 为空`），它们本就**不在扩展段**，
+从 ACT 段读取。故保留在 `wf_task`。真正迁出的是 `circulate`(8)、协办(7) 与步骤显示名列。
+
+#### 决策 4：`OdocSealAdvancer:170` 无需改
+
+该处 `taskMapper.selectById(flow.getTaskId())` 只是把 A 类台账状态恢复为待办（`status=TODO`），
+**不取 engineTaskId**；签章流的引擎任务ID来自 `wf_odoc_sign_flow.engine_task_id` 快照
+（创建时由 `flow.setEngineTaskId(task.getEngineTaskId())` 写入）。计划中「改用 `BIZ_TASK_ID_`
+反查 ACT」的表述不适用，保持原样。仅 `WfWriteHelper#syncCommentToEngine` 真正需要
+`engineTaskId`，已改为 `findEngineTaskIdByBizId` 反查（wf_task 台账兜底）。
+
+#### 决策 5：`biz_task_id` 关联列（新增）
+
+自由流程步骤显示名附着在**可办理 A 类待办**上，而 `decorateFreeFlowNames` 只有
+`WfTaskVO.id`（= `BIZ_TASK_ID_` = `wf_task.id`）。为让 ext_json 完全迁出 `wf_task`
+且装饰查询不失效，`wf_ext_task` 增加 `biz_task_id` 列：`type=7` 装饰行以该列关联宿主待办，
+装饰查询按 `biz_task_id IN (VO ids) AND type=7` 批量回读 `ext_json`。
+配套索引 `idx_biz_task_type(biz_task_id, type)`。
+
+#### 决策 6：裸 SQL 纪律
+
+`countFromAct` 走 JdbcTemplate，绕过 MyBatis-Plus 的 `@TableLogic` 与租户插件 →
+读 `wf_ext_task` 的两段 SQL 显式带 `is_deleted = 0`，并由 `appendWfTenant(...,"t")`
+追加 `tenant_id = ?`。列表侧 `extTaskQuery` 走 Mapper，由插件自动追加，两侧等价
+（§7.10.3「角标 12、列表 11」教训）。
+
+#### 决策 7：分页两源分段取数（造数验证发现并修复的生产缺陷）
+
+原 `page()` 把扩展任务**只在第一页并入**、深页 offset 仍按 ACT 主表计算。造数实测暴露两处丢单：
+`done total=280` 但 `pageSize=200` 时 80 条扩展任务**一条都翻不到**（第一页 ACT 占满即被
+`subList(0, pageSize)` 截掉）；`page3` 直接返回 0 条。
+
+**修复**：把全量结果视为「ACT 段 `[0, actTotal)` + 扩展段 `[actTotal, total)`」，
+按全局 `offset` 计算本页各段应取的行数（`actLimit` / `extOffset` / `extLimit`），
+新增 `selectExtPage` 复用 `extTaskQuery` 全部筛选条件并追加物理分页。
+代价：跨段不保证严格全局时间序（两源各自有序），但**不丢行、不重复、深页可达**。
+
+#### 决策 8：`ORDER BY` 必须带稳定二级排序（造数验证发现并修复）
+
+造数把 135 条 `ACT_RU_TASK.CREATE_TIME_` 设为同一时刻，
+`ORDER BY CREATE_TIME_ DESC LIMIT/OFFSET` 无确定次序 → p1/p2 重叠 35 条
+（`collected=165, unique=130`）。生产中同毫秒创建的任务同样会触发。
+
+**修复**：ACT 待办/已办列表与分页 SQL 追加 `, r.ID_ DESC` / `, h.ID_ DESC`；
+扩展段分页 `selectExtPage` 追加 `orderByDesc(WfExtTask::getId)`。
+（排序只加在分页查询，`countResidue` 复用 `extTaskQuery` 不带额外排序列，避免 count SQL 冗余。）
+
+### 10.8 端到端验证结论（dev，2026-11-09，act 读源）
+
+**数据重置**：备份 `seed_backup_20261109.json` 后清空 20 张实例/任务表
+（`ACT_RE_*`/`ACT_GE_*` 流程定义与部署资源**保留**，否则系统无法发起流程），
+用 `seed_wf_ext_task.py` 批量造数；`verify_seed.py` 精确复现角标/列表判据。
+
+| 项 | 结果 |
+|---|---|
+| 造数规模 | 135 ACT 待办 / 200 ACT 已办 / 110 扩展任务 / 20 装饰行 / 15 会签N:1 / 10 子流程 / 40 公文维度 |
+| 过滤验证 | 草稿 8、测试态 8、逻辑删除 8、装饰行 20 全部正确排除 |
+| `/task/todo` | **165**（135 ACT + 30 扩展）✅ 与 SQL 预期一致 |
+| `/task/done` | **280**（200 ACT + 80 扩展）✅ 与 SQL 预期一致 |
+| 分页 `todo` | 逐页 `[100,65]`，`ZERO_LOSS=True`、`NO_DUP=True`、id 集合 == 全量列表 ✅ |
+| 分页 `done` | 逐页 `[100,100,80]`，`ZERO_LOSS=True`、`NO_DUP=True`、id 集合 == 全量列表 ✅ |
+| DONE 状态分布 | `2:200, 7:20, 8:20, 11:40`（协办/抄送/传阅映射回原 6 态，前端零改动）✅ |
+| TODO 状态分布 | `0:165`（加签协办/退回重提交映射为待办）✅ |
+| `/odoc/todo` / `/odoc/done` | 20 / 20 ✅ |
+| 自由流程 `nodeName` | 20 条 `wf_ext_task.ext_json` 装饰生效 ✅ |
+| 服务日志 | ERROR = 0 ✅ |
+
+**编译/单测**：`mvn -am compile` 全量通过；相关 30 个单测全通过；
+全模块 313 个测试中 311 通过，2 个失败（`WfBpmnDefNodesTest`、
+`WfOperatorResolverMatrixTest`）为**既有失败**，被测类不在本次改动范围。
+
+**脚本与备份**（`springbladeandreact/` 根目录）：
+`seed_wf_ext_task.py`（幂等，备份存在即跳过）、`verify_seed.py`、
+`e2e_final.py`、`seed_backup_20261109.json`（旧数据可恢复）、
+`seed_verified.json` / `seed_expected.json`（预期口径）。
+
+#### 遗留（P6 后续项，非本次范畴）
+
+- A 类台账物理退役：需「创建引擎任务时直写 ACT 业务列」+ 全链路 ID 语义切换。
+- 会签 N:1 原生化（§9.4 方案 X）：本次不改引擎调用方式，仅保证 N:1 守卫两表合并统计不失效。
+- `wf_ext_task` 的 `type=2/4/6` 当前无业务写入点（仅造数构造验证），
+  待对应 OA 语义落地后接入 `circulate`/`addSign`/退回重提交路径。
+- 跨段严格全局时间序：两源分段取数下不保证，如需严格按时间混排，
+  需改造成「两源各自取前 offset+size 后在内存归并」或统一落到单表查询。
 
 
 

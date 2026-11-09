@@ -32,8 +32,11 @@ import org.springframework.stereotype.Component;
  * 故两处由同一个开关统一门控。</p>
  *
  * <p>注意：Nacos {@code blade-workflow-dev.yaml} 若配了该键以 Nacos 为准（届时需同步）。
- * 本开关只管<b>读侧</b>，<b>不控制 {@code wf_task} 的写入</b>——写入退役已<b>暂缓</b>
- * （见 {@code WfTask} 实体类注释的「表退役暂缓」段）。</p>
+ * 本开关只管<b>读侧</b>，<b>不控制 {@code wf_task} 的写入</b>。</p>
+ *
+ * <p><b>【2026-11-09 更新】扩展任务读源已切表</b>：扩展任务（协办/抄送/传阅/已读/退回重提交）
+ * 已迁至 {@code wf_ext_task}，本开关的语义变为「<b>是否读 wf_ext_task 的扩展任务段</b>」。
+ * 开关名与配置键保留不变（避免配置漂移），生产仍须保持 {@code true}，否则扩展任务会从列表消失。</p>
  */
 @Component
 public class WfTaskResidueProperties {

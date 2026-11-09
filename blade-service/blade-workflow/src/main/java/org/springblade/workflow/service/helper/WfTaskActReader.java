@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.workflow.config.WfTaskResidueProperties;
 import org.springblade.workflow.dto.WfTaskListFilter;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.entity.WfExtTask;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.vo.WfTaskVO;
@@ -54,17 +55,28 @@ public class WfTaskActReader {
     private String taskReadSource;
 
     /**
-     * blade 扩展任务的状态集合（协办7/抄送8/传阅11）的 SQL 片段。
+     * 扩展任务读源（去 wf_ 表 · P6 退役第一台阶，2026-11-09）。
      *
-     * <p>这三类是 blade 业务产物，Flowable 引擎无原生物 → {@code ACT_*} 表达不了
-     * → 读源=act 时只能从 {@code wf_task} 取（抄送历史更是以 wf_task 行为权威存储）。
-     * 故「读 ACT + 读扩展任务」是<b>功能需要</b>，不是「兜底残留」。</p>
+     * <p>blade 扩展任务（协办/抄送/传阅/已读/退回重提交）已迁至 {@code wf_ext_task}，
+     * 列表与角标的「扩展任务段」改由本表读取，不再回读 {@code wf_task}。
+     * 判据用不可变的 {@code type}（语义类别）+ 自身 {@code status}，与原
+     * {@code wf_task.status IN (7,8,11) OR engine_task_id 为空} 等价：</p>
+     * <ul>
+     *   <li>待办段：{@code type IN (2,6) AND status = 0}（加签协办/退回重提交）；</li>
+     *   <li>已办段：{@code type IN (1,3,4,5)}（协办/抄送/传阅/已读，未读也进已办侧，
+     *       与原 status=7/8/11 行为一致）；</li>
+     *   <li>两段都排除 {@code type=7}（自由流程步骤名装饰行，非列表条目）。</li>
+     * </ul>
+     *
+     * <p><b>裸 SQL 纪律</b>：{@code wf_ext_task} 虽 extends TenantEntity，但 JdbcTemplate
+     * 绕过租户插件与 {@code @TableLogic}，故必须显式写 {@code is_deleted = 0} 与租户条件。</p>
      */
-    private static final String EXT_TASK_STATUS_SQL =
-        WfTask.STATUS_COADJUTANT + "," + WfTask.STATUS_CIRCULATE + "," + WfTask.STATUS_READ;
+    private static final String EXT_TODO_TYPE_SQL = WfExtTask.TODO_TYPE_SQL;
+    private static final String EXT_DONE_TYPE_SQL = WfExtTask.DONE_ONLY_TYPE_SQL;
+    private static final String EXT_DECORATION_TYPE = String.valueOf(WfExtTask.TYPE_DECORATION);
 
     /**
-     * 「wf_task 兜底残留合并」开关（去 wf_ 表 · P6 退役第一台阶）。
+     * 「读 wf_ext_task 的扩展任务」开关（去 wf_ 表 · P6 退役第一台阶）。
      *
      * <p>角标计数与列表口径<b>必须一致</b>：本方法自带残留兜底计数，若只关列表不关角标，
      * 会出现「角标 25、列表只有 24」的割裂。故与 {@code WfTaskServiceImpl#list/page}
@@ -147,7 +159,9 @@ public class WfTaskActReader {
         appendActTenant(sql, args, "r");
         appendInstanceFilter(sql, args, "p", f);
         appendTimeRange(sql, args, "r", "CREATE_TIME_", f);
-        sql.append(" ORDER BY r.CREATE_TIME_ DESC");
+        // 二级排序 ID_ 保证分页稳定：同一时刻创建的任务若只按 CREATE_TIME_ 排序，
+        // LIMIT/OFFSET 在不同页可能返回相同行（造数实测 135 条同时间待办重叠 35 条）。
+        sql.append(" ORDER BY r.CREATE_TIME_ DESC, r.ID_ DESC");
         return jdbcTemplate.query(sql.toString(), (rs, i) -> {
             WfTaskVO vo = new WfTaskVO();
             fillCommon(vo, rs);
@@ -182,7 +196,7 @@ public class WfTaskActReader {
         appendInstanceFilter(sql, args, "p", f);
         appendTimeRange(sql, args, "r", "CREATE_TIME_", f);
         appendStatusFilter(sql, args, "r", f, true);
-        sql.append(" ORDER BY r.CREATE_TIME_ DESC LIMIT ? OFFSET ?");
+        sql.append(" ORDER BY r.CREATE_TIME_ DESC, r.ID_ DESC LIMIT ? OFFSET ?");
         args.add(size);
         args.add(offset);
         return jdbcTemplate.query(sql.toString(), (rs, i) -> {
@@ -235,7 +249,7 @@ public class WfTaskActReader {
         appendActTenant(sql, args, "h");
         appendInstanceFilter(sql, args, "p", f);
         appendTimeRange(sql, args, "h", "END_TIME_", f);
-        sql.append(" ORDER BY h.END_TIME_ DESC");
+        sql.append(" ORDER BY h.END_TIME_ DESC, h.ID_ DESC");
         return jdbcTemplate.query(sql.toString(), (rs, i) -> {
             WfTaskVO vo = new WfTaskVO();
             fillCommon(vo, rs);
@@ -266,7 +280,7 @@ public class WfTaskActReader {
         appendInstanceFilter(sql, args, "p", f);
         appendTimeRange(sql, args, "h", "END_TIME_", f);
         appendStatusFilter(sql, args, "h", f, false);
-        sql.append(" ORDER BY h.END_TIME_ DESC LIMIT ? OFFSET ?");
+        sql.append(" ORDER BY h.END_TIME_ DESC, h.ID_ DESC LIMIT ? OFFSET ?");
         args.add(size);
         args.add(offset);
         return jdbcTemplate.query(sql.toString(), (rs, i) -> {
@@ -427,70 +441,45 @@ public class WfTaskActReader {
         appendActTenant(doneSql, doneArgs, null);
         long doneAct = countOne(doneSql.toString(), doneArgs.toArray());
 
-        // ③ 兜底：ACT 表达不了的 wf_task 行。主查询与子查询【同口径带租户】，避免两侧口径不一致导致漏算/多算。
+        // ③ 扩展任务段：读 wf_ext_task（去 wf_ 表 · 2026-11-09）。
         //
-        // 【残留合并开关】关闭时（纯 ACT 单源）：整段跳过，角标只数 ACT_*。
-        //   必须与列表侧（WfTaskServiceImpl#list/page）同开关，否则会出现
-        //   「角标 25、列表只有 24」的割裂 —— 角标与列表必须同口径。
+        // 【扩展任务开关】关闭时（纯 ACT 单源）：整段跳过，角标只数 ACT_*。
+        //   必须与列表侧（WfTaskServiceImpl#list/page 的 extTaskQuery）同开关、同 type 判据，
+        //   否则会出现「角标 25、列表只有 24」的割裂。
+        //
+        // 【裸 SQL 纪律】JdbcTemplate 绕过 MyBatis-Plus 的 @TableLogic 与租户插件，
+        //   故必须显式 is_deleted = 0 与 tenant_id 条件（appendWfTenant 别名 t）。
         long todoResidue = 0L;
         long doneResidue = 0L;
         if (residueMerge.isEnabled()) {
-            StringBuilder ruSub = new StringBuilder("SELECT BIZ_TASK_ID_ FROM ACT_RU_TASK "
-                + "WHERE BIZ_ASSIGNEE_ = ? AND (IS_TEST_ = 0 OR IS_TEST_ IS NULL)");
-            List<Object> ruArgs = new ArrayList<>();
-            ruArgs.add(a);
-            appendActTenant(ruSub, ruArgs, null);
-            ruSub.append(" AND BIZ_TASK_ID_ IS NOT NULL");
-
-            StringBuilder todoResSql = new StringBuilder("SELECT COUNT(*) FROM wf_task t "
+            // 待办段：可办理扩展待办（加签协办/退回重提交），且自身 status=0
+            StringBuilder todoResSql = new StringBuilder("SELECT COUNT(*) FROM wf_ext_task t "
                 + "WHERE t.assignee = ? AND t.status = 0 AND t.is_test = 0"
-                // ⚠️ 裸 SQL 必须显式过滤逻辑删除：wf_task extends TenantEntity（is_deleted 带 @TableLogic），
-                //   MyBatis-Plus 只对 Mapper 查询自动追加 is_deleted=0，JdbcTemplate 裸 SQL 不会。
-                //   漏掉 → 已删除的合成待办被计入角标，而列表侧（Mapper）自动过滤 → 「角标 12、列表 11」的割裂。
                 + " AND t.is_deleted = 0"
-                // 【精确判据 · ④】只计「非引擎任务本体」：blade 扩展任务(7/8/11) + 无引擎任务的合成待办。
-                //   旧口径是「ACT 未覆盖」（兜底），会把任何漏双写的行都算进来 → 掩盖真实覆盖率缺口。
-                + " AND (t.status IN (" + EXT_TASK_STATUS_SQL + ") "
-                + "OR t.engine_task_id IS NULL OR t.engine_task_id = '')"
-                // 排重：已被 ACT 覆盖的业务任务ID 不重复计（否则与 ACT 段双计 → 角标虚高）
-                + " AND t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_RU_TASK WHERE BIZ_TASK_ID_ IS NOT NULL)"
+                + " AND t.type IN (" + EXT_TODO_TYPE_SQL + ")"
+                + " AND t.type <> " + EXT_DECORATION_TYPE
+                // 扩展任务与 ACT 结构性无交集（引擎无原生物），无需 ACT 排重；
+                // 列表侧 extTaskQuery 采用同一口径，保证角标与列表条数一致。
                 // 【草稿移出待办 · 方案 A】排除草稿实例的合成待办，与列表侧同口径
-                // （否则角标含草稿、待办列表不含 → 「角标 25、列表 24」的割裂）
                 + " AND NOT EXISTS (SELECT 1 FROM wf_instance i WHERE i.id = t.inst_id "
                 + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0)");
             List<Object> todoResArgs = new ArrayList<>();
             todoResArgs.add(assignee);
             appendWfTenant(todoResSql, todoResArgs, "t");
-            todoResSql.append(" AND t.id NOT IN (").append(ruSub).append(")");
-            todoResArgs.addAll(ruArgs);
             todoResidue = countOne(todoResSql.toString(), todoResArgs.toArray());
 
-            StringBuilder hiSub = new StringBuilder("SELECT BIZ_TASK_ID_ FROM ACT_HI_TASKINST "
-                + "WHERE BIZ_ASSIGNEE_ = ? AND (IS_TEST_ = 0 OR IS_TEST_ IS NULL) "
-                + "AND END_TIME_ IS NOT NULL");
-            List<Object> hiArgs = new ArrayList<>();
-            hiArgs.add(a);
-            appendActTenant(hiSub, hiArgs, null);
-            hiSub.append(" AND BIZ_TASK_ID_ IS NOT NULL");
-
-            // 与 WfTaskServiceImpl.done() 的 statuses（2,4,6,7,8,11）同口径，避免角标与列表不一致
-            StringBuilder doneResSql = new StringBuilder("SELECT COUNT(*) FROM wf_task t "
-                + "WHERE t.assignee = ? AND t.status IN (2,4,6,7,8,11) AND t.is_test = 0"
-                // ⚠️ 同 todoResSql：裸 SQL 必须显式 is_deleted = 0（逻辑删除）
+            // 已办段：协办/抄送/传阅/已读（未读也进已办侧，与原 status=7/8/11 行为一致）
+            StringBuilder doneResSql = new StringBuilder("SELECT COUNT(*) FROM wf_ext_task t "
+                + "WHERE t.assignee = ? AND t.is_test = 0"
                 + " AND t.is_deleted = 0"
-                // 【精确判据 · ④】同 todoResSql：只计「非引擎任务本体」，旧口径会掩盖覆盖率缺口
-                + " AND (t.status IN (" + EXT_TASK_STATUS_SQL + ") "
-                + "OR t.engine_task_id IS NULL OR t.engine_task_id = '')"
-                // 排重：已被 ACT 覆盖的业务任务ID 不重复计（否则与 ACT 段双计 → 角标虚高）
-                + " AND t.id NOT IN (SELECT BIZ_TASK_ID_ FROM ACT_HI_TASKINST WHERE BIZ_TASK_ID_ IS NOT NULL)"
-                // 【草稿移出待办 · 方案 A】草稿不会有已办行，此处仅为口径对称、防止将来出现草稿已办态
+                + " AND t.type IN (" + EXT_DONE_TYPE_SQL + ")"
+                + " AND t.type <> " + EXT_DECORATION_TYPE
+                // 【草稿移出待办 · 方案 A】口径对称，防止将来出现草稿已办态
                 + " AND NOT EXISTS (SELECT 1 FROM wf_instance i WHERE i.id = t.inst_id "
                 + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0)");
             List<Object> doneResArgs = new ArrayList<>();
             doneResArgs.add(assignee);
             appendWfTenant(doneResSql, doneResArgs, "t");
-            doneResSql.append(" AND t.id NOT IN (").append(hiSub).append(")");
-            doneResArgs.addAll(hiArgs);
             doneResidue = countOne(doneResSql.toString(), doneResArgs.toArray());
         }
 
@@ -498,6 +487,28 @@ public class WfTaskActReader {
         r.put("todo", todoAct + todoResidue);
         r.put("done", doneAct + doneResidue);
         return r;
+    }
+
+    /**
+     * 按 {@code BIZ_TASK_ID_}（blade 业务任务ID）反查引擎任务ID {@code ID_}。
+     *
+     * <p>用于审批意见/签章双写等「只有 wfTaskId、需要 engineTaskId」的链路，
+     * 使其不再依赖 {@code wf_task.engine_task_id}（去 wf_ 表 · 2026-11-09）。
+     * 先查运行态 {@code ACT_RU_TASK}，再查历史 {@code ACT_HI_TASKINST}；查不到返回 null。</p>
+     */
+    public String findEngineTaskIdByBizId(Long bizTaskId) {
+        if (bizTaskId == null) {
+            return null;
+        }
+        String id = String.valueOf(bizTaskId);
+        List<String> ru = jdbcTemplate.queryForList(
+            "SELECT ID_ FROM ACT_RU_TASK WHERE BIZ_TASK_ID_ = ? LIMIT 1", String.class, id);
+        if (!ru.isEmpty()) {
+            return ru.get(0);
+        }
+        List<String> hi = jdbcTemplate.queryForList(
+            "SELECT ID_ FROM ACT_HI_TASKINST WHERE BIZ_TASK_ID_ = ? LIMIT 1", String.class, id);
+        return hi.isEmpty() ? null : hi.get(0);
     }
 
     /**

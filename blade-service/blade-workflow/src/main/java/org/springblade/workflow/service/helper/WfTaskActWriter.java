@@ -102,13 +102,29 @@ public class WfTaskActWriter {
             return;
         }
         String engineTaskId = task.getEngineTaskId();
-        // 会签/或签/依次：同一引擎任务对应 N 条 wf_task（每办理人一条），ACT 单 row 无法表达，
+        // 会签/或签/依次：同一引擎任务对应 N 条 blade 任务（每办理人一条），ACT 单 row 无法表达，
         // 按人覆盖写会互相踩踏 → 保守跳过（详见类注释「会签/或签 N:1 约束」）。
         // 计数失败同样跳过，宁可不写也不能写坏。
+        //
+        // 【去 wf_ 表 · 2026-11-09】扩展任务（协办/抄送/传阅等）已迁至 wf_ext_task，A 类引擎任务
+        // 本体仍在 wf_task。守卫须合并统计两表：排除 type=7（自由流程步骤名装饰行，非任务条目），
+        // 只要同一 engine_task_id 对应超过 1 个 blade 任务就跳过双写，避免踩踏 ACT 单行。
         try {
-            Integer siblings = jdbcTemplate.queryForObject(
+            Integer wfSiblings = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM wf_task WHERE engine_task_id = ?", Integer.class, engineTaskId);
-            if (siblings != null && siblings > 1) {
+            long siblings = wfSiblings == null ? 0 : wfSiblings;
+            // 扩展表统计单独兜底：表未就绪/查询失败时按 0 处理，绝不能因此跳过 A 类双写
+            // （wf_task 是 ACT 业务列的唯一来源，跳过会让列表 status/assignee 断供）。
+            try {
+                Integer extSiblings = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM wf_ext_task WHERE engine_task_id = ? AND type <> 7 AND is_deleted = 0",
+                    Integer.class, engineTaskId);
+                siblings += extSiblings == null ? 0 : extSiblings;
+            } catch (Exception extEx) {
+                log.warn("[WfTaskActWriter] 统计 wf_ext_task 兄弟任务失败（按 0 处理，不阻断双写）. engineTaskId={}, {}",
+                    engineTaskId, extEx.getMessage());
+            }
+            if (siblings > 1) {
                 return;
             }
         } catch (Exception e) {

@@ -15,6 +15,7 @@ import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfFreeNodeMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.mapper.WfExtTaskMapper;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 
@@ -43,6 +44,7 @@ class WfFreeFlowDriverTest {
     @Mock private IProcessService processService;
     @Mock private IWfInstanceService instanceService;
     @Mock private WfTaskMapper taskMapper;
+    @Mock private WfExtTaskMapper extTaskMapper;
 
     @InjectMocks private WfFreeFlowDriver driver;
 
@@ -90,7 +92,7 @@ class WfFreeFlowDriverTest {
     @Test
     void switchOff_disablesFreeFlow() {
         WfFreeFlowDriver off = new WfFreeFlowDriver(manager, resolver, freeNodeMapper,
-            defMapper, processService, instanceService, taskMapper);
+            defMapper, processService, instanceService, taskMapper, extTaskMapper);
         WfInstance inst = new WfInstance();
         inst.setDefId(200L);
         assertThat(off.isEnabled(inst)).isFalse();

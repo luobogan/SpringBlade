@@ -34,6 +34,17 @@ import java.util.Date;
  * {@code doc/md/去wf_表-任务读源翻源上线检查.md} §7.10）。</p>
  * <p><b>注意</b>：{@code WfTaskActWriter} 的 N:1 守卫每次双写都要
  * {@code SELECT COUNT(*) FROM wf_task WHERE engine_task_id = ?} → 本表在被替换前<b>不能物理删除</b>。</p>
+ *
+ * <p><b>【2026-11-09 进展】重启条件 ① 已满足</b>：blade 扩展任务（协办/抄送/传阅/已读/
+ * 退回重提交）与自由流程步骤显示名已一次性迁至 {@link WfExtTask}（表 {@code wf_ext_task}），
+ * 列表与角标的扩展任务段不再读本表。本表职责<b>收敛为「仅引擎任务本体台账」</b>。</p>
+ *
+ * <p><b>为何仍不能停写</b>：{@code WfTaskActWriter.sync} 把本行的
+ * {@code status/is_test/sign_order/view_time/timeout_handled/original_user/assignee/due_time}
+ * 投影到 {@code ACT_RU_TASK}/{@code ACT_HI_TASKINST} 的自定义列，且 {@code BIZ_TASK_ID_}
+ * 是列表 id 与操作链（approve/转办/退回）的契约。停写会让 ACT 业务列断供 →
+ * 列表 status/assignee 为空、角标为 0。彻底退役需另立「创建引擎任务时直写 ACT 业务列」
+ * 的独立改造（P6 后续项），本次不做。</p>
  */
 @Data
 @EqualsAndHashCode(callSuper = true)

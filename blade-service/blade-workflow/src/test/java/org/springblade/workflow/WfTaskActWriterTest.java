@@ -38,6 +38,9 @@ class WfTaskActWriterTest {
 		jdbc = new JdbcTemplate(ds);
 
 		jdbc.execute("CREATE TABLE wf_task (id BIGINT PRIMARY KEY, engine_task_id VARCHAR(64))");
+		// N:1 守卫合并统计两表（去 wf_ 表 · 2026-11-09）
+		jdbc.execute("CREATE TABLE wf_ext_task (id BIGINT PRIMARY KEY, engine_task_id VARCHAR(64), "
+			+ "type INT, is_deleted TINYINT DEFAULT 0)");
 		for (String t : new String[]{"ACT_RU_TASK", "ACT_HI_TASKINST"}) {
 			jdbc.execute("CREATE TABLE " + t + " ("
 				+ "ID_ VARCHAR(64) PRIMARY KEY, BUSINESS_STATUS_ VARCHAR(32), IS_TEST_ TINYINT, "

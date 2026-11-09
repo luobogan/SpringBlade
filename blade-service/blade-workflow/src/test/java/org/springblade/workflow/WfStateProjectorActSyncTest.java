@@ -44,6 +44,9 @@ class WfStateProjectorActSyncTest {
 		ds.setUrl("jdbc:h2:mem:wf_proj_" + System.nanoTime() + ";DB_CLOSE_DELAY=-1");
 		jdbc = new JdbcTemplate(ds);
 		jdbc.execute("CREATE TABLE wf_task (id BIGINT PRIMARY KEY, engine_task_id VARCHAR(64))");
+		// N:1 守卫合并统计两表（去 wf_ 表 · 2026-11-09）
+		jdbc.execute("CREATE TABLE wf_ext_task (id BIGINT PRIMARY KEY, engine_task_id VARCHAR(64), "
+			+ "type INT, is_deleted TINYINT DEFAULT 0)");
 		jdbc.execute("CREATE TABLE ACT_HI_TASKINST (ID_ VARCHAR(64) PRIMARY KEY, "
 			+ "BUSINESS_STATUS_ VARCHAR(32), IS_TEST_ TINYINT, ORIGINAL_USER_ VARCHAR(64), "
 			+ "SIGN_ORDER_ INT, VIEW_TIME_ TIMESTAMP, TIMEOUT_HANDLED_ TINYINT, DUE_DATE_ TIMESTAMP, "

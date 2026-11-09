@@ -62,6 +62,8 @@ import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.mapper.WfExtTaskMapper;
+import org.springblade.workflow.entity.WfExtTask;
 import org.springblade.workflow.resolver.WfOperatorResolver;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.reject.WfRejectManager;
@@ -146,6 +148,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
     private final WfInstanceMapper instanceMapper;
     private final WfTaskMapper taskMapper;
+    /** 扩展任务权威存储（协办/征询意见等非阻塞待办） */
+    private final WfExtTaskMapper extTaskMapper;
     private final WfApprovalLogMapper logMapper;
     private final WfFormSnapshotMapper snapshotMapper;
     private final WfProcessDefinitionMapper defMapper;
@@ -3355,7 +3359,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         }
     }
 
-    /** 给本节点的协办/征询意见人生成「协办」待办（status=7，非阻塞；测试态跳过） */
+    /** 给本节点的协办/征询意见人生成「协办」待办（非阻塞；测试态跳过） */
     private void createCoadjutantTasks(WfInstance inst, TaskVO t, String nodeKey) {
         if (inst.getIsTest() != null && inst.getIsTest() == 1) {
             return;
@@ -3367,38 +3371,40 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
             }
             // 按（实例+节点+协办人）去重，而非按引擎任务去重 —— 引擎多实例下同一节点有多条引擎任务，
             // 若按引擎任务去重会产生重复协办待办；按节点去重保证每个协办人每节点仅一条。
-            long coadExists = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-                .eq(WfTask::getInstId, inst.getId())
-                .eq(WfTask::getNodeKey, nodeKey)
-                .eq(WfTask::getAssignee, uid)
-                .eq(WfTask::getStatus, WfTask.STATUS_COADJUTANT));
+            long coadExists = extTaskMapper.selectCount(Wrappers.<WfExtTask>lambdaQuery()
+                .eq(WfExtTask::getInstId, inst.getId())
+                .eq(WfExtTask::getNodeKey, nodeKey)
+                .eq(WfExtTask::getAssignee, uid)
+                .eq(WfExtTask::getType, WfExtTask.TYPE_COADJUTANT)
+                .eq(WfExtTask::getStatus, WfExtTask.STATUS_PENDING));
             if (coadExists > 0) {
                 continue;
             }
-            WfTask task = new WfTask();
+            WfExtTask task = new WfExtTask();
             task.setInstId(inst.getId());
             task.setEngineTaskId(t.getTaskId());
             task.setNodeKey(nodeKey);
             task.setAssignee(uid);
+            task.setType(WfExtTask.TYPE_COADJUTANT);
+            task.setStatus(WfExtTask.STATUS_PENDING);
+            task.setTitle(inst.getTitle());
             task.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
-            task.setStatus(WfTask.STATUS_COADJUTANT);
             task.setReceiveTime(new Date());
-            taskMapper.insert(task);
-            taskActWriter.sync(task);
+            extTaskMapper.insert(task);
         }
     }
 
     /** 关闭某节点残留的协办/征询待办（节点推进/归档时调用，避免孤儿待办） */
     private void closeCoadjutantTasks(Long instId, String nodeKey) {
-        List<WfTask> pending = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getNodeKey, nodeKey)
-            .eq(WfTask::getStatus, WfTask.STATUS_COADJUTANT));
-        for (WfTask tk : pending) {
-            tk.setStatus(WfTask.STATUS_DONE);
+        List<WfExtTask> pending = extTaskMapper.selectList(Wrappers.<WfExtTask>lambdaQuery()
+            .eq(WfExtTask::getInstId, instId)
+            .eq(WfExtTask::getNodeKey, nodeKey)
+            .eq(WfExtTask::getType, WfExtTask.TYPE_COADJUTANT)
+            .eq(WfExtTask::getStatus, WfExtTask.STATUS_PENDING));
+        for (WfExtTask tk : pending) {
+            tk.setStatus(WfExtTask.STATUS_DONE);
             tk.setOperateTime(new Date());
-            taskMapper.updateById(tk);
-            taskActWriter.sync(tk);
+            extTaskMapper.updateById(tk);
         }
     }
 

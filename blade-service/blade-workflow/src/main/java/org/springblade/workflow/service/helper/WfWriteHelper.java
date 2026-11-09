@@ -54,6 +54,8 @@ public class WfWriteHelper {
     private final WfApprovalLogMapper logMapper;
     /** 任务业务列双写收口器（去 wf_ 表写侧，方案 A1：扩展 ACT_RU_TASK/ACT_HI_TASKINST） */
     private final WfTaskActWriter taskActWriter;
+    /** ACT 任务读取器（按 BIZ_TASK_ID_ 反查引擎任务ID） */
+    private final WfTaskActReader taskActReader;
     private final IProcessService processService;
     /** 去 wf_ 表预热：生命周期状态同步写回原生 ACT_HI_PROCINST（开关关闭时无操作） */
     private final WfInstanceActWriter actWriter;
@@ -308,15 +310,25 @@ public class WfWriteHelper {
             String procInstId = inst.getEngineInstId();
             String engineTaskId = null;
             if (wfTaskId != null) {
-                WfTask wfTask = taskMapper.selectById(wfTaskId);
-                if (wfTask != null) {
-                    engineTaskId = wfTask.getEngineTaskId();
-                    // 合成待办（退回发起人重提交等）engine_task_id 为空串而非 NULL：
-                    // 空串传给 AddCommentCmd 会按 taskId 去查任务 → FlowableObjectNotFoundException（被吞，评论静默丢失），
-                    // 故空串归一为 null（AddCommentCmd 仅对非 null taskId 做任务校验）。
-                    if (engineTaskId != null && engineTaskId.isBlank()) {
-                        engineTaskId = null;
+                // 【去 wf_ 表 · 2026-11-09】优先按 BIZ_TASK_ID_ 反查 ACT 取引擎任务ID，
+                // 不再依赖 wf_task.engine_task_id；查不到（如台账尚未投影）再回退台账。
+                try {
+                    engineTaskId = taskActReader.findEngineTaskIdByBizId(wfTaskId);
+                } catch (Exception e) {
+                    log.warn("[WfWriteHelper] BIZ_TASK_ID_ 反查引擎任务失败，回退 wf_task 台账. wfTaskId={}, {}",
+                        wfTaskId, e.getMessage());
+                }
+                if (engineTaskId == null) {
+                    WfTask wfTask = taskMapper.selectById(wfTaskId);
+                    if (wfTask != null) {
+                        engineTaskId = wfTask.getEngineTaskId();
                     }
+                }
+                // 合成待办（退回发起人重提交等）engine_task_id 为空串而非 NULL：
+                // 空串传给 AddCommentCmd 会按 taskId 去查任务 → FlowableObjectNotFoundException（被吞，评论静默丢失），
+                // 故空串归一为 null（AddCommentCmd 仅对非 null taskId 做任务校验）。
+                if (engineTaskId != null && engineTaskId.isBlank()) {
+                    engineTaskId = null;
                 }
             }
             Map<String, Object> payload = new LinkedHashMap<>(8);

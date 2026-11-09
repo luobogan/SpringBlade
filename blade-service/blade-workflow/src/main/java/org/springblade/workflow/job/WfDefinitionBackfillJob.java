@@ -79,7 +79,12 @@ import java.util.regex.Pattern;
  *
  * <p><b>租户</b>：受 MyBatis-Plus 租户插件约束，本作业按当前租户上下文读取/写入；
  * 跨租户全量迁移请在对应租户上下文下执行，或后续扩展为遍历租户（见 {@code doc/md/定义期回填与双轨对账方案.md}）。</p>
+ *
+ * @deprecated <b>2026-11-09 已弃用</b>：数据回填/双轨对账属「迁移过渡能力」，用户决策一次性完成、不做双写与存量迁移，
+ *     故本作业不再作为常规手段使用。代码保留仅供追溯；定时回填开关
+ *     {@code blade.workflow.backfill.enabled} 默认关闭，请勿在生产开启。
  */
+@Deprecated
 @Slf4j
 @Component
 @RequiredArgsConstructor

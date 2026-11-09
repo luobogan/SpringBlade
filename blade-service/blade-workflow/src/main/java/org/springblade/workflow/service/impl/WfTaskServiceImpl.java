@@ -25,6 +25,7 @@ import org.springblade.workflow.entity.WfNodeLink;
 import org.springblade.workflow.entity.WfNodeOperator;
 import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.entity.WfExtTask;
 import org.springblade.workflow.enums.AdvanceSrc;
 import org.springblade.workflow.exception.WfAccessDeniedException;
 import org.springblade.workflow.mapper.WfApprovalLogMapper;
@@ -34,6 +35,7 @@ import org.springblade.workflow.mapper.WfNodeOperatorMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
 import org.springblade.workflow.mapper.WfSubflowRequestMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.mapper.WfExtTaskMapper;
 import org.springblade.workflow.entity.WfSubflowRequest;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
@@ -124,6 +126,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private static final int MAX_OPERATOR_NAMES = 3;
 
     private final WfTaskMapper taskMapper;
+    /** 扩展任务权威存储（协办/加签协办/抄送/传阅/已读/退回重提交/自由流程步骤） */
+    private final WfExtTaskMapper extTaskMapper;
     private final WfInstanceMapper instanceMapper;
     /** 二期 T9：审批完成后把该待办的流程通知回写「已处理」（失败仅记日志，不影响审批事务） */
     private final INoticeClient noticeClient;
@@ -195,20 +199,22 @@ public class WfTaskServiceImpl implements IWfTaskService {
     /**
      * 「blade 扩展任务」的状态集合：协办(7)/抄送(8)/传阅(11)。
      *
-     * <p>这三类是 <b>blade 业务产物</b>，Flowable 引擎无原生物 → {@code ACT_*} 表达不了
-     * → 必须由 {@code wf_task} 承载（抄送历史更是以 wf_task 行为权威存储，见
-     * {@link #circulate} 的注释：identityLink 只是预热）。</p>
+     * @deprecated 2026-11-09 起扩展任务已迁至 {@code wf_ext_task}，列表/角标改按
+     *     {@code WfExtTask.type} 判据读取。本常量仅保留供 {@code wfTaskQuery(extOnly=true)}
+     *     弃用分支追溯，主流程不再使用；请勿据此新增 wf_task 读取逻辑。
      */
+    @Deprecated
     private static final List<Integer> EXT_TASK_STATUSES =
         List.of(WfTask.STATUS_COADJUTANT, WfTask.STATUS_CIRCULATE, WfTask.STATUS_READ);
 
     /**
-     * 抄送/传阅下沉开关（迁移阶段3「双写校验」）：开启后 {@link #circulate} 在写 wf_task(STATUS_CIRCULATE) 的同时，
-     * 复用同一 engineTaskId 调 addUserIdentityLink(..., "circulate")，把抄送关系落到引擎身份关联。默认 false。
-     * <p>identity link 不产生可办任务（符合迁移目标）；但 Flowable 的 ACT_RU_IDENTITYLINK 在任务完成后会被清理，
-     * 历史抄送仍以 wf_task 行作为权威存储，故开启本开关仅做引擎侧关联预热，读侧抄送列表暂仍走 wf_task，
-     * 后续如需引擎侧实时查询再切到 identityLink 查询（需运行时回归）。</p>
+     * 抄送/传阅下沉开关（迁移阶段3「双写校验」）。
+     *
+     * @deprecated 2026-11-09 起「双写校验」不再保留：扩展任务已一次性迁至 {@code wf_ext_task}，
+     *     本开关与引擎 identityLink 预热路径仅保留在 {@link #insertCirculateToWfTaskDeprecated} 供追溯，
+     *     主流程 {@link #circulate} 不再读取它。请勿重新启用（会形成双写）。
      */
+    @Deprecated
     @Value("${blade.workflow.cc-identity-link.enabled:false}")
     private boolean ccIdentityLinkEnabled;
 
@@ -828,30 +834,55 @@ public class WfTaskServiceImpl implements IWfTaskService {
             throw new ServiceException("抄送人不能为空");
         }
         for (Long assignee : dto.getAssignees()) {
-            WfTask cc = new WfTask();
+            // 【去 wf_ 表 · P6 退役第一台阶】扩展任务（抄送）写入 wf_ext_task，不再写 wf_task、不再 sync ACT。
+            // wf_task 收敛为「仅引擎任务本体台账」；列表/角标的扩展任务段改由 wf_ext_task 读取。
+            WfExtTask cc = new WfExtTask();
             cc.setInstId(inst.getId());
             cc.setEngineTaskId(task.getEngineTaskId());
             cc.setNodeKey(task.getNodeKey());
             cc.setAssignee(assignee);
-            cc.setStatus(WfTask.STATUS_CIRCULATE);
+            cc.setType(WfExtTask.TYPE_CIRCULATE);
+            cc.setStatus(WfExtTask.STATUS_PENDING);
+            cc.setOpinion(dto.getOpinion());
             cc.setReceiveTime(new Date());
+            if (inst != null) {
+                cc.setTitle(inst.getTitle());
+            }
             // 标记继承：同 forward（V10 / C2）—— 抄送任务会进入被抄送人的「已办」（V9）
             cc.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
-            taskMapper.insert(cc);
-            taskActWriter.sync(cc);
-            // 迁移阶段3 双写校验：复用同一 engineTaskId 把抄送关系落到引擎身份关联（不产生可办任务）。
-            // 失败仅记日志、不阻断业务；读侧抄送列表仍走 wf_task，本调用仅做引擎侧关联预热。
-            if (ccIdentityLinkEnabled && task.getEngineTaskId() != null) {
-                try {
-                    processService.addUserIdentityLink(task.getEngineTaskId(), String.valueOf(assignee), "circulate");
-                } catch (Exception e) {
-                    log.warn("[WfTaskServiceImpl] 抄送 identity link 写入引擎失败（忽略）: {}", e.getMessage());
-                }
-            }
+            extTaskMapper.insert(cc);
         }
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_CIRCULATE, dto.getOpinion());
         return true;
+    }
+
+    /**
+     * 「抄送写 wf_task + 引擎 identityLink 预热」旧路径。
+     *
+     * @deprecated 2026-11-09 起扩展任务（抄送）已迁至 {@code wf_ext_task}，本方法不再被调用，
+     *     仅保留供追溯/回滚参考。不要恢复调用：会与 {@link #circulate} 形成双写，
+     *     且 {@code taskActWriter.sync} 会把抄送行的 BIZ_TASK_ID_ 投影覆盖宿主引擎任务。
+     */
+    @Deprecated
+    private void insertCirculateToWfTaskDeprecated(WfTask host, WfInstance inst, Long assignee) {
+        WfTask cc = new WfTask();
+        cc.setInstId(inst.getId());
+        cc.setEngineTaskId(host.getEngineTaskId());
+        cc.setNodeKey(host.getNodeKey());
+        cc.setAssignee(assignee);
+        cc.setStatus(WfTask.STATUS_CIRCULATE);
+        cc.setReceiveTime(new Date());
+        cc.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
+        taskMapper.insert(cc);
+        taskActWriter.sync(cc);
+        if (ccIdentityLinkEnabled && host.getEngineTaskId() != null) {
+            try {
+                processService.addUserIdentityLink(host.getEngineTaskId(), String.valueOf(assignee), "circulate");
+            } catch (Exception e) {
+                log.warn("[WfTaskServiceImpl] 抄送 identity link 写入引擎失败（忽略）: {}", e.getMessage());
+            }
+        }
     }
 
     @Override
@@ -885,7 +916,22 @@ public class WfTaskServiceImpl implements IWfTaskService {
         }
         WfTask task = resolveTask(taskId);
         if (task == null) {
-            return false;
+            // 【去 wf_ 表】扩展任务（协办/抄送/传阅/已读）的 id 不在 wf_task，改由 wf_ext_task 解析。
+            // 打开抄送/传阅条目时标记「已读」：viewTime 只记首次，status 置为已读(1)。
+            WfExtTask ext = resolveExtTask(taskId);
+            if (ext == null) {
+                return false;
+            }
+            WfAuthUtil.requireSelfOrAdmin(ext.getAssignee(), "标记已读");
+            if (ext.getViewTime() != null
+                && ext.getStatus() != null && ext.getStatus() != WfExtTask.STATUS_PENDING) {
+                return true;
+            }
+            WfExtTask patch = new WfExtTask();
+            patch.setId(taskId);
+            patch.setViewTime(new Date());
+            patch.setStatus(WfExtTask.STATUS_DONE);
+            return extTaskMapper.updateById(patch) > 0;
         }
         // 记录级鉴权：只有该任务办理人本人（或流程管理员）打开办理页才会写「已查看」
         WfAuthUtil.requireOperateTask(task, "标记查看");
@@ -912,11 +958,33 @@ public class WfTaskServiceImpl implements IWfTaskService {
         }
         WfTask task = resolveTask(taskId);
         if (task == null) {
-            throw new ServiceException("任务不存在");
+            // 【去 wf_ 表】扩展任务条目：从 wf_ext_task 解析并做同等记录级鉴权
+            WfExtTask ext = resolveExtTask(taskId);
+            if (ext == null) {
+                throw new ServiceException("任务不存在");
+            }
+            WfAuthUtil.requireSelfOrAdmin(ext.getAssignee(), "查看");
+            return toVO(ext);
         }
         // 记录级鉴权：仅任务办理人本人（或流程管理员）可见，防越权探查他人任务
         WfAuthUtil.requireOperateTask(task, "查看");
         return toVO(task);
+    }
+
+    /**
+     * 扩展任务解析：按 {@code wf_ext_task.id} 查，排除 type=7 装饰行（非列表条目）。
+     *
+     * <p>列表 VO 的 id 对扩展任务即为 {@code wf_ext_task.id}；操作接口（detail/markViewed）
+     * 先按 A 类 wf_task 解析，查不到再走此处，保证前端点击扩展任务条目不报「任务不存在」。</p>
+     */
+    private WfExtTask resolveExtTask(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
+        return extTaskMapper.selectOne(Wrappers.<WfExtTask>lambdaQuery()
+            .eq(WfExtTask::getId, taskId)
+            .ne(WfExtTask::getType, WfExtTask.TYPE_DECORATION)
+            .last("LIMIT 1"));
     }
 
     @Override
@@ -961,14 +1029,18 @@ public class WfTaskServiceImpl implements IWfTaskService {
     }
 
     /**
-     * 待办/已办服务端分页。
+     * 待办/已办服务端分页（两源分段取数，2026-11-09 修正）。
      *
-     * <p>两源归并（ACT 主表 + wf_task 兜底残留）采用文档 8.3.2 口径 a 的修正版：
-     * {@code total} 由两源各自<b>同口径 count 相加</b>，绝不使用「减 seen」的错误公式
-     * （seen 只是当前页 id，用于排重，不能用于全量计数）。</p>
+     * <p>{@code total} = ACT 段 count + 扩展任务段 count（同口径相加），绝不使用
+     * 「减 seen」的错误公式（seen 只是当前页 id，不能用于全量计数）。</p>
      *
-     * <p>残留行只在<b>第一页</b>并入候选集，归并排序后截前 {@code size} 行；
-     * 深页仅取 ACT 主表。dev 实测残留 = 0（5.4.1），生产造数需验证两源有交集的用例。</p>
+     * <p><b>分段取数</b>：把全量结果视为「ACT 段 [0, actTotal) + 扩展任务段
+     * [actTotal, total)」，按全局 {@code offset} 决定本页从各段取多少行，
+     * 保证<b>不丢行、不重复、深页可翻到扩展任务</b>。</p>
+     *
+     * <p><b>修正背景</b>：旧实现「扩展任务只在第一页并入、深页 offset 仍按 ACT 主表算」
+     * 在造数验证中确认会丢单（done total=280、pageSize=200 时 80 条扩展任务全部翻不到）。
+     * 代价是跨段不保证严格全局时间序（两源各自有序），但列表条数与 id 集合完整。</p>
      */
     private IPage<WfTaskVO> page(Long assignee, WfTaskListFilter filter, long current, long size, boolean onlyTodo) {
         Long target = WfAuthUtil.resolveSelfIfNotAdmin(assignee);
@@ -990,43 +1062,39 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 long actTotal = onlyTodo
                     ? taskActReader.countTodoFromAct(target, f)
                     : taskActReader.countDoneFromAct(target, f);
-                List<WfTaskVO> candidates = new ArrayList<>(onlyTodo
-                    ? taskActReader.todoPageFromAct(target, f, offset, pageSize)
-                    : taskActReader.donePageFromAct(target, f, offset, pageSize));
-                // 【③ 第 8 项】自由流程步骤名从 wf_task.ext_json 回读覆盖（ACT 无该列），与 toVO 同口径
-                decorateFreeFlowNames(candidates);
-
-                // 兜底残留：ACT 单行表达不了的（存量 N:1 会签 / 孤儿 / 合成待办）。
-                // 排除条件下推进 count SQL，与列表查询同口径，避免重复计数。
-                //
-                // 【残留合并开关】关闭时（纯 ACT 单源）：完全不查 wf_task，residueTotal 恒 0，
-                //   故 total 严格等于 actTotal —— 消除「actTotal + residueTotal」与实际可翻行数的
-                //   错位（即「残留只在第一页并入、深页取 ACT 连续切片」导致的深页漏行）。
+                // 【去 wf_ 表 · 2026-11-09】扩展任务段：数据源由 wf_task 换成 wf_ext_task，
+                // 与 countFromAct 的扩展段严格同口径（type 判据），保证角标与列表一致。
                 boolean mergeResidue = residueMerge.isEnabled();
                 long residueTotal = mergeResidue ? countResidue(target, f, onlyTodo) : 0L;
-                if (residueTotal > 0) {
-                    // 口径 a 的已知取舍：残留只在第一页并入，深页 offset 仍按 ACT 主表计算，
-                    // 两源有交集时深页可能重复/漏行。dev 实测残留 = 0，生产需造数验证该场景。
-                    log.warn("[blade-workflow] 分页存在 wf_task 兜底残留 {} 条，深页归并口径需造数验证. assignee={}",
-                        residueTotal, target);
+                long total = actTotal + residueTotal;
+                result.setTotal(total);
+
+                // 【两源分段取数】把全量结果看成「ACT 段 [0, actTotal) + 扩展段 [actTotal, total)」，
+                // 按全局 offset 决定本页从哪一段取、取多少。旧实现「扩展任务只在第一页并入」会让
+                // 深页永远翻不到扩展任务（造数实测：done total=280 但 pageSize=200 时 80 条扩展全丢）。
+                List<WfTaskVO> records = new ArrayList<>();
+                long actLimit = Math.min(pageSize, Math.max(0L, actTotal - offset));
+                if (actLimit > 0) {
+                    List<WfTaskVO> actRows = onlyTodo
+                        ? taskActReader.todoPageFromAct(target, f, offset, actLimit)
+                        : taskActReader.donePageFromAct(target, f, offset, actLimit);
+                    // 【③ 第 8 项】自由流程步骤名从 wf_ext_task.ext_json 回读覆盖（ACT 无该列）
+                    decorateFreeFlowNames(actRows);
+                    records.addAll(actRows);
                 }
-                if (mergeResidue && pageNo == 1 && residueTotal > 0) {
-                    java.util.Set<Long> seen = candidates.stream().map(WfTaskVO::getId)
-                        .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
-                    List<WfTask> residue = taskMapper.selectList(
-                        wfTaskQuery(target, f.getStatuses(), f, seen, true));
-                    for (WfTask t : residue) {
-                        candidates.add(toVO(t));
+                long extOffset = Math.max(0L, offset - actTotal);
+                long extLimit = Math.min(pageSize - records.size(), Math.max(0L, residueTotal - extOffset));
+                if (mergeResidue && extLimit > 0) {
+                    List<WfExtTask> extRows = selectExtPage(target, f, onlyTodo, extOffset, extLimit);
+                    for (WfExtTask t : extRows) {
+                        records.add(toVO(t));
                     }
                 }
-                candidates.sort(java.util.Comparator.comparing(
+                // 页内按时间倒序（两源各自已有序；跨段严格全局序不是本分页的契约，但不丢行/不重复）
+                records.sort(java.util.Comparator.comparing(
                     v -> onlyTodo ? v.getReceiveTime() : v.getOperateTime(),
                     java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
-                if (candidates.size() > pageSize) {
-                    candidates = new ArrayList<>(candidates.subList(0, (int) pageSize));
-                }
-                result.setRecords(candidates);
-                result.setTotal(actTotal + residueTotal);
+                result.setRecords(records);
                 return result;
             } catch (Exception e) {
                 log.warn("[blade-workflow] 读源=act 分页读取失败，降级走 wf_task 分页. assignee={}, {}",
@@ -1046,16 +1114,29 @@ public class WfTaskServiceImpl implements IWfTaskService {
         return result;
     }
 
-    /** 兜底残留条数：把「ACT 已覆盖的 BIZ_TASK_ID_」排除条件下推进 count SQL。 */
+    /** 扩展任务段条数：与 {@code countFromAct} 的扩展段严格同口径（type 判据）。 */
     private long countResidue(Long target, WfTaskListFilter f, boolean onlyTodo) {
-        String actTable = onlyTodo ? "ACT_RU_TASK" : "ACT_HI_TASKINST";
-        String actEndCond = onlyTodo ? "" : " AND END_TIME_ IS NOT NULL";
-        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfTask> qw =
-            wfTaskQuery(target, f.getStatuses(), f, null, true);
-        qw.notInSql(WfTask::getId, "SELECT BIZ_TASK_ID_ FROM " + actTable
-            + " WHERE BIZ_TASK_ID_ IS NOT NULL" + actEndCond);
-        Long n = taskMapper.selectCount(qw);
+        Long n = extTaskMapper.selectCount(extTaskQuery(target, f.getStatuses(), f, null, onlyTodo));
         return n == null ? 0L : n;
+    }
+
+    /**
+     * 扩展任务段分页（两源分段取数的第二段）。
+     *
+     * <p>复用 {@link #extTaskQuery} 的全部筛选条件（含 type 判据、草稿/测试态/逻辑删除排除、
+     * 实例维度与时间范围），只追加物理分页，保证与 {@link #countResidue} 条数口径一致。</p>
+     */
+    private List<WfExtTask> selectExtPage(Long target, WfTaskListFilter f, boolean onlyTodo,
+                                          long offset, long limit) {
+        if (limit <= 0) {
+            return java.util.Collections.emptyList();
+        }
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfExtTask> qw =
+            extTaskQuery(target, f.getStatuses(), f, null, onlyTodo);
+        // 二级排序 id 保证 LIMIT/OFFSET 稳定（同一时刻创建的扩展任务不会跨页重叠）
+        qw.orderByDesc(WfExtTask::getId);
+        qw.last("LIMIT " + limit + " OFFSET " + offset);
+        return extTaskMapper.selectList(qw);
     }
 
     // ------------------------------------------------------------------ 私有方法
@@ -1072,24 +1153,20 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     && statuses.get(0) == WfTask.STATUS_TODO;
                 List<WfTaskVO> merged = new ArrayList<>(
                     onlyTodo ? taskActReader.todoFromAct(target, filter) : taskActReader.doneFromAct(target, filter));
-                // 【③ 第 8 项】自由流程步骤名从 wf_task.ext_json 回读覆盖（ACT 无该列），与 toVO 同口径
+                // 【③ 第 8 项】自由流程步骤名从 wf_ext_task.ext_json 回读覆盖（ACT 无该列）
                 decorateFreeFlowNames(merged);
-                // 兜底合并：ACT 单行表达不了的场景仍从 wf_task 取，保证翻源【零丢单】：
-                //   ① 存量 N:1 会签（同一引擎任务多人，ACT 只有一行）—— 主要来源；
-                //   ② 孤儿（引擎侧已无对应任务）；③ 无 engineTaskId 的合成待办（草稿待办）。
-                // 随存量 N:1 自然办结、新会签已是 1:1，兜底贡献逐步趋零，wf_task 才真正退役。
-                // 兜底查询须与原 ACT 路径【同口径】施加筛选（实例维度 + 时间范围），否则会混入未命中筛选的残留行。
-                //
-                // 【残留合并开关】关闭时（纯 ACT 单源）：整段跳过，不查 wf_task。
+                // 【去 wf_ 表 · 2026-11-09】扩展任务段改由 wf_ext_task 读取（协办/抄送/传阅/
+                // 已读/退回重提交），列表不再回读 wf_task。查询施加与 ACT 段同口径的筛选。
                 if (residueMerge.isEnabled()) {
                     java.util.Set<Long> seen = merged.stream().map(WfTaskVO::getId)
                         .filter(v -> v != null).collect(java.util.stream.Collectors.toSet());
-                    List<WfTask> residue = taskMapper.selectList(wfTaskQuery(target, statuses, filter, seen, true));
+                    List<WfExtTask> residue = extTaskMapper.selectList(
+                        extTaskQuery(target, statuses, filter, seen, onlyTodo));
                     if (!residue.isEmpty()) {
-                        for (WfTask t : residue) {
+                        for (WfExtTask t : residue) {
                             merged.add(toVO(t));
                         }
-                        log.info("[blade-workflow] 读源=act 兜底合并 wf_task 残留 {} 条（N:1/孤儿/合成待办）. assignee={}",
+                        log.info("[blade-workflow] 读源=act 合并 wf_ext_task 扩展任务 {} 条. assignee={}",
                             residue.size(), target);
                     }
                 }
@@ -1144,6 +1221,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 一起补进来 → 既掩盖真实覆盖率缺口，又让开关语义变成"应急兜底"。
         // 精确判据只取<b>结构性</b>无法由 ACT 表达的行 → 不掩盖缺口、可长期维护。</p>
         if (extOnly) {
+            // @deprecated 2026-11-09：扩展任务段已改由 extTaskQuery 读 wf_ext_task。
+            // 本分支保留仅为读源=wf 全量回退路径的追溯/回滚，主流程恒传 extOnly=false。
             qw.and(w -> w.in(WfTask::getStatus, EXT_TASK_STATUSES)
                 .or().isNull(WfTask::getEngineTaskId)
                 .or().eq(WfTask::getEngineTaskId, ""));
@@ -1221,6 +1300,143 @@ public class WfTaskServiceImpl implements IWfTaskService {
         return qw;
     }
 
+    /**
+     * 构造 <b>扩展任务段</b>的查询（去 wf_ 表 · 2026-11-09）。
+     *
+     * <p>替代原 {@code wfTaskQuery(extOnly=true)}：数据源由 {@code wf_task} 换成
+     * {@code wf_ext_task}，判据由 {@code status IN (7,8,11) OR engine_task_id 为空}
+     * 换成不可变的 {@code type} 集合 + 自身 {@code status}，与
+     * {@code WfTaskActReader#countFromAct} 的两段 SQL <b>严格同口径</b>（角标必须与列表一致）：</p>
+     * <ul>
+     *   <li>待办段：{@code type IN (2,6) AND status=0}；</li>
+     *   <li>已办段：{@code type IN (1,3,4,5)}（未读也进已办侧，与原 status=7/8/11 一致）；</li>
+     *   <li>两段都排除 {@code type=7}（自由流程步骤名装饰行，非列表条目）。</li>
+     * </ul>
+     *
+     * <p>实例维度/时间/状态筛选与 {@link #wfTaskQuery} 保持同口径，避免 ACT 段与扩展段
+     * 筛选条件不一致导致「total 与记录不符」。租户与 {@code is_deleted=0} 由 MyBatis-Plus
+     * 插件自动追加（本方法走 Mapper，非裸 SQL）。</p>
+     */
+    private com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfExtTask> extTaskQuery(
+        Long target, List<Integer> statuses, WfTaskListFilter filter, java.util.Set<Long> excludeIds,
+        boolean onlyTodo) {
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfExtTask> qw =
+            Wrappers.<WfExtTask>lambdaQuery()
+                .eq(WfExtTask::getAssignee, target)
+                .eq(WfExtTask::getIsTest, 0)
+                .ne(WfExtTask::getType, WfExtTask.TYPE_DECORATION);
+        if (onlyTodo) {
+            qw.in(WfExtTask::getType, WfExtTask.TYPE_ADD_SIGN, WfExtTask.TYPE_RESUBMIT)
+                .eq(WfExtTask::getStatus, WfExtTask.STATUS_PENDING);
+        } else {
+            qw.in(WfExtTask::getType, WfExtTask.TYPE_COADJUTANT, WfExtTask.TYPE_CIRCULATE,
+                WfExtTask.TYPE_READ, WfExtTask.TYPE_READED);
+        }
+        // 草稿实例的待办已由「我的请求」承载，与 wfTaskQuery / countFromAct 同口径排除
+        qw.notExists("SELECT 1 FROM wf_instance i WHERE i.id = inst_id "
+            + "AND i.status = " + WfInstance.STATUS_DRAFT + " AND i.is_deleted = 0");
+        // 前端列「状态」筛选：按原 WfTask status 语义映射到 type（保证标签筛选零改动）
+        if (filter != null && filter.getStatus() != null) {
+            int st = filter.getStatus();
+            if (st == WfTask.STATUS_COADJUTANT) {
+                qw.eq(WfExtTask::getType, WfExtTask.TYPE_COADJUTANT);
+            } else if (st == WfTask.STATUS_CIRCULATE) {
+                qw.eq(WfExtTask::getType, WfExtTask.TYPE_CIRCULATE);
+            } else if (st == WfTask.STATUS_READ) {
+                qw.in(WfExtTask::getType, WfExtTask.TYPE_READ, WfExtTask.TYPE_READED);
+            } else if (st == WfTask.STATUS_TODO) {
+                qw.in(WfExtTask::getType, WfExtTask.TYPE_ADD_SIGN, WfExtTask.TYPE_RESUBMIT)
+                    .eq(WfExtTask::getStatus, WfExtTask.STATUS_PENDING);
+            } else {
+                // 2/4/6 为引擎任务本体状态，扩展任务不可能命中 → 恒不成立
+                qw.eq(WfExtTask::getId, -1L);
+            }
+        }
+        if (filter != null && filter.getInstIds() != null && !filter.getInstIds().isEmpty()) {
+            qw.in(WfExtTask::getInstId, filter.getInstIds());
+        }
+        if (filter != null && filter.hasInstanceFilter()) {
+            com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WfInstance> iq =
+                Wrappers.<WfInstance>lambdaQuery();
+            if (filter.getTitle() != null && !filter.getTitle().isBlank()) {
+                iq.like(WfInstance::getTitle, filter.getTitle());
+            }
+            if (filter.getDefId() != null) {
+                iq.eq(WfInstance::getDefId, filter.getDefId());
+            }
+            if (filter.getFormId() != null) {
+                iq.eq(WfInstance::getFormId, filter.getFormId());
+            }
+            List<Object> ids = instanceMapper.selectObjs(iq);
+            List<Long> instIds = ids.stream()
+                .map(o -> o instanceof Number ? ((Number) o).longValue() : null)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toList());
+            if (instIds.isEmpty()) {
+                qw.eq(WfExtTask::getId, -1L);
+                return qw;
+            }
+            qw.in(WfExtTask::getInstId, instIds);
+        }
+        if (filter != null) {
+            if (filter.getBeginTime() != null) {
+                if (onlyTodo) {
+                    qw.ge(WfExtTask::getReceiveTime, filter.getBeginTime());
+                } else {
+                    qw.ge(WfExtTask::getOperateTime, filter.getBeginTime());
+                }
+            }
+            if (filter.getEndTime() != null) {
+                if (onlyTodo) {
+                    qw.le(WfExtTask::getReceiveTime, filter.getEndTime());
+                } else {
+                    qw.le(WfExtTask::getOperateTime, filter.getEndTime());
+                }
+            }
+        }
+        if (excludeIds != null && !excludeIds.isEmpty()) {
+            qw.notIn(WfExtTask::getId, excludeIds);
+        }
+        qw.orderByDesc(WfExtTask::getCreateTime);
+        return qw;
+    }
+
+    /**
+     * 扩展任务 → 列表 VO。{@code status} 走 {@link WfExtTask#toWfTaskStatus()} 映射回
+     * 原 WfTask status 语义（7协办/8抄送/11传阅/0待办/2已办），前端标签零改动。
+     */
+    private WfTaskVO toVO(WfExtTask t) {
+        WfTaskVO vo = new WfTaskVO();
+        vo.setId(t.getId());
+        vo.setInstId(t.getInstId());
+        vo.setNodeKey(t.getNodeKey());
+        vo.setAssignee(t.getAssignee());
+        vo.setStatus(t.toWfTaskStatus());
+        vo.setReceiveTime(t.getReceiveTime());
+        vo.setOperateTime(t.getOperateTime());
+        vo.setDueTime(t.getDueTime());
+        vo.setIsTest(t.getIsTest());
+        WfInstance inst = t.getInstId() == null ? null : instanceMapper.selectById(t.getInstId());
+        if (inst != null) {
+            vo.setTitle(inst.getTitle());
+            vo.setDefId(inst.getDefId());
+            vo.setFormId(inst.getFormId());
+            vo.setDataId(inst.getDataId());
+            vo.setStarter(inst.getStarter());
+            vo.setStartTime(inst.getStartTime());
+            vo.setUrgency(inst.getUrgency());
+            vo.setInstStatus(inst.getStatus());
+            WfProcessNode node = loadNode(inst.getDefId(), t.getNodeKey());
+            if (node != null) {
+                vo.setNodeName(node.getNodeName());
+            }
+        }
+        if (vo.getTitle() == null && t.getTitle() != null) {
+            vo.setTitle(t.getTitle());
+        }
+        return vo;
+    }
+
     private WfTaskVO toVO(WfTask t) {
         WfTaskVO vo = new WfTaskVO();
         vo.setId(t.getId());
@@ -1289,10 +1505,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
      * 统一写入 {@code wf_task.ext_json.nodeName}（ACT 无对应列）。开关=act 时待办/已办若直接从 ACT 取，
      * 会丢失步骤名、退化为引擎节点名。</p>
      *
-     * <p>本方法按候选 id 批量取 {@code wf_task.ext_json} 回填 {@code nodeName}，与 wf 回退路径
-     * {@link #toVO(WfTask)} 的 {@code freeDisplayName} 同口径 —— 对<b>非自由流程</b>任务的
-     * {@code ext_json} 为空、覆盖不生效，故零行为变化。仅读取 blade 特有的显示名扩展列，
-     * 不把 wf_task 当作列表数据源（符合 §7.10/§7.11 的「blade 扩展列允许回读」约定）。</p>
+     * <p><b>【去 wf_ 表 · 2026-11-09】</b>步骤显示名已迁至 {@code wf_ext_task} 的
+     * {@code type=7} 装饰行：按 {@code biz_task_id}（即宿主 {@code wf_task.id} / 列表 VO 的 id）
+     * 批量回读 {@code ext_json}。自由流程默认关闭、非自由流程任务无装饰行 → 覆盖不生效，零行为变化。
+     * 装饰行由 {@code WfFreeFlowDriver#stampTaskExtJson} 写入，不是列表条目。</p>
      */
     private void decorateFreeFlowNames(List<WfTaskVO> vos) {
         if (vos == null || vos.isEmpty()) {
@@ -1307,15 +1523,18 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (ids.isEmpty()) {
             return;
         }
-        List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .select(WfTask::getId, WfTask::getExtJson)
-            .in(WfTask::getId, ids));
+        List<WfExtTask> rows = extTaskMapper.selectList(Wrappers.<WfExtTask>lambdaQuery()
+            .select(WfExtTask::getBizTaskId, WfExtTask::getExtJson)
+            .eq(WfExtTask::getType, WfExtTask.TYPE_FREE_FLOW)
+            .in(WfExtTask::getBizTaskId, ids));
         if (rows.isEmpty()) {
             return;
         }
         Map<Long, String> extMap = new HashMap<>(rows.size());
-        for (WfTask r : rows) {
-            extMap.put(r.getId(), r.getExtJson());
+        for (WfExtTask r : rows) {
+            if (r.getBizTaskId() != null) {
+                extMap.put(r.getBizTaskId(), r.getExtJson());
+            }
         }
         for (WfTaskVO v : vos) {
             if (v == null || v.getId() == null) {

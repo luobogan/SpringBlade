@@ -9,10 +9,12 @@ import org.springblade.workflow.dto.ApproveDTO;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfProcessDefinition;
 import org.springblade.workflow.entity.WfTask;
+import org.springblade.workflow.entity.WfExtTask;
 import org.springblade.workflow.entity.WfFreeNode;
 import org.springblade.workflow.mapper.WfFreeNodeMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
+import org.springblade.workflow.mapper.WfExtTaskMapper;
 import org.springblade.workflow.service.IProcessService;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,6 +50,8 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
     private final IProcessService processService;
     private final IWfInstanceService instanceService;
     private final WfTaskMapper taskMapper;
+    /** 自由流程步骤显示名的权威存储（type=7 装饰行，按 bizTaskId 关联宿主待办） */
+    private final WfExtTaskMapper extTaskMapper;
 
     /** 特性开关：默认关闭，isFree=0 的流程零行为变化，可一键回退 */
     @Value("${blade.workflow.free-flow.enabled:false}")
@@ -136,7 +140,12 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
 
     /**
      * 非引擎多实例模式下，为首人以外的办理人补并列待办。
-     * 与 addSign/forward/circulate 同范式：复用同一 engineTaskId、只造 wf_task 行。
+     *
+     * <p><b>【去 wf_ 表 · 边界说明】</b>并列待办是 {@code status=0} 且 {@code engine_task_id}
+     * 非空的<b>可办理引擎任务本体</b>（A 类）：{@code approve}/{@code requireTodoTask} 依赖
+     * {@code wf_task.id} 定位，且 {@code WfTaskActWriter} 需把业务列投影到 {@code ACT_*}。
+     * 故本方法<b>继续写 wf_task</b>，不迁 wf_ext_task；迁移的只是「步骤显示名」这一
+     * blade 扩展显示列（见 {@link #stampTaskExtJson}）。</p>
      */
     private void appendExtraAssignees(WfInstance inst, WfFreeNode next, List<Long> assignees) {
         if (assignees.size() <= 1) {
@@ -175,7 +184,17 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
         }
     }
 
-    /** 给该步骤下的所有待办统一写展示上下文（含首人，避免名单不一致） */
+    /**
+     * 给该步骤下的所有待办统一写展示上下文（含首人，避免名单不一致）。
+     *
+     * <p><b>【去 wf_ 表 · 2026-11-09】</b>步骤显示名不再写 {@code wf_task.ext_json}，
+     * 改以 {@code wf_ext_task} 的 {@code type=7} 装饰行承载：{@code biz_task_id} 关联宿主
+     * {@code wf_task.id}（即列表 VO 的 id / {@code ACT_RU_TASK.BIZ_TASK_ID_}），
+     * {@code decorateFreeFlowNames} 按这批 id 批量回读 {@code ext_json}。</p>
+     *
+     * <p>装饰行不是列表条目（{@code WfExtTask.isTodoType/isDoneType} 已排除 type=7），
+     * 不参与角标/列表计数；宿主待办本身仍是 A 类 wf_task，办理链不变。</p>
+     */
     private void stampTaskExtJson(WfInstance inst, WfFreeNode next) {
         Map<String, Object> ext = new LinkedHashMap<>(2);
         ext.put("nodeName", next.getNodeName());
@@ -186,9 +205,26 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
             .eq(WfTask::getNodeKey, next.getNodeKey())
             .eq(WfTask::getStatus, WfTask.STATUS_TODO));
         for (WfTask r : rows) {
-            if (!json.equals(r.getExtJson())) {
-                r.setExtJson(json);
-                taskMapper.updateById(r);
+            // 幂等：同一宿主待办只保留一条装饰行，重复推进时覆盖显示名
+            WfExtTask row = extTaskMapper.selectOne(Wrappers.<WfExtTask>lambdaQuery()
+                .eq(WfExtTask::getBizTaskId, r.getId())
+                .eq(WfExtTask::getType, WfExtTask.TYPE_FREE_FLOW)
+                .last("LIMIT 1"));
+            if (row == null) {
+                row = new WfExtTask();
+                row.setBizTaskId(r.getId());
+                row.setInstId(inst.getId());
+                row.setEngineTaskId(r.getEngineTaskId());
+                row.setNodeKey(next.getNodeKey());
+                row.setAssignee(r.getAssignee());
+                row.setType(WfExtTask.TYPE_FREE_FLOW);
+                row.setStatus(WfExtTask.STATUS_DONE);
+                row.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
+                row.setExtJson(json);
+                extTaskMapper.insert(row);
+            } else if (!json.equals(row.getExtJson())) {
+                row.setExtJson(json);
+                extTaskMapper.updateById(row);
             }
         }
     }
