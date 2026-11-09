@@ -976,6 +976,10 @@ wf_ext_task
 
 > 用户指令：① 无需双写，一次性完成；② 删除现有数据迁移功能，不再保留；③ 清空旧数据并重新创建，生成大量新测试数据验证；先出方案。
 > 相对 §9（渐进式：双写校验 + 存量迁移）的**调整**：跳过 §9 阶段0 双写校验、阶段5 存量迁移，改为"清空旧数据 + 脚本造大量新数据"直接验证。
+>
+> ⚠️ **「无需双写」仅指 §9 阶段0 的「`wf_task` + `wf_ext_task` 迁移期并写校验」，不指**
+> **`WfTaskActWriter` 的「`wf_task` → ACT 业务列」双写**（后者仍启用，且 §10.7 决策 1 判定不可停）。
+> 两个「双写」的区分、`wf_ext_task` 的覆盖边界与本次对原指令的偏离，见 **§10.7 决策 9**。
 
 ### 10.1 迁移功能标记弃用（不删除，统一 `@Deprecated`）
 
@@ -1049,7 +1053,8 @@ wf_ext_task
 
 ### 10.7 关键决策修正（实施期核对代码后定案 · 2026-11-09）
 
-> 计划（§9/§10 早期草稿）有三处与代码现实不符，实施时按**不破坏功能 + 零漂移**原则修正，记录如下。
+> 计划（§9/§10 早期草稿）有多处与代码现实不符，实施时按**不破坏功能 + 零漂移**原则修正，记录如下。
+> 决策 1～8 为实施期代码修正；**决策 9 为口径澄清**（区分两个「双写」、登记对原指令的偏离），不含代码变更。
 
 #### 决策 1：A 类台账**不可停写**（修正 §9.2/§10.2 的「A 类停写」表述）
 
@@ -1140,6 +1145,48 @@ original_user/assignee/due_time` 投影到 `ACT_RU_TASK`/`ACT_HI_TASKINST` 自�
 **修复**：ACT 待办/已办列表与分页 SQL 追加 `, r.ID_ DESC` / `, h.ID_ DESC`；
 扩展段分页 `selectExtPage` 追加 `orderByDesc(WfExtTask::getId)`。
 （排序只加在分页查询，`countResidue` 复用 `extTaskQuery` 不带额外排序列，避免 count SQL 冗余。）
+
+#### 决策 9：两个「双写」的区分、`wf_ext_task` 覆盖边界与对原指令的偏离登记（2026-11-09 口径澄清）
+
+§10 原指令「无需双写，一次性完成」在复盘中最易被误读为「`wf_task` 不再写入」。
+实际存在**两个同名但完全不同的「双写」**，本次只取消了其一：
+
+| | 双写 A（原指令否决 · 已取消） | 双写 B（仍在运行 · 不可停） |
+|---|---|---|
+| 所指 | §9 阶段 0：`circulate/addSign/forward/patch` **并写 `wf_task` 与 `wf_ext_task`** 做迁移期比对校验 | `WfTaskActWriter.sync`：`insertTask()` 落 `wf_task` 行取得雪花 id，再把该 id 写成 `ACT.BIZ_TASK_ID_`、把 `status/is_test/sign_order/view_time/timeout_handled/original_user/assignee/due_time` 投影到 `ACT_RU_TASK`/`ACT_HI_TASKINST` 自定义列 |
+| 开关 | 无；`ccIdentityLinkEnabled`（迁移阶段 3 双写校验预留）已 `@Deprecated` | `blade.workflow.task-act-write.enabled=true` |
+| 处置 | ✅ 一次性切换：`wf_ext_task` 建表后直接写新表；`WfMigrationController` / `WfDefinitionBackfillJob` / `ccIdentityLinkEnabled` 标 `@Deprecated`（§10.1） | ✅ §10.5「A 类双写继续生效」；N:1 守卫保留、统计源改为两表合并（§9.4 修正） |
+| 代码留痕 | `WfTaskServiceImpl:213-215`「双写校验不再保留……请勿重新启用（会形成双写）」 | `WfInstanceServiceImpl.insertTask():3639-3642` 仍 `taskMapper.insert(task)` → `taskActWriter.sync(task)` |
+
+**`wf_ext_task` 覆盖的是 §7.11 重启条件 ①，不是全部。**
+`blade-2026-11-09-wf-ext-task.sql`（`type` 1–7）承接协办 / 加签协办 / 抄送 / 传阅 / 已读 /
+退回重提交 / 自由流程步骤名，使**扩展任务**不再读写 `wf_task`（dev 实测
+`wf_task.status IN (7,8,11)` = 0、`wf_ext_task` 155 行）。但决策 3 判定
+`forward`/`addSign`/`markViewed`/自由流程并列待办属 **A 类可办理引擎任务本体**、不迁；
+决策 1 判定 A 类台账不可停写。故 `wf_task` 是**由「全量任务表」收敛为「仅引擎任务本体台账」**，
+**不是零写入**。
+
+**它替代不了什么**：`wf_ext_task` 解决的是「扩展任务载体」，替代不了
+「ACT 业务列的写入来源 + `BIZ_TASK_ID_` / 操作链
+（`approve` → `requireTodoTask` → `taskMapper.selectById`）的 id 契约」。两者正交，
+再增加扩展表也不会自动消除后者 —— 这正是「已有 `wf_ext_task` 却仍不能物理退役」的原因。
+
+> **对 §10 原指令的偏离登记**：若严格按「`wf_task` 一个字都不写」执行，须先补做
+> ① 任务 id 生成上移（业务侧生成稳定 id 直写 `ACT.BIZ_TASK_ID_`）；
+> ② ACT 业务列直写（不经 `wf_task` 行投影）；
+> ③ `resolveTask` / 列表 VO 改按 `BIZ_TASK_ID_` 反查 ACT；
+> ④ §9.4 方案 X（会签 N:1 原生化，方可摘除 N:1 守卫）。
+> 否则停写立即触发决策 1 记录的「列表 `status`/`assignee` 为空、角标 0、办理报任务不存在」。
+> **决策 1 即因这四步未做，把 ⑤ 由「停写 → 删表 → DROP」降级为「职责收敛」**，
+> 完全退出随之移入 §10.8 遗留（P6 后续项）。
+> 本次实际交付口径 = **扩展任务迁出 + A 类继续写 + 旧路径标记弃用**。
+
+**后续两条口径（勿混用）**：
+
+| 口径 | 认定 | 收尾方式 |
+|---|---|---|
+| 标记式退役（用户 2026-11-09 已定） | 承认 A 类继续写，运行时依赖如实登记保留 | Entity / Mapper / Service 加 `@Deprecated` + Javadoc `@deprecated`；`wf_task` 表用 `ALTER TABLE ... COMMENT` 标记废弃（只改注释、不动结构）；完全退出仍列 P6 后续 |
+| 真正零写入（完全退出） | 须先完成上述 ①～④ | 停写 → 摘除 `sync` / `WfStateProjector` 反写 / 3 处 catch 降级 → 删代码或 `DROP`（备份留存） |
 
 ### 10.8 端到端验证结论（dev，2026-11-09，act 读源）
 
