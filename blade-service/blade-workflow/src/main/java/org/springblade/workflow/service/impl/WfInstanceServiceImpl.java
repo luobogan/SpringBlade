@@ -847,49 +847,66 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (actRead()) {
             // 读源=act：直接扫原生 ACT_HI_PROCINST（STARTER_/IS_TEST_/TITLE_/START_TIME_ 已加列+索引）
             // 状态筛选经 statusCodeName 反向映射为业务终态字符串（BUSINESS_STATUS_）。
-            Page<ActHiProcinst> page = new Page<>(
-                (current == null || current < 1) ? 1 : current,
-                (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200));
+            long size = (pageSize == null || pageSize < 1) ? 20 : Math.min(pageSize, 200);
+            long cur = (current == null || current < 1) ? 1 : current;
+            long from = (cur - 1) * size;
             // 注意：MyBatis-Plus 的 .eq(condition, col, val) 会先求值 val 再判断 condition，
             // 故 statusCodeName(status) 必须在此前用 status!=null 守卫求值，否则对 null 自动拆箱 NPE。
             String businessStatusFilter = status != null ? ActHiProcinst.statusCodeName(status) : null;
-            IPage<ActHiProcinst> result = actProcinstMapper.selectPage(page, Wrappers.<ActHiProcinst>lambdaQuery()
+
+            // ACT 主计数（草稿不进 ACT 表）
+            long actTotal = actProcinstMapper.selectCount(Wrappers.<ActHiProcinst>lambdaQuery()
                 .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
                 .eq(ActHiProcinst::getStarter, WfAuthUtil.userId())
                 .eq(ActHiProcinst::getIsTest, 0)
                 .like(title != null && !title.isBlank(), ActHiProcinst::getTitle, title)
                 .eq(status != null, ActHiProcinst::getBusinessStatus, businessStatusFilter)
                 .ge(beginTime != null, ActHiProcinst::getStartTime, beginTime)
-                .le(endTime != null, ActHiProcinst::getStartTime, endTime)
-                .orderByDesc(ActHiProcinst::getStartTime));
-            IPage<InstanceVO> voPage = result.convert(t -> toInstanceVO(InstanceView.fromActHiProcinst(t)));
-            // ⚠️ 草稿实例只存在于业务表 wf_instance（从未启动引擎 → ACT_HI_PROCINST 无对应行），
-            //    act 读源下若不补回，「我的请求」里保存过的草稿会凭空消失（用户会误以为草稿被删了，
-            //    进而出现「草稿可能已在…我的请求…中删除」的自我印证）。
+                .le(endTime != null, ActHiProcinst::getStartTime, endTime));
+
+            // 草稿计数（仅 status=null 或 status=草稿 时参与合并）
+            long draftTotal = 0;
             if (status == null || status == WfInstance.STATUS_DRAFT) {
-                var draftQ = Wrappers.<WfInstance>lambdaQuery()
+                draftTotal = instanceMapper.selectCount(Wrappers.<WfInstance>lambdaQuery()
                     .eq(WfInstance::getStarter, WfAuthUtil.userId())
                     .eq(WfInstance::getIsTest, 0)
                     .eq(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
-                    .like(title != null && !title.isBlank(), WfInstance::getTitle, title);
-                // ① total 与「当前页」无关：否则翻到第 2 页时 total 少掉草稿数，
-                //    前端「共 N 条」会随翻页跳变、末页判定错乱。
-                Long draftTotal = instanceMapper.selectCount(draftQ);
-                long dc = draftTotal == null ? 0L : draftTotal;
-                voPage.setTotal(voPage.getTotal() + dc);
-                // ② 记录只在第一页并入：否则每翻一页草稿都被重复插入一次（同一草稿出现多遍）。
-                if (dc > 0 && (current == null || current <= 1)) {
-                    List<WfInstance> drafts = instanceMapper.selectList(draftQ
-                        .orderByDesc(WfInstance::getStartTime));
-                    if (drafts != null && !drafts.isEmpty()) {
-                        List<InstanceVO> merged =
-                            new java.util.ArrayList<>(drafts.size() + voPage.getRecords().size());
-                        drafts.forEach(d -> merged.add(toInstanceVO(d)));
-                        merged.addAll(voPage.getRecords());
-                        voPage.setRecords(merged);
-                    }
-                }
+                    .like(title != null && !title.isBlank(), WfInstance::getTitle, title));
             }
+
+            long total = actTotal + draftTotal;
+            List<InstanceVO> list = new java.util.ArrayList<>();
+            // 两源分段取数：草稿段固定排在最前（[0, draftTotal)），ACT 段紧随其后（[draftTotal, total)）。
+            // 既不再「顶替」ACT 行（会丢行），也不「超发」（会破坏前端异步分页契约 → 翻页空/前端分页）。
+            if (draftTotal > 0 && from < draftTotal) {
+                long dTo = Math.min(from + size, draftTotal);
+                List<WfInstance> drafts = instanceMapper.selectList(Wrappers.<WfInstance>lambdaQuery()
+                    .eq(WfInstance::getStarter, WfAuthUtil.userId())
+                    .eq(WfInstance::getIsTest, 0)
+                    .eq(WfInstance::getStatus, WfInstance.STATUS_DRAFT)
+                    .like(title != null && !title.isBlank(), WfInstance::getTitle, title)
+                    .orderByDesc(WfInstance::getStartTime).orderByDesc(WfInstance::getId)
+                    .last("LIMIT " + from + "," + (dTo - from)));
+                if (drafts != null) drafts.forEach(d -> list.add(toInstanceVO(d)));
+            }
+            long aFrom = Math.max(0, from - draftTotal);
+            long aTo = Math.max(aFrom, from + size - draftTotal);
+            long aLen = aTo - aFrom;
+            if (aLen > 0) {
+                List<ActHiProcinst> acts = actProcinstMapper.selectList(Wrappers.<ActHiProcinst>lambdaQuery()
+                    .eq(ActHiProcinst::getTenantId, WfAuthUtil.tenantId())
+                    .eq(ActHiProcinst::getStarter, WfAuthUtil.userId())
+                    .eq(ActHiProcinst::getIsTest, 0)
+                    .like(title != null && !title.isBlank(), ActHiProcinst::getTitle, title)
+                    .eq(status != null, ActHiProcinst::getBusinessStatus, businessStatusFilter)
+                    .ge(beginTime != null, ActHiProcinst::getStartTime, beginTime)
+                    .le(endTime != null, ActHiProcinst::getStartTime, endTime)
+                    .orderByDesc(ActHiProcinst::getStartTime).orderByDesc(ActHiProcinst::getId)
+                    .last("LIMIT " + aFrom + "," + aLen));
+                if (acts != null) acts.forEach(t -> list.add(toInstanceVO(InstanceView.fromActHiProcinst(t))));
+            }
+            Page<InstanceVO> voPage = new Page<>(cur, size, total);
+            voPage.setRecords(list);
             return voPage;
         }
         Page<WfInstance> page = new Page<>(
