@@ -648,6 +648,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         if (createNodeKey == null || createNodeKey.isEmpty()) {
             return;
         }
+        // 仅对真正的「创建节点」(nodeType=0) 自动完成：首节点非创建节点（如直接以审批/多实例节点起步）时，
+        // 不应误 complete 其任务。生产流程首节点必为创建节点，此护栏不改变生产行为，仅防止「方案B 发起」
+        // 在缺少创建节点的流程里误吞首个审批任务（会签/或签/依次场景验证即此类）。
+        WfProcessNode createNode = loadNode(inst.getDefId(), createNodeKey);
+        if (createNode == null || createNode.getNodeType() == null || createNode.getNodeType() != 0) {
+            return;
+        }
         TaskVO createTask = null;
         for (TaskVO t : processService.currentTasks(engineInstId)) {
             if (createNodeKey.equals(t.getTaskDefinitionKey())) {
@@ -3388,7 +3395,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                 vars.put("wfMiAssignees_" + nk, new ArrayList<>(assignees));
             }
         } catch (Exception e) {
-            log.warn("[WfInstanceServiceImpl] 注入多实例集合变量失败（忽略）: {}", e.getMessage());
+            log.warn("[WfInstanceServiceImpl] 注入多实例集合变量失败（忽略）: {}", e.getMessage(), e);
         }
     }
 

@@ -2593,7 +2593,7 @@ public class WfTestServiceImpl implements IWfTestService {
             WfProcessDefinition def = new WfProcessDefinition();
             def.setProcKey(procKey);
             def.setName("MI场景-" + label);
-            def.setBpmnXml(miBpmn(procKey));
+            def.setBpmnXml(miBpmn(procKey, signOrder));
             def.setVersion(1);
             def.setStatus(0);
             def.setFormId(formId);
@@ -2619,7 +2619,7 @@ public class WfTestServiceImpl implements IWfTestService {
             nodeMapper.insert(miNode);
             nodeIds.add(miNode.getId());
 
-            for (String uid : new String[] {"1001", "1002", "1003"}) {
+            for (String uid : new String[] {"3", "4", "5"}) {
                 WfNodeOperator op = new WfNodeOperator();
                 op.setNodeId(miNode.getId());
                 op.setOpType(3); // 人员
@@ -2630,6 +2630,15 @@ public class WfTestServiceImpl implements IWfTestService {
 
             // 2) 与正式部署同口径的测试部署（开关开启时注入多实例）
             deploymentId = definitionService.deployForTest(defId);
+            // deployForTest 已回写 testProcDefId，但 def.status 仍 0（草稿）。「定义读源」锚定测试部署的
+            // 前提是 status=3（与正式「点 测 试」同口径）：否则 resolveConfigProcDefId 回退到 procDefId(空)
+            // → BPMN 读源 nodes()/operators() 拿不到模型 → injectMiCollectionVars 注入 MI 集合变量时
+            // loadNodes 为空、operatorResolver 也读不到操作者 → 变量未注入 → MI 空集合守卫拦截。
+            // 置 status=3 让本测试定义与真实测试态一致（finally 统一按 defId 清理，不残留）。
+            WfProcessDefinition testStatusPatch = new WfProcessDefinition();
+            testStatusPatch.setId(defId);
+            testStatusPatch.setStatus(3);
+            defMapper.updateById(testStatusPatch);
 
             // 3) 真实发起测试实例（测试态：不建业务行、is_test=1）
             StartProcessDTO startDto = new StartProcessDTO();
@@ -2737,22 +2746,34 @@ public class WfTestServiceImpl implements IWfTestService {
     }
 
     /** 单 MI 节点 BPMN（process id 会被 deployForTest 改名为测试 key）；assignee 占位，部署期被多实例元素变量覆盖。 */
-    private static String miBpmn(String procKey) {
+    private static String miBpmn(String procKey, int signOrder) {
+        // miNode 必须带 wf:operator 扩展：运行时操作者解析（P3-5 开关 / 去 wf_node_operator 读的退役开关）
+        // 优先读 BPMN 的 wf:operator，缺它会在 advanceInternal 阶段报「未解析到任何办理人」。
+        // 操作者 ID 用 dev 环境真实存在的用户（3/4/5），否则 filterActive 会剔除无效 ID 仍报同样错误。
         return """
             <?xml version="1.0" encoding="UTF-8"?>
             <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
                          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                          xmlns:flowable="http://flowable.org/bpmn"
+                         xmlns:wf="http://www.springblade.org/workflow"
                          targetNamespace="http://springblade.workflow" id="def_%s">
                 <process id="%s" name="MI Scenario" isExecutable="true">
                     <startEvent id="startEvent" name="开始"/>
-                    <userTask id="miNode" name="会签节点" flowable:assignee="placeholder"/>
+                    <userTask id="miNode" name="会签节点" flowable:assignee="placeholder">
+                        <extensionElements>
+                            <wf:node nodeType="1" signOrder="%d">
+                                <wf:operator opType="3" objId="3" groupNo="1" signOrder="0" batchNo="1" canView="1"/>
+                                <wf:operator opType="3" objId="4" groupNo="1" signOrder="0" batchNo="1" canView="1"/>
+                                <wf:operator opType="3" objId="5" groupNo="1" signOrder="0" batchNo="1" canView="1"/>
+                            </wf:node>
+                        </extensionElements>
+                    </userTask>
                     <endEvent id="endEvent" name="结束"/>
                     <sequenceFlow id="f1" sourceRef="startEvent" targetRef="miNode"/>
                     <sequenceFlow id="f2" sourceRef="miNode" targetRef="endEvent"/>
                 </process>
             </definitions>
-            """.formatted(procKey, procKey);
+            """.formatted(procKey, procKey, signOrder);
     }
 
     private String buildSummary(int passed, int total, boolean reachedEnd, boolean aborted) {        if (aborted) {
