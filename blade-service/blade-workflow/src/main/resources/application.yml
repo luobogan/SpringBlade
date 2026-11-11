@@ -60,12 +60,16 @@ blade:
     #   （N:1→0、孤儿→0 或全测试态、ACT可读≥99%）再翻 act。
     # 2026-09-30 已达标翻 act：活跃 N:1=0（代审清零+硬删 397 行 N:1 历史+344 行测试孤儿）、
     #   多算=0（admin ACT 17 = blade 17+1 合成）、⑤=0、⑥=0、⑦=0；新实例全部走 MI 1:1 + 双写。
+    # 批次 1 / 2026-11-10：单路径写入开关。direct=wf_task 零写入（业务列直写 ACT）；
+    #   legacy=回退旧链路。任意时刻只有一个写入路径生效，不是双写。
+    task-ledger-mode: direct
     task-read-source: act
     task-act-write:
-      # 任务业务列双写 ACT_RU_TASK / ACT_HI_TASKINST（去 wf_ 表 P4/P5 写侧）。
-      # 依赖 doc/sql/migration/act_add_task_biz_columns.sql 已执行的 6 个自定义列（已执行）。
-      # 与 wf_task 并存双写、互为校验；待读源切到 act 并验证无误后，才退役 wf_task。
-      # 写失败仅告警不阻断主流程；会签 N:1（同一引擎任务多人）由写入器内建守卫跳过。
+      # 任务业务列写回 ACT_RU_TASK / ACT_HI_TASKINST（去 wf_ 表 P4/P5 写侧）。
+      # 依赖 doc/sql/migration/act_add_task_biz_columns.sql 已执行的自定义列（已执行）。
+      # 【批次 1】wf_task 已标记废弃、零写入；sync() 委托 WfTaskActDirectWriter 直写 ACT。
+      # D18 已删除 N:1 守卫（扩展任务不调用 sync，旧守卫会造成抄送后审批状态漂移）。
+      # 写失败仅告警不阻断主流程。
       enabled: true
     # 「读 wf_task 的 blade 扩展任务」开关（去 wf_ 表 · ④ 定案后语义已变）。
     #

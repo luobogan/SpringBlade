@@ -58,6 +58,19 @@ public class WfStateProjector {
      */
     private final WfTaskActWriter taskActWriter;
 
+    /**
+     * 台账写入模式（direct=不落 wf_task / legacy=落 wf_task）。
+     *
+     * <p>direct 模式下 {@code wf_task} 为空表，本类原「以 wf_task 行为锚点、找到后再 sync ACT」
+     * 的反写链路<b>必然一行都找不到</b> → 引擎事件（任务完成 / 任务删除 / 残留待办收尾）全部静默失效，
+     * {@code ACT_HI_TASKINST.BUSINESS_STATUS_} 永久停在 {@code 'TODO'}（已办列表显示「待办」、
+     * 按状态筛选漏行）。direct 分支改为<b>按引擎 taskId 直接反写 ACT 业务列</b>。</p>
+     */
+    private final org.springblade.workflow.config.WfLedgerModeProperties ledgerMode;
+
+    /** ACT 业务列直写器（direct 模式下的条件反写通道） */
+    private final WfTaskActDirectWriter directWriter;
+
     /** 差异计数（按事件类型分桶）：反写前先比对，不一致则计数并写为目标态，保留持续校验能力 */
     private final Map<String, AtomicLong> diffCounters = new ConcurrentHashMap<>();
 
@@ -141,6 +154,18 @@ public class WfStateProjector {
             log.warn("[WfStateProjector] TASK_COMPLETED -> 事件未携带 taskId，无法反写");
             return;
         }
+        // direct 模式：wf_task 无行可作锚点 → 直接按引擎 taskId 条件反写 ACT 业务列
+        // （仅当当前仍是待办态才改，协办/抄送等语义不受影响；幂等：已是目标态则命中 0 行）。
+        if (ledgerMode.isDirect()) {
+            int n = directWriter.markStatusIfTodo(taskId,
+                WfTaskActDirectWriter.statusStr(WfTask.STATUS_DONE));
+            if (n > 0) {
+                log.info("[WfStateProjector][write] TASK_COMPLETED -> engineTaskId={} 置已办(2)", taskId);
+            } else {
+                log.info("[WfStateProjector][skip] TASK_COMPLETED -> engineTaskId={} 非待办态，未反写", taskId);
+            }
+            return;
+        }
         List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getEngineTaskId, taskId));
         if (rows.isEmpty()) {
@@ -160,7 +185,7 @@ public class WfStateProjector {
             patch.setId(t.getId());
             patch.setStatus(WfTask.STATUS_DONE);
             patch.setOperateTime(now);
-            taskMapper.updateById(patch);
+            // 批次 1：不再更新 wf_task 台账（下方 sync 已委托直写器写 ACT）
             // 回写 ACT 业务列：引擎事件驱动的反写同样要双写，否则 ACT 侧 BUSINESS_STATUS_ 停在旧值
             // （漂移形态：wf_status=2 vs ACT=TODO → 已办列表状态标签错、按状态筛选漏行）
             t.setStatus(WfTask.STATUS_DONE);
@@ -189,6 +214,19 @@ public class WfStateProjector {
             log.warn("[WfStateProjector] 任务删除事件未携带 taskId，无法反写");
             return;
         }
+        // direct 模式：改按引擎 taskId 直接反写 ACT 业务列（条件式，仅待办态才改）。
+        // 这是 MI 或签「首人同意 → 引擎删除其余 MI 子任务」的唯一收口路径，
+        // 不反写则被删子任务的 BUSINESS_STATUS_ 停在 'TODO'（已办列表显示「待办」、按状态筛选漏行）。
+        if (ledgerMode.isDirect()) {
+            int n = directWriter.markStatusIfTodo(taskId,
+                WfTaskActDirectWriter.statusStr(WfTask.STATUS_FINISHED));
+            if (n > 0) {
+                log.info("[WfStateProjector][write] 任务删除 -> engineTaskId={} 置办结(4)", taskId);
+            } else {
+                log.info("[WfStateProjector][skip] 任务删除 -> engineTaskId={} 非待办态，未反写", taskId);
+            }
+            return;
+        }
         List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getEngineTaskId, taskId));
         if (rows.isEmpty()) {
@@ -205,7 +243,7 @@ public class WfStateProjector {
             patch.setId(t.getId());
             patch.setStatus(WfTask.STATUS_FINISHED);
             patch.setOperateTime(now);
-            taskMapper.updateById(patch);
+            // 批次 1：不再更新 wf_task 台账（下方 sync 已委托直写器写 ACT）
             // 回写 ACT 业务列：同 onTaskCompleted —— 不回写会让 ACT 停在 TODO，
             // 读源=act 的已办列表会把「办结」显示成「待办」，按「办结」筛选也漏行。
             // 该路径是 MI 或签「首人同意 → 引擎删除其余子任务」的主要来源（实测漂移主体）。
@@ -320,7 +358,7 @@ public class WfStateProjector {
         instanceMapper.updateById(patch);
         log.info("[WfStateProjector][write] {} -> instId={} status: {} -> {}", event, inst.getId(), cur, target);
         if (terminal) {
-            closeResidualTodos(inst.getId(), event);
+            closeResidualTodos(inst.getId(), inst.getEngineInstId(), event);
         }
     }
 
@@ -332,26 +370,36 @@ public class WfStateProjector {
      * 阶段3 摘除业务循环后由本方法承接，若只关 0 会漏掉协办待办 —— 它们会变成孤儿，
      * 且 {@code WfTaskServiceImpl#done()} 把 {@code STATUS_COADJUTANT} 计入「已办」，会污染已办列表。</p>
      */
-    private void closeResidualTodos(Long instId, String event) {
+    private void closeResidualTodos(Long instId, String procInstId, String event) {
     	Date now = new Date();
+    	// direct 模式：wf_task 为空 → 旧实现（查 wf_task）一条都关不掉，
+    	// 致撤销/撤回/不通过/归档后残留任务的 ACT BUSINESS_STATUS_ 永远停在 'TODO'。
+    	// 改为按 ACT_HI_TASKINST（PROC_INST_ID_ + END_TIME_ IS NULL）直接收口。
+    	if (ledgerMode.isDirect()) {
+    		int n = directWriter.closeResidualByProcInst(procInstId,
+    			WfTaskActDirectWriter.statusStr(WfTask.STATUS_FINISHED));
+    		if (n > 0) {
+    			log.info("[WfStateProjector][write] {} -> 关闭残留待办 {} 条 (instId={}, procInstId={})",
+    				event, n, instId, procInstId);
+    		}
+    		return;
+    	}
     	// 先查出待关闭的行：批量 UPDATE 只能改 wf_task，无法把业务列回写 ACT_*，
     	// 而 ACT 的 BUSINESS_STATUS_ 是 wf_task 的投影 —— 不回写即产生漂移
     	// （读源=act 的已办列表会把「办结」显示成「待办」、按「办结」筛选漏行）。
     	List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
     		.eq(WfTask::getInstId, instId)
     		.in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
-    	int n = taskMapper.update(null, new LambdaUpdateWrapper<WfTask>()
-    		.set(WfTask::getStatus, WfTask.STATUS_FINISHED)
-    		.set(WfTask::getOperateTime, now)
-    		.eq(WfTask::getInstId, instId)
-    		.in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
+    	// 批次 1：不再批量 UPDATE wf_task；逐行把终态直写 ACT 业务列。
+    	// rows 来自存量台账（零写入后通常为空），仅用于兼容历史实例的收口。
+    	int n = 0;
+    	for (WfTask t : rows) {
+    		t.setStatus(WfTask.STATUS_FINISHED);
+    		t.setOperateTime(now);
+    		taskActWriter.sync(t);
+    		n++;
+    	}
     	if (n > 0) {
-    		// 回写 ACT 业务列（逐行 sync）：残留待办行数很少（通常 1~3 条），代价可忽略
-    		for (WfTask t : rows) {
-    			t.setStatus(WfTask.STATUS_FINISHED);
-    			t.setOperateTime(now);
-    			taskActWriter.sync(t);
-    		}
     		log.info("[WfStateProjector][write] {} -> 关闭残留待办 {} 条 (instId={})", event, n, instId);
     	}
     }

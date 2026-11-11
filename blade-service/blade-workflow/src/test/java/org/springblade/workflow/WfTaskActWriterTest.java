@@ -21,7 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * <p>覆盖三条关键行为：
  * <ol>
  *   <li>1:1（单办理人）：业务列同步写回 {@code ACT_RU_TASK} 与 {@code ACT_HI_TASKINST} 两张表；</li>
- *   <li>N:1（会签/或签，同一 engineTaskId 多条 wf_task）：<b>跳过</b>写入，避免多人互相踩踏；</li>
+ *   <li>D18（2026-11-10 起）：原 N:1 守卫已删除 —— 同一 engineTaskId 多条台账也<b>照常写回 ACT</b>
+ *       （扩展行从不调用 sync，旧守卫只会造成「抄送后审批」状态漂移，见 WfCirculateDriftReproTest）；</li>
  *   <li>开关关闭：完全空操作。</li>
  * </ol>
  */
@@ -118,12 +119,13 @@ class WfTaskActWriterTest {
 	}
 
 	@Test
-	@DisplayName("N:1 会签（同一引擎任务多条 wf_task）：跳过写入，避免多人互相踩踏")
-	void skipsWhenCountersignSharesEngineTask() {
+	@DisplayName("D18：守卫删除后，同一引擎任务多条台账也照常写回 ACT 业务列")
+	void syncsWhenCountersignSharesEngineTaskAfterGuardRemoval() {
 		seedTask("T2", 1L);
 		jdbc.update("INSERT INTO wf_task (id, engine_task_id) VALUES (?, ?)", 2L, "T2");
 		writer.sync(task("T2"));
-		assertUntouched("T2");
+		// 旧守卫会因 siblings>1 跳过；D18 删除后统一委托 WfTaskActDirectWriter，仍写回两表
+		assertSynced("T2");
 	}
 
 	@Test
@@ -141,5 +143,48 @@ class WfTaskActWriterTest {
 		WfTask t = task(null);
 		writer.sync(t);
 		assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ACT_RU_TASK", Integer.class));
+	}
+
+	/**
+	 * 批次 2 / 转办语义护栏：转办只换办理人，<b>不得改 BIZ_TASK_ID_</b>。
+	 *
+	 * <p>旧实现是「原任务置 DONE + 新建同 engineTaskId 的 TODO 行」，在 ACT 单行模型下
+	 * 等于原地覆盖，会把 BIZ_TASK_ID_ 换成新值 → 前端已打开的办理页失效。批次 2 改为
+	 * 只更新 BIZ_ASSIGNEE_/ORIGINAL_USER_，bizTaskId 保持不变。</p>
+	 */
+	@Test
+	@DisplayName("转办：writePartial 只换办理人，BIZ_TASK_ID_ 与业务状态保持不变")
+	void partialUpdateKeepsBizTaskIdWhenForwarding() {
+		org.springblade.workflow.service.helper.WfTaskActDirectWriter direct =
+			new org.springblade.workflow.service.helper.WfTaskActDirectWriter(jdbc);
+		seedTask("T4", 1L);
+
+		// 建任务：全量写入（TODO + 原办理人）
+		org.springblade.workflow.service.helper.TaskBizRecord rec =
+			new org.springblade.workflow.service.helper.TaskBizRecord();
+		rec.setBizTaskId(2104055356658364418L);
+		rec.setEngineTaskId("T4");
+		rec.setAssignee(1123598821738675201L);
+		rec.setStatus(WfTask.STATUS_TODO);
+		rec.setIsTest(0);
+		direct.writeFull(rec);
+
+		// 转办：只改办理人两列
+		java.util.LinkedHashMap<String, Object> cols = new java.util.LinkedHashMap<>();
+		cols.put("BIZ_ASSIGNEE_", 998877665544332211L);
+		cols.put("ORIGINAL_USER_", "1123598821738675201");
+		direct.writePartial("T4", cols);
+
+		for (String table : new String[]{"ACT_RU_TASK", "ACT_HI_TASKINST"}) {
+			assertEquals(Long.valueOf(2104055356658364418L), jdbc.queryForObject(
+				"SELECT BIZ_TASK_ID_ FROM " + table + " WHERE ID_=?", Long.class, "T4"),
+				table + " BIZ_TASK_ID_ 不得被转办覆盖");
+			assertEquals(Long.valueOf(998877665544332211L), jdbc.queryForObject(
+				"SELECT BIZ_ASSIGNEE_ FROM " + table + " WHERE ID_=?", Long.class, "T4"),
+				table + " BIZ_ASSIGNEE_ 应为转办目标人");
+			assertEquals("TODO", jdbc.queryForObject(
+				"SELECT BUSINESS_STATUS_ FROM " + table + " WHERE ID_=?", String.class, "T4"),
+				table + " 业务状态不应被转办改动");
+		}
 	}
 }

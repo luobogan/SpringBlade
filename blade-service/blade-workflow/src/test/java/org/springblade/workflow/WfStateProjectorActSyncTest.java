@@ -3,11 +3,13 @@ package org.springblade.workflow;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springblade.workflow.config.WfLedgerModeProperties;
 import org.springblade.workflow.entity.WfInstance;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.service.helper.WfStateProjector;
+import org.springblade.workflow.service.helper.WfTaskActDirectWriter;
 import org.springblade.workflow.service.helper.WfTaskActWriter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -76,7 +78,22 @@ class WfStateProjectorActSyncTest {
 
 		WfTaskActWriter writer = new WfTaskActWriter(jdbc);
 		ReflectionTestUtils.setField(writer, "enabled", true);
-		projector = new WfStateProjector(instanceMapper, taskMapper, writer);
+		projector = new WfStateProjector(instanceMapper, taskMapper, writer,
+			ledgerMode("legacy"), new WfTaskActDirectWriter(jdbc));
+	}
+
+	/** 台账模式：direct=不落 wf_task（默认）；legacy=落 wf_task（回退链路） */
+	private static WfLedgerModeProperties ledgerMode(String mode) {
+		WfLedgerModeProperties p = new WfLedgerModeProperties();
+		ReflectionTestUtils.setField(p, "mode", mode);
+		return p;
+	}
+
+	/** direct 模式下的投影器：wf_task 空表，按引擎 taskId 直接反写 ACT 业务列 */
+	private WfStateProjector directProjector() {
+		WfTaskActDirectWriter directWriter = new WfTaskActDirectWriter(jdbc);
+		return new WfStateProjector(instanceMapper, taskMapper,
+			new WfTaskActWriter(jdbc), ledgerMode("direct"), directWriter);
 	}
 
 	private String actStatus() {
@@ -95,5 +112,24 @@ class WfStateProjectorActSyncTest {
 	void onTaskDeletedSyncsActStatus() {
 		projector.onTaskDeleted("T1", "P1");
 		assertEquals("FINISHED", actStatus(), "wf_task 置办结后必须回写 ACT 业务列");
+	}
+
+	// ==================== direct 模式（wf_task 空表） ====================
+
+	@Test
+	@DisplayName("direct 模式：onTaskCompleted 无 wf_task 行也必须把 ACT 置已办(DONE)")
+	void directModeOnTaskCompletedWritesAct() {
+		// direct 模式下 taskMapper.selectList 恒返回空（旧实现据此 skip → 状态漂移在 TODO）
+		when(taskMapper.selectList(any())).thenReturn(List.of());
+		directProjector().onTaskCompleted("T1", "P1");
+		assertEquals("DONE", actStatus(), "direct 模式必须按引擎 taskId 直接反写 ACT 业务列");
+	}
+
+	@Test
+	@DisplayName("direct 模式：onTaskDeleted 无 wf_task 行也必须把 ACT 置办结(FINISHED)")
+	void directModeOnTaskDeletedWritesAct() {
+		when(taskMapper.selectList(any())).thenReturn(List.of());
+		directProjector().onTaskDeleted("T1", "P1");
+		assertEquals("FINISHED", actStatus(), "direct 模式必须按引擎 taskId 直接反写 ACT 业务列");
 	}
 }

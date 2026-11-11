@@ -93,9 +93,10 @@ public class WfEngineEventListener implements FlowableEventListener {
 
     @Override
     public boolean isFailOnException() {
-        // 阶段2：真实反写 + C1 强一致 —— 台账写失败即回滚整个引擎操作（代价是连带回滚用户操作，
-        // 故必须先经阶段1 影子验证映射正确，且全程由 ledger-listener.enabled 开关保护、可一键回退）
-        return true;
+        // 批次 1（2026-11-10）：任务级补偿已改为「直写 ACT 业务列」，不再写 wf_task 台账。
+        // ACT 写失败由 WfTaskActDirectWriter 的 catch → warn 兜住，不应连带回滚整个引擎操作
+        // （旧 true 是「台账写失败即回滚引擎」的 C1 强一致语义，台账零写入后不再适用）。
+        return false;
     }
 
     @Override

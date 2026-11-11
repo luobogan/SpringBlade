@@ -16,7 +16,6 @@ import org.springblade.workflow.freeflow.WfFreeNodeContext;
 import org.springblade.workflow.mapper.WfFreeNodeMapper;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
-import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.utils.WfAuthUtil;
 import org.springblade.workflow.vo.NextNodeCandidateVO;
 import org.springblade.workflow.vo.NextNodesVO;
@@ -50,7 +49,8 @@ public class WfFreeFlowController {
 
     private final WfFreeFlowManager manager;
     private final WfFreeNodeMapper freeNodeMapper;
-    private final WfTaskMapper taskMapper;
+    /** 批次 1：按 BIZ_TASK_ID_ 反查 ACT（取代 taskMapper.selectById） */
+    private final org.springblade.workflow.service.helper.WfTaskBizResolver bizResolver;
     private final WfInstanceMapper instanceMapper;
     private final WfProcessDefinitionMapper defMapper;
 
@@ -94,7 +94,8 @@ public class WfFreeFlowController {
     @GetMapping("/next-nodes")
     @Operation(summary = "下一步候选节点（含权限过滤）")
     public R<NextNodesVO> nextNodes(@RequestParam Long taskId) {
-        WfTask task = taskMapper.selectById(taskId);
+        // 批次 1：wf_task 已零写入，改按 BIZ_TASK_ID_ 反查 ACT
+        WfTask task = bizResolver.resolve(taskId);
         if (task == null) {
             throw new ServiceException("任务不存在：" + taskId);
         }

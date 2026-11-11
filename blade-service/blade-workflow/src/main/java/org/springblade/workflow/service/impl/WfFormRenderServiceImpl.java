@@ -130,7 +130,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         String nodeKey = inst.getCurrentNodeKey();
         WfTask task = null;
         if (taskId != null) {
-            if (actLogReader.actRead()) {
+            if (taskActReader.actRead()) {
                 task = taskActReader.toWfTaskByBizIdFromAct(taskId);
                 if (task != null && task.getNodeKey() != null && !task.getNodeKey().isEmpty()) {
                     nodeKey = task.getNodeKey();

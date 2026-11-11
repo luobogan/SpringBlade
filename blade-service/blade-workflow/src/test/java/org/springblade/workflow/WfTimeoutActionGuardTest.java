@@ -44,7 +44,6 @@ class WfTimeoutActionGuardTest {
 
 	private WfNodeTimeoutMapper timeoutMapper;
 	private WfProcessNodeMapper nodeMapper;
-	private WfTaskMapper taskMapper;
 	private WfProcessDefinitionMapper definitionMapper;
 	private IWfTaskService taskService;
 	private INoticeClient noticeClient;
@@ -59,7 +58,6 @@ class WfTimeoutActionGuardTest {
 	void setUp() {
 		timeoutMapper = mock(WfNodeTimeoutMapper.class);
 		nodeMapper = mock(WfProcessNodeMapper.class);
-		taskMapper = mock(WfTaskMapper.class);
 		definitionMapper = mock(WfProcessDefinitionMapper.class);
 		taskService = mock(IWfTaskService.class);
 		noticeClient = mock(INoticeClient.class);
@@ -67,7 +65,7 @@ class WfTimeoutActionGuardTest {
 		instanceService = mock(IWfInstanceService.class);
 		formmodeClient = mock(IFormmodeClient.class);
 		bpmnReader = mock(WfBpmnExtensionReader.class);
-		service = new WfTimeoutServiceImpl(timeoutMapper, nodeMapper, taskMapper, definitionMapper,
+		service = new WfTimeoutServiceImpl(timeoutMapper, nodeMapper, definitionMapper,
 			taskService, noticeClient, taskActWriter, instanceService, formmodeClient, bpmnReader);
 	}
 
@@ -101,7 +99,8 @@ class WfTimeoutActionGuardTest {
 		service.fire(rule("autoApprove"), task, inst(0));
 
 		assertThat(task.getTimeoutHandled()).isEqualTo(1);
-		verify(taskMapper).updateById(task);
+		// 批次 1：wf_task 零写入，防重标记由 sync 直写 ACT（TIMEOUT_HANDLED_）
+		verify(taskMapper, never()).updateById(any(WfTask.class));
 		verify(taskActWriter).sync(task);
 	}
 
@@ -127,7 +126,9 @@ class WfTimeoutActionGuardTest {
 		service.fire(rule("remind"), task, inst(0));
 
 		assertThat(task.getTimeoutHandled()).isEqualTo(1);
-		verify(taskMapper).updateById(task);
+		// 批次 1：不再更新 wf_task 台账，改为直写 ACT
+		verify(taskActWriter).sync(task);
+		verify(taskMapper, never()).updateById(any(WfTask.class));
 	}
 
 	@Test

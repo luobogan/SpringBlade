@@ -52,6 +52,11 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
     private final WfTaskMapper taskMapper;
     /** 自由流程步骤显示名的权威存储（type=7 装饰行，按 bizTaskId 关联宿主待办） */
     private final WfExtTaskMapper extTaskMapper;
+    /** 批次 1：并列待办不再 insert wf_task，改为直写 ACT 业务列 */
+    private final org.springblade.workflow.service.helper.WfTaskActWriter taskActWriter;
+    /** 【去 wf_ 表 · 批次 2】direct 模式下 wf_task 为空，首人待办/判重/装饰行宿主须改读 ACT */
+    private final org.springblade.workflow.service.helper.WfTaskActReader taskActReader;
+    private final org.springblade.workflow.config.WfLedgerModeProperties ledgerMode;
 
     /** 特性开关：默认关闭，isFree=0 的流程零行为变化，可一键回退 */
     @Value("${blade.workflow.free-flow.enabled:false}")
@@ -151,11 +156,19 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
         if (assignees.size() <= 1) {
             return;
         }
-        WfTask sample = taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, inst.getId())
-            .eq(WfTask::getNodeKey, next.getNodeKey())
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .last("LIMIT 1"));
+        // direct 模式：wf_task 为空 → sample 恒 null → 并列待办补齐整体跳过（只有首人收得到待办）。
+        // 改按 ACT_RU_TASK 取该节点首人活跃待办，复用其 engineTaskId。
+        WfTask sample;
+        if (ledgerMode.isDirect()) {
+            List<WfTask> act = taskActReader.activeTasksFromAct(inst.getId(), next.getNodeKey(), null, false);
+            sample = act.isEmpty() ? null : act.get(0);
+        } else {
+            sample = taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, inst.getId())
+                .eq(WfTask::getNodeKey, next.getNodeKey())
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .last("LIMIT 1"));
+        }
         if (sample == null) {
             log.warn("[free-flow] 未找到首人待办，跳过并列待办补齐. instId={}, nodeKey={}",
                 inst.getId(), next.getNodeKey());
@@ -163,12 +176,19 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
         }
         for (int i = 1; i < assignees.size(); i++) {
             Long uid = assignees.get(i);
-            Long exists = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-                .eq(WfTask::getInstId, inst.getId())
-                .eq(WfTask::getNodeKey, next.getNodeKey())
-                .eq(WfTask::getAssignee, uid)
-                .eq(WfTask::getStatus, WfTask.STATUS_TODO));
-            if (exists != null && exists > 0) {
+            // direct 模式：判重也必须走 ACT，否则恒 0 → MI 已为 uid 建好独立待办时仍重复补写。
+            boolean already;
+            if (ledgerMode.isDirect()) {
+                already = !taskActReader.activeTasksFromAct(inst.getId(), next.getNodeKey(), uid, false).isEmpty();
+            } else {
+                Long exists = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+                    .eq(WfTask::getInstId, inst.getId())
+                    .eq(WfTask::getNodeKey, next.getNodeKey())
+                    .eq(WfTask::getAssignee, uid)
+                    .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+                already = exists != null && exists > 0;
+            }
+            if (already) {
                 continue;
             }
             WfTask t = new WfTask();
@@ -180,7 +200,9 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
             t.setStatus(WfTask.STATUS_TODO);
             t.setReceiveTime(new Date());
             t.setIsTest(inst.getIsTest());
-            taskMapper.insert(t);
+            // 批次 1：不再 insert wf_task；预生成 id 并直写 ACT 业务列
+            t.setId(com.baomidou.mybatisplus.core.toolkit.IdWorker.getId());
+            taskActWriter.sync(t);
         }
     }
 
@@ -200,10 +222,13 @@ public class WfFreeFlowDriver implements IWfFreeFlowDriver {
         ext.put("nodeName", next.getNodeName());
         ext.put("flowOrder", next.getFlowOrder());
         String json = JsonUtil.toJson(ext);
-        List<WfTask> rows = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, inst.getId())
-            .eq(WfTask::getNodeKey, next.getNodeKey())
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+        // direct 模式：wf_task 为空 → 不写装饰行 → 待办列表显示引擎默认节点名而非编排步骤名。
+        List<WfTask> rows = ledgerMode.isDirect()
+            ? taskActReader.activeTasksFromAct(inst.getId(), next.getNodeKey(), null, false)
+            : taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, inst.getId())
+                .eq(WfTask::getNodeKey, next.getNodeKey())
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO));
         for (WfTask r : rows) {
             // 幂等：同一宿主待办只保留一条装饰行，重复推进时覆盖显示名
             WfExtTask row = extTaskMapper.selectOne(Wrappers.<WfExtTask>lambdaQuery()

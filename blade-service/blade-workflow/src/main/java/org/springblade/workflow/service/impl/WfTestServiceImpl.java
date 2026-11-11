@@ -150,6 +150,12 @@ public class WfTestServiceImpl implements IWfTestService {
     private final WfApprovalLogActReader actLogReader;
     /** 自由流程实例级步骤/链路级联清理（仅 Mapper 依赖，无 Bean 环） */
     private final org.springblade.workflow.freeflow.WfFreeFlowManager freeFlowManager;
+    /**
+     * 【去 wf_ 表 · 批次 2】direct 模式下 {@code wf_task} 为空表，流程测试域各读点必须走 ACT 读源，
+     * 否则「自动测试一步都走不了」「MI 自测恒失败」等静默失效。
+     */
+    private final org.springblade.workflow.service.helper.WfTaskActReader taskActReader;
+    private final org.springblade.workflow.config.WfLedgerModeProperties ledgerMode;
 
     @Override
     public WfTestResultVO run(WfTestRunDTO dto) {
@@ -1716,7 +1722,12 @@ public class WfTestServiceImpl implements IWfTestService {
             // 逐条重新读库：或签办结首条时会 closeSiblings 关闭同节点其余待办并推进引擎，
             // 继续办理这些已关闭的待办会自动办理接口抛「任务非待办状态，不可处理」→
             // 整笔事务回滚（现象：提交报错、什么也没发生）。这里直接跳过已非待办的记录。
-            WfTask fresh = taskMapper.selectById(t.getId());
+            // direct 模式：wf_task 为空 → selectById 恒 null → 每条都 continue →
+            // 「自动测试一步都走不了」。改按 BIZ_TASK_ID_ 重读 ACT_RU_TASK：引擎任务办结时
+            // RU 行即被删除，查不到 == 「已非待办」，与旧语义等价。
+            WfTask fresh = ledgerMode.isDirect()
+                ? taskActReader.activeTaskFromAct(t.getId())
+                : taskMapper.selectById(t.getId());
             if (fresh == null || !Integer.valueOf(WfTask.STATUS_TODO).equals(fresh.getStatus())) {
                 continue;
             }
@@ -1761,10 +1772,18 @@ public class WfTestServiceImpl implements IWfTestService {
             // 此前只查布局必填，漏掉权限矩阵（perm=必填）标记的列（如 flowno/reqdate）→
             // 自动测试首步假通过、直到网关求值才崩，前端「必填阻塞提示+继续」因此失效。
             if (firstNode != null && !firstNode.getNodeKey().equals(t.getNodeKey())) {
-                Long doneCount = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-                    .eq(WfTask::getInstId, instId)
-                    .eq(WfTask::getStatus, WfTask.STATUS_DONE));
-                if (doneCount == null || doneCount == 0) {
+                // direct 模式：wf_task 为空 → 恒 0 → 误判「首次提交」→ 误触发创建节点必填校验。
+                // 改为按 ACT_HI_TASKINST（END_TIME_ 非空）统计已办任务数。
+                long doneCount;
+                if (ledgerMode.isDirect()) {
+                    doneCount = taskActReader.countDoneByInstanceFromAct(instId);
+                } else {
+                    Long n = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+                        .eq(WfTask::getInstId, instId)
+                        .eq(WfTask::getStatus, WfTask.STATUS_DONE));
+                    doneCount = (n == null) ? 0L : n;
+                }
+                if (doneCount == 0) {
                     String startErr = startNodeRequiredError(stepDef, variables);
                     if (startErr != null) {
                         throw new ServiceException(startErr);
@@ -1814,11 +1833,19 @@ public class WfTestServiceImpl implements IWfTestService {
         // 「我的测试待办」= 当前登录人在**测试实例**上的待办（真人模式的数据源，方案 §6.4 C12）。
         // 与 todo(instId) 的区别：那个是「某测试实例的全部待办」（管理面代跑用来定位 taskId），
         // 这个按登录人过滤 —— 供节点操作者本人从测试入口看到属于自己的测试单并办理。
-        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getAssignee, me)
-            .eq(WfTask::getIsTest, 1)
-            .eq(WfTask::getStatus, WfTask.STATUS_TODO)
-            .orderByDesc(WfTask::getCreateTime));
+        // direct 模式：wf_task 为空 → 「我的测试待办」永远为空。改按 ACT_RU_TASK 查活跃待办。
+        List<WfTask> tasks;
+        if (ledgerMode.isDirect()) {
+            tasks = taskActReader.activeTasksFromAct(null, null, me, true);
+            // 与旧 orderByDesc(createTime) 口径一致（读者方法统一按接收时间升序返回）
+            java.util.Collections.reverse(tasks);
+        } else {
+            tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getAssignee, me)
+                .eq(WfTask::getIsTest, 1)
+                .eq(WfTask::getStatus, WfTask.STATUS_TODO)
+                .orderByDesc(WfTask::getCreateTime));
+        }
         for (WfTask t : tasks) {
             WfInstance inst = instanceMapper.selectById(t.getInstId());
             if (inst == null) {
@@ -2435,7 +2462,7 @@ public class WfTestServiceImpl implements IWfTestService {
                 patch.setId(t.getId());
                 patch.setStatus(WfTask.STATUS_FINISHED);
                 patch.setOperateTime(now);
-                taskMapper.updateById(patch);
+                // 批次 1：测试域幽灵待办清理不再写 wf_task 台账（存量行只读，ACT 为准）
                 logLines.add(fmt.format(new Date()) + " 清理幽灵待办：节点\"" + t.getNodeKey()
                     + "\"（engineTaskId=" + engineTaskId + "）在引擎侧已不存在，置办结");
             }
@@ -2444,7 +2471,16 @@ public class WfTestServiceImpl implements IWfTestService {
         }
     }
 
+    /**
+     * 测试实例当前待办 —— <b>流程测试域所有读点的公共入口</b>（run/state/step/幽灵清理/权限校验）。
+     *
+     * <p>direct 模式下 {@code wf_task} 为空表，旧实现恒返回空 → 自动测试、交互提交、
+     * 状态面板、或签幽灵清理、真人模式鉴权全部哑火。统一翻源到 {@code ACT_RU_TASK}。</p>
+     */
     private List<WfTask> pendingTestTasks(Long instId) {
+        if (ledgerMode.isDirect()) {
+            return taskActReader.activeTasksFromAct(instId, null, null, true);
+        }
         return taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, instId)
             .eq(WfTask::getIsTest, 1)
@@ -2456,10 +2492,13 @@ public class WfTestServiceImpl implements IWfTestService {
         if (instId == null) {
             return new ArrayList<>();
         }
-        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .eq(WfTask::getNodeKey, nodeKey)
-            .last("LIMIT " + (MAX_OPERATORS + 1)));
+        // direct 模式：wf_task 为空 → 操作者面板全空。改读 ACT_HI_TASKINST（含已办，能显示走过的人）。
+        List<WfTask> tasks = ledgerMode.isDirect()
+            ? taskActReader.allTasksByInstanceFromAct(instId, nodeKey)
+            : taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, instId)
+                .eq(WfTask::getNodeKey, nodeKey)
+                .last("LIMIT " + (MAX_OPERATORS + 1)));
         List<WfTestResultVO.TestOperatorVO> vos = new ArrayList<>();
         Set<Long> seen = new LinkedHashSet<>();
         for (WfTask t : tasks) {
@@ -2620,19 +2659,26 @@ public class WfTestServiceImpl implements IWfTestService {
             List<Boolean> endedAfter = new ArrayList<>();
             int guard = 0;
             while (guard++ < 20) {
-                List<WfTask> todos = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-                    .eq(WfTask::getInstId, instId)
-                    .eq(WfTask::getNodeKey, "miNode")
-                    .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+                // direct 模式：wf_task 为空 → todos 恒空 → 循环立即 break → pendingAfter 为空
+                // → 与 expectedPending 不等 → MI 自测必然判失败（failReason 误导）。
+                // 改读 ACT_RU_TASK；引擎完成/取消 MI 子任务时 RU 行即删除，逐人驱动门禁口径等价。
+                List<WfTask> todos = ledgerMode.isDirect()
+                    ? taskActReader.activeTasksFromAct(instId, "miNode", null, false)
+                    : taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                        .eq(WfTask::getInstId, instId)
+                        .eq(WfTask::getNodeKey, "miNode")
+                        .eq(WfTask::getStatus, WfTask.STATUS_TODO));
                 if (todos.isEmpty()) {
                     break;
                 }
                 WfTask t = todos.get(0);
                 taskService.autoApprove(t.getId(), "同意", new LinkedHashMap<>(), t.getAssignee());
-                long pending = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
-                    .eq(WfTask::getInstId, instId)
-                    .eq(WfTask::getNodeKey, "miNode")
-                    .eq(WfTask::getStatus, WfTask.STATUS_TODO));
+                long pending = ledgerMode.isDirect()
+                    ? taskActReader.activeTasksFromAct(instId, "miNode", null, false).size()
+                    : taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
+                        .eq(WfTask::getInstId, instId)
+                        .eq(WfTask::getNodeKey, "miNode")
+                        .eq(WfTask::getStatus, WfTask.STATUS_TODO));
                 pendingAfter.add(pending);
                 HistoricProcessInstance hp = processService.historicProcess(inst.getEngineInstId());
                 endedAfter.add(hp != null && hp.getEndTime() != null);

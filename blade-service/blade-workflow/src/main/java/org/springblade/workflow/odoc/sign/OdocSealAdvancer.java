@@ -14,7 +14,6 @@ import org.springblade.workflow.entity.WfProcessNode;
 import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfInstanceMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
-import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.odoc.entity.WfOdocSignFlow;
 import org.springblade.workflow.odoc.mapper.WfOdocSignFlowMapper;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
@@ -46,7 +45,10 @@ import java.util.Map;
 public class OdocSealAdvancer {
 
 	private final WfOdocSignFlowMapper flowMapper;
-	private final WfTaskMapper taskMapper;
+	/** 批次 1：按 BIZ_TASK_ID_ 反查 ACT（取代 taskMapper.selectById） */
+	private final org.springblade.workflow.service.helper.WfTaskBizResolver bizResolver;
+	/** 批次 1：台账状态恢复改为直写 ACT 业务列 */
+	private final org.springblade.workflow.service.helper.WfTaskActWriter taskActWriter;
 	private final WfInstanceMapper instanceMapper;
 	private final WfProcessNodeMapper nodeMapper;
 	private final WfBpmnExtensionReader bpmnReader;
@@ -167,11 +169,13 @@ public class OdocSealAdvancer {
 		flow.setAdvanceMsg(reason);
 		flowMapper.updateById(flow);
 		if (flow.getTaskId() != null) {
-			WfTask task = taskMapper.selectById(flow.getTaskId());
+			// 批次 1：改按 BIZ_TASK_ID_ 反查 ACT（wf_task 已零写入，selectById 不再命中）
+			WfTask task = bizResolver.resolve(flow.getTaskId());
 			if (task != null && task.getStatus() != null && task.getStatus() != WfTask.STATUS_TODO) {
 				task.setStatus(WfTask.STATUS_TODO);
 				task.setOperateTime(null);
-				taskMapper.updateById(task);
+				// 批次 1：不再更新 wf_task 台账，直接把 TODO 直写 ACT 业务列
+				taskActWriter.sync(task);
 				log.info("[odoc-seal] 签署未完成，业务待办已恢复为待办 taskId={}, reason={}",
 					task.getId(), reason);
 			}

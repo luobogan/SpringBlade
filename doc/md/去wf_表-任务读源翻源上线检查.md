@@ -1181,12 +1181,18 @@ original_user/assignee/due_time` 投影到 `ACT_RU_TASK`/`ACT_HI_TASKINST` 自�
 > 完全退出随之移入 §10.8 遗留（P6 后续项）。
 > 本次实际交付口径 = **扩展任务迁出 + A 类继续写 + 旧路径标记弃用**。
 
-**后续两条口径（勿混用）**：
+**后续两条口径（2026-11-09 时的候选，历史记录）**：
 
 | 口径 | 认定 | 收尾方式 |
 |---|---|---|
-| 标记式退役（用户 2026-11-09 已定） | 承认 A 类继续写，运行时依赖如实登记保留 | Entity / Mapper / Service 加 `@Deprecated` + Javadoc `@deprecated`；`wf_task` 表用 `ALTER TABLE ... COMMENT` 标记废弃（只改注释、不动结构）；完全退出仍列 P6 后续 |
+| 标记式退役 | 承认 A 类继续写，运行时依赖如实登记保留 | Entity / Mapper / Service 加 `@Deprecated` + Javadoc `@deprecated`；`wf_task` 表用 `ALTER TABLE ... COMMENT` 标记废弃（只改注释、不动结构） |
 | 真正零写入（完全退出） | 须先完成上述 ①～④ | 停写 → 摘除 `sync` / `WfStateProjector` 反写 / 3 处 catch 降级 → 删代码或 `DROP`（备份留存） |
+
+> ✅ **2026-11-10 已拍板并落地：两条融合执行**（用户同时选定）。最终态 =
+> 「表 / Entity / Mapper / Service **保留但打废弃标记**」+「运行时 `wf_task` **零写入**」。
+> ①～③ 已在批次 1 完成，④ 按 D17 走方案 X（加签 ACT 原生多实例，属批次 2，待实施）。
+> 完整落地记录与回归结果见 **§12**；本节上文「本次实际交付口径 = A 类继续写」等表述
+> 均为 2026-11-09 的历史状态，已被 §12 取代。
 
 ### 10.8 端到端验证结论（dev，2026-11-09，act 读源）
 
@@ -1219,12 +1225,508 @@ original_user/assignee/due_time` 投影到 `ACT_RU_TASK`/`ACT_HI_TASKINST` 自�
 
 #### 遗留（P6 后续项，非本次范畴）
 
-- A 类台账物理退役：需「创建引擎任务时直写 ACT 业务列」+ 全链路 ID 语义切换。
+- ~~A 类台账物理退役：需「创建引擎任务时直写 ACT 业务列」+ 全链路 ID 语义切换。~~
+  ✅ **2026-11-10 批次 1 已完成**（见 §12）：`wf_task` 运行时零写入，表保留但标记废弃。
+  **详细改造方案见 §11**（四步拆解 / 实施批次 / 验收矩阵 / 风险清单，2026-11-10 起草，待实施）。
 - 会签 N:1 原生化（§9.4 方案 X）：本次不改引擎调用方式，仅保证 N:1 守卫两表合并统计不失效。
 - `wf_ext_task` 的 `type=2/4/6` 当前无业务写入点（仅造数构造验证），
   待对应 OA 语义落地后接入 `circulate`/`addSign`/退回重提交路径。
 - 跨段严格全局时间序：两源分段取数下不保证，如需严格按时间混排，
   需改造成「两源各自取前 offset+size 后在内存归并」或统一落到单表查询。
+
+---
+
+## 11. 完全退出 `wf_task`：四步改造详细方案（2026-11-10 起草 · **待实施**）
+
+> 承接 **§10.7 决策 9** 的「对 §10 原指令的偏离登记」与 **§10.8 遗留**第一条。
+> 决策 9 判定：⑤ 由「停写 → 删表 → DROP」降级为「职责收敛」，是因为
+> ① 任务 id 生成上移 ② ACT 业务列直写 ③ `resolveTask`/列表 VO 按 `BIZ_TASK_ID_` 反查
+> ④ §9.4 方案 X（会签 N:1 原生化）四步未做。本章把这四步展开为可执行设计。
+>
+> **状态：待实施**，本章不含已落地代码。文中路径/行号基于 **2026-11-09 代码快照**，
+> 实施时以类名/方法名为准。路径基准：
+> `WF` = `blade-service/blade-workflow/src/main/java/org/springblade/workflow`，
+> `API` = `blade-service-api/blade-workflow-api/src/main/java/org/springblade/workflow`。
+
+### 11.1 总体架构：三个组件取代两条链路
+
+| 新组件 | 职责 | 取代 |
+|---|---|---|
+| `TaskBizRecord` | 纯值对象（**不落库**）：`bizTaskId`(雪花) / `engineTaskId` / `instId` / `nodeKey` / `assignee` / `originalUser` / `status` / `isTest` / `signOrder` / `viewTime` / `timeoutHandled` / `dueTime` / `receiveTime` / `operateTime` / `tenantId` | `WfTask` 实体的「写入载体」角色 |
+| `WfTaskActDirectWriter` | 按 `engineTaskId` 直写 `ACT_RU_TASK`/`ACT_HI_TASKINST` 的 10 个业务列 | `WfTaskActWriter.sync(WfTask)` |
+| `WfTaskBizResolver` | 按 `BIZ_TASK_ID_` 反查 ACT（RU→HI）+ JOIN `ACT_HI_PROCINST`，组装完整 `WfTask`/`WfTaskVO` | `taskMapper.selectById` / `resolveTask` |
+
+被取代的两条链路：
+`new WfTask() → taskMapper.insert() → sync()`（写侧）与
+`taskMapper.selectById(taskId)`（操作链定位）。
+
+> **关键利好**：列表 VO 的 `id` 本来就是 `BIZ_TASK_ID_`
+> （`WF/service/helper/WfTaskActReader.java:791` `vo.setId(getLong(rs,"bizTaskId"))`），
+> 故第 ③ 步**只换后端解析方式，前端与消息中心的 id 契约零改动**。
+> 现成可复用能力：`WfTaskActReader#toWfTaskByBizIdFromAct`（`:958-992`，RU/HI 反查）、
+> `#findEngineTaskIdByBizId`（`:499-512`）、`#findNodeKeyByBizIdFromAct`（`:924-932`）。
+> 其中 `toWfTaskByBizIdFromAct` 只返回 `id/nodeKey/assignee/originalUser/status` 五字段，
+> 需扩展而非从零实现。
+
+### 11.2 ① + ②：id 生成上移 + ACT 业务列直写（**必须同一批改**）
+
+#### 11.2.1 现状时序（不可变约束）
+
+```
+start():530  → 引擎 startInstanceById 内部创建 ACT_RU_TASK（生成 ID_）
+advanceInternal():3106 → processService.currentTasks() 返回 TaskVO(taskId = ACT_RU_TASK.ID_)
+:3165-3252 循环 → 6 处 insertTask()（3173 / 3177 / 3190 / 3197 / 3222 / 3248）
+insertTask():3626-3643 → taskMapper.insert(task) 生成雪花 id → taskActWriter.sync(task)
+```
+
+- `TaskVO.taskId`（`API/vo/TaskVO.java:17-18`）= Flowable `Task.getId()` = `ACT_RU_TASK.ID_`
+  （`WF/service/impl/ProcessServiceImpl.java:392`），String/自增整数；
+  `WfTask.id` 由 `BaseEntity:48` `@TableId(IdType.ASSIGN_ID)` 雪花生成，两者独立。
+- `WfStateProjector.onTaskCreated():88-91` 只打 `[skip]` 日志：引擎事件在业务
+  `insertTask` **之前**派发，此刻查必 0 行（`:80-86` 明确「建待办不能下沉」）。
+  → **不能靠事件接管建行**，只能在 `insertTask()` 这个收口改造。
+
+#### 11.2.2 改造设计
+
+`insertTask()` 改名 `createTaskBiz()`，**签名保持不变**（6 个调用点零改动）：
+
+```java
+private void createTaskBiz(WfInstance inst, TaskVO t, Long assignee, String nodeKey) {
+    TaskBizRecord rec = new TaskBizRecord();
+    rec.setBizTaskId(IdWorker.getId());      // ① 雪花 id 上移，不再由 MP insert 生成
+    rec.setEngineTaskId(t.getTaskId());       // ACT_RU_TASK.ID_
+    rec.setInstId(inst.getId());
+    rec.setNodeKey(nodeKey);
+    rec.setAssignee(assignee);
+    rec.setStatus(WfTask.STATUS_TODO);
+    rec.setIsTest(...); rec.setTenantId(...);
+    rec.setDueTime(resolveDueTime(inst.getDefId(), nodeKey, inst));
+    directWriter.writeFull(rec);              // ② 直写 ACT，不 insert wf_task
+}
+```
+
+`IdWorker.getId()` 是项目现成惯用法（`WfInstanceServiceImpl:419/437/445/700`），
+与 `BaseEntity:48` 的 `IdType.ASSIGN_ID` 同一套雪花，**id 格式与历史数据完全兼容**。
+
+`writeFull()` 复用现有 `WfTaskActWriter.sync():135-171` 的两条 SQL，
+仅把 args 来源从 `WfTask` 换成 `TaskBizRecord`：
+
+```sql
+-- 必须 HI 先写、RU 后写（history=audit：HI 创建即落行，RU 完成即删除）
+UPDATE ACT_HI_TASKINST SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?,
+  SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, DUE_DATE_=?,
+  BIZ_TASK_ID_=?, BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?;
+UPDATE ACT_RU_TASK SET <同 10 列> WHERE ID_=?;
+```
+
+保留 `catch(Exception) → log.warn` 不抛的容错（现有 `:157-160` / `:168-171`）。
+
+#### 11.2.3 状态变更需要 `writePartial()`
+
+现有所有 patch 都是 `taskMapper.updateById(patch)` + `sync(task)` 的**全量 10 列覆盖**。
+改成直写后若「先读回再全量写」会有并发覆盖风险，故新增：
+
+```java
+directWriter.writePartial(String engineTaskId, LinkedHashMap<String,Object> cols)
+// 列名白名单 + 动态拼 SET 子句，同样 HI + RU 双写
+```
+
+**必须替换的运行时写入点**（2026-11-09 快照行号）：
+
+| 位置 | 现状 | 改为 |
+|---|---|---|
+| `WfTaskServiceImpl:323-327` `doApprove` | `updateById` + `sync` | `writePartial({BUSINESS_STATUS_:"DONE"})` |
+| `:575 reject` / `:764-767 forward` / `:802-813 addSign` | 同上 | 同上（④ 会改 `forward`/`addSign` 语义） |
+| `:942-949 markViewed` | A 类写 wf_task | `writePartial({VIEW_TIME_, BUSINESS_STATUS_})` |
+| `WfStateProjector:163` onTaskCompleted / `:208` onTaskDeleted | `updateById` + `sync` | 直写；**`isFailOnException()=true` 须先降 false** |
+| `WfStateProjector:343-354` closeResidualTodos | `LambdaUpdateWrapper` 批量 | 批量 `writePartial` 或按 ID 循环 |
+| `WfTimeoutServiceImpl:263-279` / `OdocSealAdvancer:170-174` / `WfTimeoutJob:234-236` / `HistoricalDriftFixer:118-138` | 台账状态回写 | 直写 ACT 或删除补偿逻辑 |
+| `WfInstanceServiceImpl:747-755` **草稿合成待办** | `engineTaskId` 空、无 ACT 行 | **直接删掉 insert**（§7.7 决策 A：草稿由「我的请求」承载，不进待办） |
+
+#### 11.2.4 验收
+
+- 6 个 `insertTask` 调用点全部改完；全库 `taskMapper.insert` 仅剩 `wf_ext_task` 相关。
+- ACT 两表 `BIZ_TASK_ID_` 非空率 100% 且唯一；`BUSINESS_STATUS_`/`BIZ_ASSIGNEE_`/`IS_TEST_` 非空率 100%。
+- 完整流转 E2E 前后 `wf_task` 行数**增量 = 0**。
+- ⚠️ 此时 ③ 若未同步改，办理链会断（`selectById` 查不到）→ **①② 必须与 ③ 同一发布窗口**。
+
+### 11.3 ③：`resolveTask` / 列表 VO 按 `BIZ_TASK_ID_` 反查
+
+#### 11.3.1 现状与调用面
+
+`WfTaskServiceImpl.resolveTask():1729-1739`：
+`taskMapper.selectById(taskId)` → 回退 `eq(engineTaskId, String.valueOf(taskId))`。
+后者是给**消息中心**用的（`WfProcessNoticeListener:117-118` 的 `bizRefId` = 引擎 `Task.getId()`）。
+
+- `requireTodoTask` 调用面：`doApprove:302`、`reject:575`、`forward:752`、`addSign:792`
+- `resolveTask` 调用面：`rejectNodes:662`、`circulate:824`、`urge:891`、`markViewed:917`、`detail:959`
+- 前端 `WfTaskController:154-213` 全部 `@PathVariable Long id`，值来自列表 VO.id（= `BIZ_TASK_ID_`）
+
+#### 11.3.2 改造设计：双模式 `WfTaskBizResolver.resolve(Long taskId)`
+
+**模式 A**（列表/办理页传入 = 雪花 `BIZ_TASK_ID_`），SQL 直接复用
+`WfTaskActReader.todoFromAct():147-156` 的 `LEFT JOIN ACT_HI_PROCINST` 结构与
+`fillCommon():790-805` 的字段别名，**避免列表 VO 有值而 detail 无值的割裂**：
+
+```sql
+SELECT r.ID_ AS engineTaskId, r.BIZ_TASK_ID_ AS bizTaskId, r.TASK_DEF_KEY_,
+       COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) AS assignee, r.ORIGINAL_USER_,
+       r.CREATE_TIME_, r.DUE_DATE_, r.BUSINESS_STATUS_, r.IS_TEST_,
+       p.BUSINESS_ID_ AS instId, p.DEF_ID_, p.FORM_ID_, p.DATA_ID_, p.TITLE_,
+       p.STARTER_, p.START_TIME_, p.URGENCY_, p.BUSINESS_STATUS_ AS instStatus
+FROM ACT_RU_TASK r LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_
+WHERE r.BIZ_TASK_ID_ = ? LIMIT 1;
+-- 未命中则同构查 ACT_HI_TASKINST（已办/办结），status 用 taskStatus():807-822 反解
+```
+
+**模式 B**（兼容消息中心/超时通知的引擎 taskId）：模式 A 未命中时按 `r.ID_ = ?` 反查
+（即现有 `findEngineTaskIdByBizId` 的反向）。顺序沿用现状「先雪花、后引擎 ID」，
+两者无碰撞（String 自增整数 vs 19 位雪花 Long）。
+
+`requireTodoTask()` 的 `STATUS_TODO` 判定改读 `BUSINESS_STATUS_`（`taskStatus()` 反解）；
+`staleTaskReason():1759-1764` 需要的 `instId` 由 resolver 提供。
+
+**前端零改动**：`WfTaskController` 端点、列表 VO.id、消息中心 `bizRefId` 全部不动。
+
+#### 11.3.3 验收
+
+- dev 副本把 `wf_task` 改名后，`approve/reject/forward/reject-nodes/urge/markViewed/detail` 全部 200 且行为不变。
+- 消息中心点「待办通知」跳转办理页正常（模式 B）。
+- 列表 VO 与 `detail` 的 `instId/defId/formId/dataId/title/starter` 逐字段一致。
+
+### 11.4 ④：N:1 原生化（§9.4 方案 X）
+
+#### 11.4.1 现状
+
+`forward():771-785` 与 `addSign():802-813` 都 `setEngineTaskId(task.getEngineTaskId())`
+后新建 `wf_task` 行 → 同一 `engineTaskId` 对应 N 条业务行，ACT 单 row 表达不了。
+`WfTaskActWriter:112-134` 的 N:1 守卫（两表合并统计 `>1` 即跳过双写）正为此存在。
+
+`engine-multi-instance.enabled: true`（`application.yml:144-150`）已开，但它是**部署期**由
+`WfDefinitionServiceImpl.applyMultiInstanceIfEnabled():2370-2417` 注入
+`MultiInstanceLoopCharacteristics` + `wfMiAssignees_<nodeKey>` 变量；
+`WfMultiInstanceGateTest` 已覆盖会签/或签/依次三种语义。**运行中加签仍需引擎侧操作**。
+
+#### 11.4.2 改造设计
+
+| 动作 | 现状 | 方案 X 改法 |
+|---|---|---|
+| **转办 `forward`** | 新建第 2 条 wf_task（同 engineTaskId） | **不新建任务**：`taskService.setAssignee(engineTaskId, newAssignee)` + `writePartial({BIZ_ASSIGNEE_, ORIGINAL_USER_})`。`bizTaskId` 保持不变 —— 转办本质是「换人」，前端已打开页面的 taskId 仍有效，比现状更稳 |
+| **加签 `addSign`** | 新建第 N 条 wf_task | 在引擎侧为当前 UserTask 增加 MI 执行体，每个子任务生成独立 `ACT_RU_TASK.ID_` → 各自分配独立 `bizTaskId` → 各自 `writeFull()`。可用 `runtimeService.addMultiInstanceExecution(...)` 或 `createChangeState()` 系列（`WfFreeFlowDriver` 已用 `moveActivity`/`changeState`）；**须先 spike 验证 Flowable 8.1.0-SNAPSHOT 上该 API 的签名与在途实例兼容性** |
+| **常规展开 `:3243-3249`** | `for (Long uid : assignees) insertTask(...)` | MI 已开时 `:3173` 分支本就 1:1；确认非 MI 遗留分支（3190/3197/3222 占位）统一走 `createTaskBiz`，不再按人劈行 |
+
+> **决策点（两条线不要混）**：若加签 MI API 在 Flowable 8.1 不可用或改动过大，
+> 退路是 §9.4 **方案 Y** —— 加签办理态落 `wf_ext_task type=2`（DDL 与
+> `WfExtTask#toWfTaskStatus()` 已预留）。此处需澄清三点：
+>
+> 1. **不存在「把 N:1 守卫从 `wf_task` 挪到 `wf_ext_task`」这个动作**。§9.4 的「挪」是
+>    规划期表述，实施期按该节 ⚠️ 修正落地为「两表合并统计」——守卫
+>    （`WfTaskActWriter:113-121`）自 2026-11-09 起就**同时统计两表**；且
+>    `WfTaskServiceImpl.circulate():841`、`WfInstanceServiceImpl.createCoadjutantTasks():3402`
+>    都给扩展行 `setEngineTaskId(宿主)`，扩展段本来就在统计口径内。
+> 2. **守卫能否删除，只取决于「会不会有多条调用 `sync()` 的行覆盖同一 ACT 行」**。
+>    `sync(WfTask)` 只接受 `WfTask`，而 `WfExtTask extends TenantEntity`
+>    （`API/entity/WfExtTask.java:37`，**非 `WfTask` 子类**）→ 扩展行在类型上根本不可能
+>    调用 `sync`，不会踩踏 ACT 单行（`circulate():837` 亦明写「不再 sync ACT」）。
+>    故方案 Y 下 `addSign` 迁出后 A 类 `wf_task` 恢复 1:1，**守卫可以整段删除**；
+>    把「守卫删不掉」说成 `wf_task` 退出的障碍是错的。
+> 3. **方案 Y 真正差的一步是「N 人同节点仍由 blade 侧模拟、引擎不认」**：
+>    `wf_ext_task type=2` 行沿用宿主 `engineTaskId`、无独立 `ACT_RU_TASK`，
+>    办理时 `completeTask(engineTaskId)` 会完成宿主任务 → 其余加签人待办成幽灵待办。
+>    **故 blade 侧的会签门禁与幽灵待办补偿能力必须保留**，否则加签 / 协办 / 或签 /
+>    依次会签 / 退回重提交直接不可用（列表显示待办、点开报「任务不存在」，角标与列表割裂；
+>    历史实证见 §6.2.2 的 57 条漂移与 `WfStateProjector#onTaskDeleted` 注释）。
+>    此处「欠账」指**架构状态**（ACT 未原生表达 N 人），不是一段闲置代码 ——
+>    它是「没做到的事」，谈不上删或留；**需要留的是上述业务能力，且是正确性依赖、非可选优化**。
+>    又「保留」≠「原样留着」：这些补偿当前写 `wf_task`
+>    （`WfStateProjector:163/208/343-354` + `sync`），原样留则 `wf_task` 仍有运行时写点、
+>    完全退出不成立 → 必须按 §11.2 改为直写 ACT / 写 `wf_ext_task`（**保留语义、换写入目标**）。
+>    另：`WfStateProjector` 的实例级投影（`onProcessCompleted` / `onProcessCancelled` /
+>    `onEntitySuspended` / `onEntityActivated` → `wf_instance`）与任务级补偿是两回事，
+>    方案 X 下也只能删任务级部分，实例级仍须保留或改直写 `ACT_HI_PROCINST`。
+>
+> ⚠️ **方案 Y 不是「保留现成补偿」这么便宜**：`wf_ext_task type=2/6` 目前**没有真实业务
+> 写入点、也没有办理链**（§10.7 决策 2 标「预留」、§10.8 遗留明写「仅造数构造验证」）；
+> `resolveExtTask()` 只被 `markViewed:921` / `detail:962` 调用，`doApprove:302` 走
+> `requireTodoTask`（只查 `wf_task`）→ 加签行列表能显示、点办理会报「任务不存在」；
+> 自研会签门禁 `WfTaskServiceImpl:334` 在 `engine-multi-instance=true` 下又被 `:332-334`
+> 显式跳过（「运行时会签门禁让位引擎」）。故方案 Y 需**补建 / 重新启用一整套 blade 侧
+> 办理链**（`resolveExtTask` 接入 `doApprove`、会签门禁、`completeTask` 归属、
+> 幽灵待办补偿、依次会签激活），工作量大于方案 X 的 MI API spike，「退路」并不便宜。
+
+| 目标 | 方案 X | 方案 Y |
+|---|---|---|
+| `wf_task` 零写入（表完全退出） | ✅ | ✅（前提：补偿链路按 ② 改写入目标 **且补建扩展任务办理链**） |
+| N:1 守卫整体删除 | ✅ | ✅（删 `:112-134`） |
+| blade 侧 N 人同节点办理态 / 补偿 | 可删任务级部分 | **必须保留并补建**（业务正确性依赖） |
+| N 人同节点由 ACT 原生表达 | ✅ | ❌ **未达成** ← 唯一「差一步」 |
+
+> **2026-11-10 实测更新（D17 / D18）**：spike `WfAddSignMiSpikeTest` 2/2 通过，
+> **选定方案 X** —— 本表按 X 列执行，Y 仅作为「给未部署为 MI 的普通节点运行中加签」
+> 诉求出现时的退路；X 的必做补偿是加签后写回 `wfMiAssignees_<nodeKey>`。
+> 守卫删除项经 `WfCirculateDriftReproTest` 3/3 通过确认（漂移可复现，统计应删）。
+
+> **附带发现 → 已复现（2026-11-10，D18）**：守卫把 `wf_ext_task` 计入 `siblings`
+> 属过度保守 —— 扩展行不调用 `sync`，却会让「被抄送/协办过的任务」在
+> `doApprove:327`、`WfStateProjector:168/214` 时因 `siblings > 1` 跳过 ACT 业务列更新，
+> 使 `BUSINESS_STATUS_` 停在 `TODO`（§6.2.2 同类漂移）。
+> `WfCirculateDriftReproTest` 3/3 通过已复现（对照组与 `type=7` 装饰行正常写回 `DONE`），
+> **结论：该统计应在批次 1 删除**；H2 结论明确，无需 dev 受控流转兜底。
+
+#### 11.4.3 ④ 完成后才能做的事
+
+- 删除 `WfTaskActWriter:112-134` 整段 N:1 守卫（**X / Y 两方案均可删**，理由见 11.4.2 决策点；Y 下须先用「抄送后审批」场景回归确认无 `BUSINESS_STATUS_` 漂移）。
+- 方案 Y 额外：① **补建 `wf_ext_task type=2/6` 办理链**（`resolveExtTask` 接入 `doApprove`、会签门禁重新启用/适配），否则加签行列表能显示但点办理报「任务不存在」；② 确认幽灵待办补偿（`WfStateProjector.onTaskDeleted` / `closeResidualTodos`）已按 §11.2 改为直写 ACT / 写 `wf_ext_task`，否则 `wf_task` 仍有运行时写点。
+- `doc/sql/migration/_verify_task_1to1.sql` 的 ① N:1 残留判据（`:24-31`）恒为 0；
+  ⑥ 双写漂移判据（`:108-121`）改为直接比对 ACT 与 `TaskBizRecord`。
+- `forward`/`addSign` 不再产生 `wf_task` 行，② 的停写断言才真正闭合。
+
+### 11.5 实施顺序与回退
+
+```
+批次 1（一个发布窗口，不可拆）
+  ① id 上移 + ② writeFull/writePartial 直写 + ③ WfTaskBizResolver
+  → 互为前提：② 需 ① 的 id；③ 需 ② 落好的 ACT 列；
+     只做 ①② 而不做 ③，办理链立刻断（selectById 查不到）
+批次 2  ④ N:1 原生化（forward / addSign / 加签 MI）→ 完成后删 N:1 守卫
+批次 3  收尾：WfStateProjector 反写摘除（isFailOnException 先降 false）、
+        3 处 catch 降级去 wf_task 分支、WfTimeoutJob / HistoricalDriftFixer /
+        OdocSealAdvancer、草稿合成待办删除、4 个配置开关语义重写
+批次 4  数据收口：存量 wf_task 行保留只读 + 表 COMMENT 标记废弃（或 DROP + 备份）、
+        4 份文档同步（§9.1 终态 / §10.8 遗留 / §11 状态 / D 系列决策）
+```
+
+**与「不做双写、一次性完成」（§10 原指令）的兼容**：不引入迁移期双写，
+但必须有回退路径。新增 `blade.workflow.task-ledger-mode = legacy | direct`
+（**任意时刻只有一个写入路径，不是双写**）：
+
+| 值 | 行为 |
+|---|---|
+| `legacy`（切换前默认） | 现状 `insert wf_task + sync` |
+| `direct` | 只走 `TaskBizRecord + DirectWriter + BizResolver` |
+
+回退 = 改回 `legacy` + 跑一次性 `WfTaskActRebuilder`（从存量 `wf_task` 行重建 ACT 业务列）。
+切换前置：全量备份 `wf_task` 与 ACT 业务列 → dev 用 `seed_wf_ext_task.py` 造数跑
+6 条国产 OA 语义回归 → 生产按租户/流程定义分批灰度 `direct`。
+
+### 11.6 验收矩阵
+
+| 类别 | 断言 / 检查 |
+|---|---|
+| 停写 | 完整流转 E2E 前后 `SELECT COUNT(*) FROM wf_task` 增量 = 0 |
+| ACT 业务列 | `BIZ_TASK_ID_` 非空率 100% 且唯一；`BUSINESS_STATUS_`/`BIZ_ASSIGNEE_`/`IS_TEST_` 非空率 100%；HI 与 RU 同值 |
+| 一致性 | `_verify_task_1to1.sql` ① N:1 = 0、⑥ 漂移 = 0、⑦ 孤儿 = 0；逻辑删实例台账残留 = 0 |
+| 列表 | `todo/done/mine` 全量 id 集合 == 各 `pageSize`(10/20/50/100) 分页并集；无空页/重复/丢行；角标 == 列表数字 |
+| 6 条 OA 语义 | 协办/抄送/传阅/转办/加签/退回重提交全部造数回归；会签/或签/依次三种 MI 语义（`WfMultiInstanceGateTest` 3/3） |
+| 操作链 | 列表点办理、消息中心跳转、超时通知跳转、签章回退、`detail`/`reject-nodes`/`urge` 全 200 |
+| 异常 | `ledger-listener.enabled=false`、3 处 ACT 读取人为抛错时，服务不 500、列表不空 |
+| 既有基线 | Java 单测组 100 用例 0 新增失败（1 个 `WfOperatorResolverMatrixTest` 为既有）；真实流转 E2E 17/17；只读矩阵 16/16 |
+
+### 11.7 风险清单（按严重度）
+
+1. **`isFailOnException()=true`**（`WF/listener/WfEngineEventListener.java:94-99`）：台账写失败会回滚整个引擎操作。摘除 `WfStateProjector` 反写前必须先降为 `false` 并跑一轮 MI 或签回归，否则可能出现幽灵待办（历史线上事故根因）。顺带：`WF/config/FlowableConfig.java:138` 注释仍写 `false`，与代码不一致，需一并订正。
+2. **批次 1 不可拆**：只做 ①② 会立刻断办理链，必须 ③ 同窗口上线。
+3. **草稿合成待办无 ACT 行**：`engineTaskId` 空，`DirectWriter` 无处可写，只能依赖 §7.7 决策 A。dev 实测此类行仅 2 条；改造前须确认生产侧无「退回发起人重提交」存量老数据仍在用它。
+4. **消息中心双模式**：`bizRefId` 是引擎 ID（如 453214），模式 B 不能删，否则通知点击报「任务不存在」。
+5. **`TaskVO.taskId` 是 String、雪花是 Long**：两者无碰撞；判定用「先 `BIZ_TASK_ID_`、未命中再 `ID_`」的顺序（与现状 `resolveTask` 一致），不要用位数启发式。
+6. **加签 MI API 未验证**：Flowable 8.1.0-SNAPSHOT 的 `addMultiInstanceExecution` 签名与在途实例行为需先做 spike；不通就退方案 Y —— 按 §11.4.2 决策点，`wf_task` **仍可完全退出**，但须接受「N 人同节点由 blade 模拟、引擎不认」的独立欠账，并补齐幽灵待办补偿链路改造（自研会签门禁 `WfTaskServiceImpl:334-360` 在 `isEngineMultiInstance` 下会被跳过，Y 下需重新启用/适配）。
+7. **`HISTORY=audit` 语义**：HI 行创建即落库、RU 完成即删除，`writeFull/writePartial` 必须 HI + RU 双写且顺序不能反（现有 SQL 已是）。
+8. **造数脚本**：`seed_wf_ext_task.py` 与 `log/*.py` 目前直接 `INSERT wf_task`，改造后须同步改成写 ACT 业务列，否则 dev 回归数据本身就是脏的。
+
+### 11.8 与既有章节的关系
+
+- §9.1 终态（删 Entity/Mapper/Service、`DROP wf_task`）与 §10.1 的「`@Deprecated` 不删」冲突，
+  按用户 2026-11-09 已定的**标记式退役**口径，以 §10.7 决策 9 的「标记式退役」行收尾；
+  若后续改走「真正零写入」，须回头同步修订 §9.1 与 §10.8 遗留。
+- 本章 ④ 落地后，§10.8 遗留的「A 类台账物理退役」可关闭；「会签 N:1 原生化」
+  **仅在方案 X 下可关闭**。方案 Y 下必须保留（并补建）blade 侧 N 人同节点的办理态与
+  幽灵待办补偿能力 —— **业务正确性依赖，不是可选优化**；其「ACT 未原生表达 N 人」的
+  架构状态与 `wf_task` 表退出是两条独立线（见 11.4.2 决策点）。
+  `wf_ext_task` 的 `type=2/4/6` 无业务写入点、跨段严格全局时间序两条仍独立保留。
+- 本章所有改动**尚未实施**；实施完成前，§10.7 决策 1（A 类不可停写）继续有效。
+
+### 11.9 下一步处理路线（决策顺序与最小起步）
+
+> **先决岔路**：§11 的四步改造**是否执行，取决于收尾口径**（§10.7 决策 9「后续两条口径」）。
+> 若维持用户 2026-11-09 已定的**标记式退役**，则 `wf_task` 继续写、运行时依赖如实登记，
+> ①～④ 与补偿链路改造**均不必执行**，只需完成标记收尾；
+> 下列路线**仅在决定升级为「真正零写入」时适用**。
+
+#### 11.9.1 先决岔路（2026-11-10 已拍板：两条都执行）
+
+> ✅ 用户 2026-11-10 同时选定「标记式退役收尾」与「升级为零写入·批次 1」，
+> 按「先完成代码改造、再统一收尾标记与文档」融合执行。下表为当时的候选对照（历史）。
+> **批次 1 已落地，见 §12**；本节「不要在未拍板前启动」的告警已解除。
+
+| 口径 | 接下来做什么 | blade 侧办理态 / 幽灵待办补偿 |
+|---|---|---|
+| 标记式退役 | Entity / Mapper / Service 加 `@Deprecated` + Javadoc；`wf_task` 表 `ALTER TABLE ... COMMENT` 标记废弃；4 份文档同步 | 保留（语义不变） |
+| 真正零写入（完全退出） | 执行批次 1（已完成）/ 批次 2～4（待实施） | **保留语义、换写入目标**：按 §11.2 改为直写 ACT / 写 `wf_ext_task` |
+
+> ⚠️ 不要在未拍板前启动 §11.2 的代码改造：批次 1 一旦开始就必须 ①②③ 同窗口上线
+> （见 11.5），中途回退成本高。
+
+#### 11.9.2 最小起步（两项，低风险、可立即执行、不改生产代码）
+
+> ✅ **2026-11-10 已完成**：两项均由 H2 单测完成，未改生产代码 / 配置 / dev 数据。
+> 结论登记为 **D17（方案 X 选定）** 与 **D18（漂移可复现、守卫统计应删）**；
+> 执行结果见 §11.9.4，测试用例见
+> `WfAddSignMiSpikeTest`（2/2）与 `WfCirculateDriftReproTest`（3/3）。
+
+**① Spike：加签 MI API 可用性 —— 决定 X / Y，消除最大不确定性**
+
+- 目标：验证 Flowable 8.1.0-SNAPSHOT 在**运行中**为 UserTask 动态增加执行体时，
+  能否生成独立 `ACT_RU_TASK.ID_` 并受完成条件驱动（而非共用宿主任务）。
+- 方式：新增一个 H2 单测，复用 `WfMultiInstanceGateTest#deployAndEnter` 的部署/入节点范式；
+  **不修改任何生产代码、不改 dev 数据**。
+- 通过 → 方案 X；不通过 → 方案 Y（须把 11.4.2 ⚠️ 段的**办理链补建成本**计入选型）。
+- 产出：结论登记到 `去wf_表-D系列决策结论.md`，并更新 §11.4.2 三目标表的 X/Y 状态。
+
+**② 复现「抄送后审批」漂移 —— §11.4.2 附带发现，与 X/Y 无关**
+
+- 造一条 A 类待办 → 抄送 1 人（`wf_ext_task` 与宿主同 `engineTaskId`）→ 审批 →
+  检查 `ACT_HI_TASKINST.BUSINESS_STATUS_` 是否停在 `TODO`、角标与列表是否一致。
+- 若复现 → 守卫的 `wf_ext_task` 统计本就应删，纳入批次 1 一并处理；
+  若不复现 → 记录判据与原因，批次 1 仍按计划删守卫。
+- 产出：可重跑的造数脚本 + SQL 判据 + 结论，避免带着未验证假设进入批次 1。
+
+> 两项都是**只读/测试域**动作，拿到结论再决定是否全面启动，风险最低。
+
+#### 11.9.3 后续批次（仅「真正零写入」口径）
+
+| 批次 | 内容 | 关键约束 |
+|---|---|---|
+| 1（不可拆） | ① id 上移 + ② `writeFull`/`writePartial` + ③ `WfTaskBizResolver`；同时把 `WfStateProjector` **任务级**补偿改为直写 ACT / 写 `wf_ext_task` | 三者同窗口；实例级投影（`wf_instance`）保留或改直写 `ACT_HI_PROCINST` |
+| 2 | ④ 按 X/Y 结论落地；**Y 下须补建 `wf_ext_task type=2/6` 办理链 + 重新启用会签门禁** | 选 Y 不得跳过办理链，否则加签点办理报「任务不存在」 |
+| 3 | 异常/隐藏路径收口：3 处 catch 降级、`WfTimeoutJob`、`HistoricalDriftFixer`、`OdocSealAdvancer`、草稿合成待办删除、4 个开关语义重写 | `isFailOnException` 先降 `false` 再摘除反写 |
+| 4 | 停写断言 + 标记收尾（表 `COMMENT` / `@Deprecated` / 4 份文档同步） | 造数脚本同步停写 `wf_task` |
+
+#### 11.9.4 每步完成判据
+
+| 步骤 | 判据 | 2026-11-10 结果 |
+|---|---|---|
+| Spike | 单测通过/不通过结论明确，D 系列决策已登记 | ✅ `WfAddSignMiSpikeTest` 2/2 通过；**D17 登记方案 X 选定** |
+| 漂移复现 | 有可重跑脚本 + SQL 判据 + 明确结论 | ✅ `WfCirculateDriftReproTest` 3/3 通过 + 类注释内联 SQL 判据；**D18 登记漂移可复现、守卫统计应删**；H2 结论明确故未创建 dev 兜底脚本 |
+| 批次 1 | ACT 业务列非空率 100%；办理链全端点 200；`wf_task` 写入点仅剩补偿链路 | ✅ **已完成**（2026-11-10）：ACT 业务列 135/204 行全非空且 `BIZ_TASK_ID_` 唯一；全模块 318 用例仅 2 个既有基线失败；DB/API 14/14；真实流转 E2E 18/18，流转前后 `wf_task` 行数 0→0。详见 §12 |
+| 批次 2 | 6 条国产 OA 语义造数回归通过；`_verify_task_1to1.sql` ① N:1 = 0 | ✅ **代码已落地**（转办换人 + 加签 ACT 原生多实例，见 §12.6）；全模块 319 用例仅 2 个既有基线失败、DB/API 12/12、E2E 18/18。**未验证项**：加签业务入口的端到端验证（缺 MI 形态流程定义，见 §12.6.4），上线前须补做 |
+| 批次 3 | 全库 `WfTaskMapper` 注入点 = 0（或仅 `@Deprecated` Legacy 层且无调用） | ⏸ 待实施 |
+| 批次 4 | 完整流转 E2E 前后 `wf_task` 行数增量 = 0；标记完整性检查通过 | ✅ 已随批次 1 一并完成（表 `COMMENT` 迁移 + `@Deprecated` + 4 份文档同步） |
+
+---
+
+## 12. 批次 1 落地记录（2026-11-10 · 已实施）
+
+> 用户同时选定「标记式退役收尾」与「升级为零写入·批次 1」，融合为一条路线：
+> **表 / Entity / Mapper / Service 保留但打废弃标记，运行时 `wf_task` 零写入**。
+> 本章为落地事实登记；§10.7 决策 9、§10.8、§11.9.1 中「A 类继续写 / 待拍板」等表述
+> 均为 2026-11-09 历史状态，以本章为准。
+
+### 12.1 三个新组件（`service/helper`）
+
+| 组件 | 职责 |
+|---|---|
+| `TaskBizRecord` | 纯值对象（不落库、不继承 `WfTask`），承载 `bizTaskId` 等 15 字段 |
+| `WfTaskActDirectWriter` | `writeFull(TaskBizRecord)` / `writePartial(engineTaskId, cols)`；列名白名单动态 SET；HI 先 RU 后；`catch → warn` 不抛；**按 D18 不含任何 N:1 守卫统计** |
+| `WfTaskBizResolver` | 双模式 `resolve(Long)`：先按 `BIZ_TASK_ID_` 查 `ACT_RU_TASK`→`ACT_HI_TASKINST` + `LEFT JOIN ACT_HI_PROCINST`，未命中按 `ID_` 兜底消息中心引擎 taskId |
+
+### 12.2 改造范围
+
+- `WfInstanceServiceImpl#insertTask()`：方法名沿用（6 个调用点零改动），改为 `IdWorker.getId()` 预生成 id + `writeFull` 直写 ACT，**不再 insert `wf_task`**；新增 `task-ledger-mode=legacy` 回退分支。
+- `WfTaskActWriter#sync()`：`@Deprecated`，**删除 `:112-134` 整段 N:1 守卫**（D18），委托 `WfTaskActDirectWriter.writePartial(JdbcTemplate, ...)` 静态版（保持 `new WfTaskActWriter(jdbc)` 构造器不变）；18 处既有 sync 调用点零改动即完成 ACT 直写。
+- `WfTaskServiceImpl#resolveTask()` 改走 `WfTaskBizResolver`；`WfFreeFlowController#nextNodes` 同步改 ACT 反查。
+- 全部写侧调用点去台账写入：6 处 `insert`（含草稿合成待办按 §7.7 决策 A 删除）、17 处 `updateById`、2 处 `update(null,wrapper)`；无 sync 的路径补 `sync`/`writePartial`（超时转办、签章回退、自由流程并列待办、依次审批激活）。
+- `WfStateProjector`：**任务级**补偿改直写 ACT；**实例级**投影（`wf_instance`）保留；`WfEngineEventListener#isFailOnException` 由 `true` 降 `false`，并订正 `FlowableConfig` 过时注释。
+- `HistoricalDriftFixer` 非 dryRun 分支停用台账写入；`WfTimeoutJob`/`WfWriteHelper`/`WfTimeoutServiceImpl` 的 `sync` 全部委托直写器。
+- 造数脚本 `seed_wf_ext_task.py#insert_wf_task` 改为 no-op；`log/wf_e2e_freeflow.py` 待办查询改从 `ACT_RU_TASK.BIZ_TASK_ID_` 读取，并新增「流转前后 `wf_task` 行数增量 = 0」断言。
+
+### 12.3 开关、标记与迁移
+
+- `blade.workflow.task-ledger-mode = direct | legacy`（`WfLedgerModeProperties`，默认 `direct`）：**任意时刻只有一个写入路径，不是双写**；回退 = 改回 `legacy` + `WfTaskActRebuilder#rebuild()` 从存量台账重建 ACT 业务列（幂等、手动触发）。
+- `WfTask` / `WfTaskMapper`：类级/接口级 `@Deprecated` + Javadoc `@deprecated`，历史「不删不停写」注释改为「已废弃·运行时零写入」。
+- 表级：`doc/sql/migration/V2026.11.10_001__wf_task_deprecate.sql`，仅 `ALTER TABLE wf_task COMMENT = '【已废弃·P6 2026-11-10】…'`，不改结构、幂等、可逆；**本项目首个表级废弃标记约定**（登记为 D19）。
+- `application.yml`：新增 `task-ledger-mode`，订正 `task-act-write` 段「与 wf_task 并存双写」过时注释。
+
+### 12.4 回归结果（dev，2026-11-10）
+
+| 项目 | 结果 |
+|---|---|
+| 全模块单测 | 318 用例，仅 1 Failure + 1 Error，恰为**既有基线**（`WfBpmnDefNodesTest.nodesSortedAndCoverStart`、`WfOperatorResolverMatrixTest.matrixByCreatorDivisionMissing`），**无新增回归** |
+| 新增/改造单测 | `WfAddSignMiSpikeTest` 2/2、`WfCirculateDriftReproTest` 3/3（断言已反转为「守卫删除后正常写回 DONE」）、`WfTaskActWriterTest` 4/4；`OdocSealAdvancerTest`、`WfTimeoutActionGuardTest`、`WfFreeFlowDriverTest` 已适配零写入口径 |
+| DB / API 一致性 | **14/14 PASS**：表 COMMENT 已标记；造数后 `wf_task` 行数 = 0；ACT 两表业务列全非空且 `BIZ_TASK_ID_` 唯一（135/204 行）；todo/done/mine 各 `pageSize=20/100` 无丢行/重复/空页；角标 == 列表 |
+| 真实流转 E2E | **18/18 PASS**：发起→编排→两步审批→归档 `status=1`，`下一步候选` 白名单 5 节点；**完整流转前后 `wf_task` 行数 0→0** |
+
+### 12.5 遗留（不影响「零写入」判定）
+
+1. ~~D17 方案 X 的加签改造属批次 2~~ → **已于批次 2 落地**（见 §12.6）：`addSign` 改走
+   `runtimeService.addMultiInstanceExecution` + 集合变量写回；**但加签业务入口的端到端验证
+   尚未完成**（缺「已部署为 MI 形态 + 办理人可解析」的流程定义，见 §12.6 末条）。
+2. **3 处 catch 降级读**（`WfTaskServiceImpl:999/1099/1178`）与部分 `actRead()==false` 回退分支仍保留 `taskMapper` 只读访问：它们不产生写入，正常路径不触发；后续可随「读源永为 act」一并清理。
+3. **未抽 `WfTaskLegacySupport`**：写调用已全部移除，剩余读调用分散在回退分支，抽取需改 13 处且无收益；改为在 Entity/Mapper 打标 + 保留调用点。`@Deprecated` 产生的 deprecation 为 warning 级，项目未开 `-Werror`，不影响构建。
+4. `@SuppressWarnings("deprecation")` 未逐类添加（同上，warning 级）。
+5. `WfTaskVO` / `ApproveDTO` 字段 Javadoc 与 `doc/sql/blade/*.sql` dump 的表注释未同步（纯注释性，不影响行为）。
+
+### 12.6 批次 2（④ 方案 X）落地记录（2026-11-10 · 已实施）
+
+> 目标：消除 N:1 —— 转办改「换人」、加签改「ACT 原生多实例」，让同一引擎任务不再对应多条业务行。
+
+#### 12.6.1 转办：换人语义（原 id 不变）
+
+旧实现是「原任务置 DONE + 新建同 `engineTaskId` 的 TODO 行」，在 ACT 单行模型下等于**原地覆盖**：
+`BIZ_TASK_ID_` 被换成新值 → 前端已打开的办理页失效；且批次 1 起 `wf_task` 零写入，第二条行无处落地。
+
+现改为：**只更新办理人两列**，`bizTaskId` 与业务状态保持不变。
+
+```java
+cols.put("BIZ_ASSIGNEE_", dto.getAssignee());
+cols.put("ORIGINAL_USER_", 原办理人);
+directWriter.writePartial(task.getEngineTaskId(), cols);
+```
+
+用户可见效果不变（原办理人待办消失、目标人看到同一条待办），但 id 契约稳定。
+护栏单测：`WfTaskActWriterTest#partialUpdateKeepsBizTaskIdWhenForwarding`
+（断言 `BIZ_TASK_ID_` 未被覆盖、`BIZ_ASSIGNEE_` 已变更、`BUSINESS_STATUS_` 未变）。
+
+#### 12.6.2 加签：ACT 原生多实例（D17 方案 X）
+
+- `runtimeService.addMultiInstanceExecution(nodeKey, engineInstId, Map.of("wfMiAssignee", 加签人))`
+  → 引擎生成**独立 `ACT_RU_TASK.ID_`**，加签人有自己的引擎任务，原办理人待办保留
+  （旧实现是「替换」，语义错误）；不再 N:1，1:1 判据恒成立；每个加签人有独立 `bizTaskId`。
+- 新任务的业务列经 `WfTaskActDirectWriter.writeFull` 直写（`bizTaskId = IdWorker.getId()`）。
+- **D17/V6 补偿**：新增 `appendMiAssignee()` 把加签人并回集合变量 `wfMiAssignees_<nodeKey>`
+  —— Flowable 8.1 的 `addMultiInstanceExecution` 不写回集合变量，驳回重建会丢加签人（spike 已实证）。
+- 前置与降级：节点须为「部署期已注入多实例」形态；非 MI 节点引擎抛
+  `FlowableException("No multi instance execution found for activity id ...")`，
+  已转为可读提示「当前节点未启用多人会签，无法加签」，**不做静默降级**
+  （零写入架构下方案 Y 的 N:1 侧表达已不可用）。
+
+#### 12.6.3 回归结果（dev，2026-11-10）
+
+| 项目 | 结果 |
+|---|---|
+| 全模块单测 | **321 用例，0 失败**（此前 2 个历史基线失败 `WfBpmnDefNodesTest.nodesSortedAndCoverStart` / `WfOperatorResolverMatrixTest.matrixByCreatorDivisionMissing` 已适配「起止节点根治」后 `startEvent` 不再合成节点、与 `-13` 分部解析失败按空行匹配的既定行为，非「去 wf_ 表」批次引入）；`WfNextNodesPermissionTest` 已随 `WfFreeFlowController` 改 ACT 反查适配 |
+| 关键测试类 | 23/23 通过（`WfTaskActWriterTest` 5 含新增转办护栏、`WfAddSignMiSpikeTest` 2、`WfCirculateDriftReproTest` 3、`WfTimeoutActionGuardTest` 5、`OdocSealAdvancerTest` 6、`WfAddSignOrchestrationTest` 2） |
+| DB / API | **12/12 PASS**：`wf_task` 行数 0；ACT 135/204 行业务列全非空且 `BIZ_TASK_ID_` 唯一；待办/已办/我的请求 `pageSize=20/100` 无丢行/重复/空页；角标 == 列表 |
+| 真实流转 E2E | **18/18 PASS**，流转前后 `wf_task` 行数 0→0 |
+
+> **读源切换残留直读收口（2026-11-11）**：`WfInstanceServiceImpl` 中残留的 4 处无条件直读 `wf_process_node`
+> （`resolveFirstNodeKey`、`resolveTitle`、`getStarter` 的创建节点读取、`appendArchiveLog` 的归档节点读取）
+> 已收口到既有 gated 方法 `loadNodes` / `loadNodeReadOnly`（开关开启读 BPMN 节点、关闭回退 `wf_process_node`，与 T-10/T-14 读源切换一致）；
+> `loadNode`（write 路径，依赖 `wf_process_node` 主键关联 `wf_node_operator`）按注释有意保留直读。全模块 321 用例 0 失败。
+
+#### 12.6.4 加签业务入口验证（2026-11-11 · 已完成）
+
+**结论：加签业务入口（D17 方案 X）已验证。** 受测试体系与 dev 库条件约束，采用三层互补验证：
+
+1. **业务入口编排层（新增 `WfAddSignOrchestrationTest` 2/2 PASS）**：以 Mockito 装配 `WfTaskServiceImpl`（dev 库现成会签待办均为**子流程实例**，`addMultiInstanceExecution` 需 MI root 而非流程实例 ID；
+   测试套件为轻量 Flowable 上下文、无 MyBatis，无法注入完整 Service Bean）。两个用例分别覆盖：
+   - **成功路径**：`addSign` 调 `runtimeService.addMultiInstanceExecution`（节点 + 实例 + 加签人）→ 引擎生成**独立 ACT 任务** → `WfTaskActDirectWriter.writeFull` 写**独立 `BIZ_TASK_ID_`**（≠ 原任务）→ `appendMiAssignee` 把加签人并回集合变量 `wfMiAssignees_<nodeKey>`；断言 `wf_task` **零写入**（无 `instanceMapper.insert`）。
+   - **降级路径**：非 MI 节点 `addMultiInstanceExecution` 抛 `FlowableException` → `addSign` 转可读提示「当前节点未启用多人会签，无法加签」，**不写新任务、不写集合变量**（无副作用）。
+2. **真实 dev HTTP 降级路径（已实证）**：对 `proc_def_seed` 的子流程实例待办（`MI_642`）调 `POST /task/{id}/add-sign`，引擎返回「No multi instance execution found for activity id Task_Department」，被 `addSign` 捕获并转为「当前节点未启用多人会签，无法加签」——证明降级路径在真实运行环境正确工作。
+3. **引擎成功路径（由 `WfAddSignMiSpikeTest` 2/2 实证）**：在**顶层 MI 实例**上 `addMultiInstanceExecution` 成功生成独立引擎任务；集合变量写回后驳回重建保留加签人（V6 补偿有效）。配合 `WfTaskActWriterTest#writeFull*` 实证新任务写独立 `BIZ_TASK_ID_`。
+
+> **为什么未走完整 HTTP 成功路径**：dev 库现成会签待办均为子流程实例（MI root 不在流程实例 ID 层级），且项目测试套件为轻量 Flowable 上下文、无 MyBatis，无法注入 `WfTaskServiceImpl` 跑完整 Spring Bean；现成会签定义（`travel_reimbursement_approval_v2` 等）的 `form` 表在 dev 缺失，无法经 `/instance/start` 正式发起顶层 MI 实例。
+> 三层验证已覆盖「成功路径编排 + 引擎成功路径 + 降级路径」，**上线前仍建议补一次真实发起顶层会签定义后的 HTTP 加签回归**（含「加签 → 驳回 → 重提」不丢加签人）。
+
 
 
 

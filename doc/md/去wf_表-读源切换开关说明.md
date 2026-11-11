@@ -69,9 +69,17 @@ mvn -pl blade-service/blade-workflow test "-Dtest=WfBpmnExtensionRoundTripTest,W
 2. 跑通 §4 回归测试。
 3. 在对应环境（`application.yml` / Nacos）将开关置 `true`。
 4. 灰度观察：对比开关开/关下接口返回与运行期行为一致。
-5. 全量开启后，待 P6 再移除 `wf_*` 表对应写路径。
+5. ~~全量开启后，待 P6 再移除 `wf_*` 表对应写路径。~~
+   ✅ **2026-11-10 已完成一批（任务侧）**：`wf_task` 运行时零写入，业务列直写
+   `ACT_RU_TASK`/`ACT_HI_TASKINST`，操作链按 `BIZ_TASK_ID_` 反查 ACT；
+   表与 Entity/Mapper/Service 按 D19 **保留但打废弃标记**（不物理删除）。
+   新增 `blade.workflow.task-ledger-mode = direct | legacy` 单路径开关可回退。
+   定义期 7 张语义表的停写/删除仍按各自开关与《去wf_表-定义主记录翻源设计.md》§6 推进。
 
 ## 6. 已知缺口（待办）
 
 - 无（定义期读源切换：`field-perm` / `operator` / `timeout` / `detail-perm` / `detail-filter` 五个开关均已落地，默认关，回归测试齐备）。
 - 其余未切换接口见 `project_wf_table_interface_inventory.md`：运行期实例/任务接口需等 P4/P5 `ACT_*` schema 与回填就绪后切。
+- **任务侧残留（2026-11-10，不影响零写入）**：3 处 catch 降级读与部分 `actRead()==false`
+  回退分支仍保留 `WfTaskMapper` 只读访问；D17 方案 X 的加签 ACT 原生多实例属批次 2。
+  详见《去wf_表-任务读源翻源上线检查.md》**§12.5** 与 **D17/D19**。

@@ -126,14 +126,9 @@ public class HistoricalDriftFixer implements CommandLineRunner {
 			log.info("[drift-fix] 悬挂待办(待关闭)预估={}", cnt);
 			return (int) cnt;
 		}
-		int updated = taskMapper.update(null, new LambdaUpdateWrapper<WfTask>()
-			.set(WfTask::getStatus, WfTask.STATUS_FINISHED)
-			.set(WfTask::getOperateTime, new Date())
-			.eq(WfTask::getStatus, WfTask.STATUS_TODO)
-			.eq(WfTask::getIsTest, 0)
-			.isNotNull(WfTask::getEngineTaskId)
-			.notInSql(WfTask::getEngineTaskId, "SELECT ID_ FROM ACT_RU_TASK"));
-		log.info("[drift-fix] 悬挂待办已关闭={}", updated);
-		return updated;
+		// 批次 1：wf_task 已零写入、标记废弃，悬挂待办的修复目标不再存在。
+		// 保留 dryRun 统计供追溯；非 dryRun 不再更新台账（ACT 为权威事实源）。
+		log.info("[drift-fix] 批次 1 后跳过台账悬挂待办修复（wf_task 已废弃、零写入）");
+		return 0;
 	}
 }

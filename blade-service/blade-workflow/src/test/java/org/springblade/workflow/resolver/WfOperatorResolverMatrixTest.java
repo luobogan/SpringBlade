@@ -108,7 +108,9 @@ class WfOperatorResolverMatrixTest {
 		String matrixJson = "{\"matrixId\":\"99\",\"valueField\":\"owner\","
 			+ "\"conditions\":[{\"condField\":\"div\",\"wfField\":\"-13\"}]}";
 		MatrixMatchVO vo = new MatrixMatchVO(); // 空（未命中）
-		lenient().when(matrixService.matchUsers(eq(matrixId), eq("owner"), eq(Map.of())))
+		// -13 取值失败 → 条件值按空串「匹配空行」处理（WfOperatorResolver#resolveConditionValue 空值分支），
+		// 实际向 matchUsers 传入 Map.of("div", "") 而非空 Map
+		lenient().when(matrixService.matchUsers(eq(matrixId), eq("owner"), eq(Map.of("div", ""))))
 			.thenReturn(vo);
 
 		stubFallbackTo(List.of(matrixOp99(matrixId.toString(), matrixJson)));

@@ -45,6 +45,9 @@ class WfFreeFlowDriverTest {
     @Mock private IWfInstanceService instanceService;
     @Mock private WfTaskMapper taskMapper;
     @Mock private WfExtTaskMapper extTaskMapper;
+    @Mock private org.springblade.workflow.service.helper.WfTaskActReader taskActReader;
+    /** 默认 isDirect()=false → 沿用 legacy 读路径，保持本测试原有语义 */
+    @Mock private org.springblade.workflow.config.WfLedgerModeProperties ledgerMode;
 
     @InjectMocks private WfFreeFlowDriver driver;
 
@@ -92,7 +95,10 @@ class WfFreeFlowDriverTest {
     @Test
     void switchOff_disablesFreeFlow() {
         WfFreeFlowDriver off = new WfFreeFlowDriver(manager, resolver, freeNodeMapper,
-            defMapper, processService, instanceService, taskMapper, extTaskMapper);
+            defMapper, processService, instanceService, taskMapper, extTaskMapper,
+            org.mockito.Mockito.mock(org.springblade.workflow.service.helper.WfTaskActWriter.class),
+            org.mockito.Mockito.mock(org.springblade.workflow.service.helper.WfTaskActReader.class),
+            org.mockito.Mockito.mock(org.springblade.workflow.config.WfLedgerModeProperties.class));
         WfInstance inst = new WfInstance();
         inst.setDefId(200L);
         assertThat(off.isEnabled(inst)).isFalse();

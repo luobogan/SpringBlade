@@ -21,8 +21,10 @@ import org.springframework.stereotype.Component;
  * 完成时补 {@code END_TIME_}；而 {@code ACT_RU_TASK} 行在任务完成时会<b>被删除</b>。因此业务列必须
  * 在创建时同步写入<b>两张表</b>——只写 RU 会在任务完成后丢失维度，导致「已办」读不到子状态。</p>
  *
- * <p><b>与 wf_task 的关系</b>：迁移期间本类与 {@code WfTaskMapper} 写入<b>并存</b>（双写），互为校验；
- * 读侧切换（待办/已办读 ACT）且验证无误后，才退役 {@code wf_task}。</p>
+ * <p><b>与 wf_task 的关系</b>：台账写入模式（{@code blade.workflow.task-ledger-mode}）决定写路径。
+ * {@code direct}（默认，去 wf_ 表）：本类<b>单路径</b>直写 ACT 业务列，不再写 {@code wf_task}；
+ * {@code legacy}：仍由 {@code WfTaskMapper} 落台账（双写并存，互为校验）。{@code wf_task} 已于
+ * 批次 1 在 direct 模式下退役，读侧也已全部翻源到 ACT。</p>
  *
  * <p><b>事务</b>：本类无 {@code @Transactional}；调用方（{@code WfInstanceServiceImpl#insertTask}、
  * 办理/退回/查看/超时等生命周期动作）已处于事务中，且 ACT_* 与 wf_* 共用同一 DataSource，
@@ -91,83 +93,52 @@ public class WfTaskActWriter {
     /**
      * 任务业务列同步写回（创建 / 状态变更 / 查看 / 超时处置 通用）。
      *
-     * <p>同时写 {@code ACT_RU_TASK} 与 {@code ACT_HI_TASKINST}（按 {@code engineTaskId} 定位，即两表 {@code ID_}）。
-     * 传已持久化的 {@link WfTask}（含 id / engineTaskId / status / isTest / originalUser / signOrder /
-     * viewTime / timeoutHandled 的最新值）。</p>
+     * <p>【去 wf_ 表 · 批次 1 / 2026-11-10】按 <b>D18</b> 删除原 N:1 守卫
+     * （{@code SELECT COUNT(*) FROM wf_task} 与 {@code wf_ext_task} 合并统计）：
+     * {@code WfExtTask} 行从不调用本方法、不会踩踏 ACT 单行，该守卫只会让
+     * 「抄送后审批」跳过 ACT 业务列更新（{@code WfCirculateDriftReproTest} 已复现）。
+     * 现统一委托 {@link WfTaskActDirectWriter}，保持 HI 先 / RU 后 与
+     * {@code catch → log.warn} 容错。</p>
      *
-     * @param task 任务实体；{@code engineTaskId} 为空（如「退回发起人」的合成待办，引擎侧无对应任务）时跳过
+     * @param task 任务实体；{@code engineTaskId} 为空（合成待办，引擎侧无对应任务）时跳过
+     * @deprecated 2026-11-10 起新代码请直接用 {@link WfTaskActDirectWriter}；
+     *     本方法保留作为既有调用点的兼容入口与 legacy 回退路径。
      */
+    @Deprecated
     public void sync(WfTask task) {
         if (!enabled || task == null || task.getEngineTaskId() == null) {
             return;
         }
-        String engineTaskId = task.getEngineTaskId();
-        // 会签/或签/依次：同一引擎任务对应 N 条 blade 任务（每办理人一条），ACT 单 row 无法表达，
-        // 按人覆盖写会互相踩踏 → 保守跳过（详见类注释「会签/或签 N:1 约束」）。
-        // 计数失败同样跳过，宁可不写也不能写坏。
-        //
-        // 【去 wf_ 表 · 2026-11-09】扩展任务（协办/抄送/传阅等）已迁至 wf_ext_task，A 类引擎任务
-        // 本体仍在 wf_task。守卫须合并统计两表：排除 type=7（自由流程步骤名装饰行，非任务条目），
-        // 只要同一 engine_task_id 对应超过 1 个 blade 任务就跳过双写，避免踩踏 ACT 单行。
-        try {
-            Integer wfSiblings = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM wf_task WHERE engine_task_id = ?", Integer.class, engineTaskId);
-            long siblings = wfSiblings == null ? 0 : wfSiblings;
-            // 扩展表统计单独兜底：表未就绪/查询失败时按 0 处理，绝不能因此跳过 A 类双写
-            // （wf_task 是 ACT 业务列的唯一来源，跳过会让列表 status/assignee 断供）。
-            try {
-                Integer extSiblings = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM wf_ext_task WHERE engine_task_id = ? AND type <> 7 AND is_deleted = 0",
-                    Integer.class, engineTaskId);
-                siblings += extSiblings == null ? 0 : extSiblings;
-            } catch (Exception extEx) {
-                log.warn("[WfTaskActWriter] 统计 wf_ext_task 兄弟任务失败（按 0 处理，不阻断双写）. engineTaskId={}, {}",
-                    engineTaskId, extEx.getMessage());
-            }
-            if (siblings > 1) {
-                return;
-            }
-        } catch (Exception e) {
-            log.warn("[WfTaskActWriter] 统计同一引擎任务的 wf_task 条数失败，跳过双写. engineTaskId={}",
-                engineTaskId, e);
-            return;
+        java.util.LinkedHashMap<String, Object> cols = new java.util.LinkedHashMap<>();
+        // 仅写非 null 字段：状态变更 patch 不带全量字段时，避免把 ACT 业务列覆盖成 null
+        if (task.getStatus() != null) {
+            cols.put("BUSINESS_STATUS_", statusStr(task.getStatus()));
         }
-        Object[] args = {
-            statusStr(task.getStatus()),
-            task.getIsTest(),
-            task.getOriginalUser() == null ? null : String.valueOf(task.getOriginalUser()),
-            task.getSignOrder(),
-            task.getViewTime(),
-            task.getTimeoutHandled(),
-            task.getDueTime(),
-            // blade 业务任务ID：翻源后待办/已办列表仍吐此 ID，操作接口（approve/转办/退回）链路不变
-            task.getId(),
-            // blade 办理人：未开多实例时引擎 ASSIGNEE_ 常为 NULL（办理人只在 wf_task），读源须以此为准
-            task.getAssignee(),
-            resolveTenant(task.getTenantId()),
-            task.getEngineTaskId()
-        };
-        // 已办：HI 行承载最终业务维度（RU 行完成即删除，故必须写 HI）
-        try {
-            jdbcTemplate.update(
-                "UPDATE ACT_HI_TASKINST SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
-                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, DUE_DATE_=?, BIZ_TASK_ID_=?, "
-                    + "BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?",
-                args);
-        } catch (Exception e) {
-            log.warn("[WfTaskActWriter] 写回 ACT_HI_TASKINST 失败（双写预热，不影响台账）. engineTaskId={}",
-                task.getEngineTaskId(), e);
+        if (task.getIsTest() != null) {
+            cols.put("IS_TEST_", task.getIsTest());
         }
-        // 待办：RU 行存在时同步（已完成的任务命中 0 行，属正常）
-        try {
-            jdbcTemplate.update(
-                "UPDATE ACT_RU_TASK SET BUSINESS_STATUS_=?, IS_TEST_=?, ORIGINAL_USER_=?, "
-                    + "SIGN_ORDER_=?, VIEW_TIME_=?, TIMEOUT_HANDLED_=?, DUE_DATE_=?, BIZ_TASK_ID_=?, "
-                    + "BIZ_ASSIGNEE_=?, TENANT_ID_=? WHERE ID_=?",
-                args);
-        } catch (Exception e) {
-            log.warn("[WfTaskActWriter] 写回 ACT_RU_TASK 失败（双写预热，不影响台账）. engineTaskId={}",
-                task.getEngineTaskId(), e);
+        if (task.getOriginalUser() != null) {
+            cols.put("ORIGINAL_USER_", String.valueOf(task.getOriginalUser()));
         }
+        if (task.getSignOrder() != null) {
+            cols.put("SIGN_ORDER_", task.getSignOrder());
+        }
+        if (task.getViewTime() != null) {
+            cols.put("VIEW_TIME_", task.getViewTime());
+        }
+        if (task.getTimeoutHandled() != null) {
+            cols.put("TIMEOUT_HANDLED_", task.getTimeoutHandled());
+        }
+        if (task.getDueTime() != null) {
+            cols.put("DUE_DATE_", task.getDueTime());
+        }
+        if (task.getId() != null) {
+            cols.put("BIZ_TASK_ID_", task.getId());
+        }
+        if (task.getAssignee() != null) {
+            cols.put("BIZ_ASSIGNEE_", task.getAssignee());
+        }
+        cols.put("TENANT_ID_", resolveTenant(task.getTenantId()));
+        WfTaskActDirectWriter.writePartial(jdbcTemplate, task.getEngineTaskId(), cols);
     }
 }

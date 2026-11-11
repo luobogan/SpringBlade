@@ -35,6 +35,8 @@ class WfNextNodesPermissionTest {
     @Mock private WfFreeFlowManager manager;
     @Mock private WfFreeNodeMapper freeNodeMapper;
     @Mock private WfTaskMapper taskMapper;
+    /** 批次 1：任务定位改按 BIZ_TASK_ID_ 反查 ACT（取代 taskMapper.selectById） */
+    @Mock private org.springblade.workflow.service.helper.WfTaskBizResolver bizResolver;
     @Mock private WfInstanceMapper instanceMapper;
     @Mock private WfProcessDefinitionMapper defMapper;
 
@@ -60,7 +62,7 @@ class WfNextNodesPermissionTest {
 
     @Test
     void missingTask_isRejected() {
-        when(taskMapper.selectById(999L)).thenReturn(null);
+        when(bizResolver.resolve(999L)).thenReturn(null);
         assertThatThrownBy(() -> controller.nextNodes(999L))
             .isInstanceOf(ServiceException.class)
             .hasMessageContaining("任务不存在");
@@ -68,7 +70,7 @@ class WfNextNodesPermissionTest {
 
     @Test
     void nonFreeDefinition_returnsEmptyCandidatesAndZeroRegression() {
-        when(taskMapper.selectById(300L)).thenReturn(task("UserTask_1"));
+        when(bizResolver.resolve(300L)).thenReturn(task("UserTask_1"));
         givenInstance(0);
         when(manager.poolSize(200L)).thenReturn(5);
         try (MockedStatic<WfAuthUtil> auth = mockStatic(WfAuthUtil.class)) {
@@ -81,7 +83,7 @@ class WfNextNodesPermissionTest {
 
     @Test
     void freeDefinition_returnsOnlyPoolNodesExcludingCurrent() {
-        when(taskMapper.selectById(300L)).thenReturn(task("Free_2"));
+        when(bizResolver.resolve(300L)).thenReturn(task("Free_2"));
         givenInstance(1);
         when(manager.poolSize(200L)).thenReturn(3);
         try (MockedStatic<WfAuthUtil> auth = mockStatic(WfAuthUtil.class)) {
@@ -100,7 +102,7 @@ class WfNextNodesPermissionTest {
     @Test
     void candidatesAreServerGeneratedNotClientSupplied() {
         // 接口签名只有 taskId，前端无法传入自定义节点 key；候选恒为 Free_1..Free_N。
-        when(taskMapper.selectById(300L)).thenReturn(task("Free_1"));
+        when(bizResolver.resolve(300L)).thenReturn(task("Free_1"));
         givenInstance(1);
         when(manager.poolSize(200L)).thenReturn(2);
         try (MockedStatic<WfAuthUtil> auth = mockStatic(WfAuthUtil.class)) {

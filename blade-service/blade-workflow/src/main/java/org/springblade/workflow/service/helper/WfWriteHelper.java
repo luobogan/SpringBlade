@@ -59,6 +59,8 @@ public class WfWriteHelper {
     private final IProcessService processService;
     /** 去 wf_ 表预热：生命周期状态同步写回原生 ACT_HI_PROCINST（开关关闭时无操作） */
     private final WfInstanceActWriter actWriter;
+    /** 台账写入模式（direct=不落 wf_task）：关待办循环须改读 ACT */
+    private final org.springblade.workflow.config.WfLedgerModeProperties ledgerMode;
 
     /**
      * 审批轨迹下沉开关（迁移阶段2「双写校验」）：开启后 {@link #appendLog} 在写 wf_approval_log 的同时，
@@ -254,13 +256,17 @@ public class WfWriteHelper {
 
     /** 关闭实例上所有未完成任务（含协办/征询待办，避免孤儿待办） */
     private void closePendingTasks(Long instId) {
-        List<WfTask> tasks = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
-            .eq(WfTask::getInstId, instId)
-            .in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
+        // direct 模式：wf_task 为空 → tasks 恒空 → terminate 的非事件驱动兜底关待办完全失效，
+        // 残留任务的 ACT BUSINESS_STATUS_ 永远停在 TODO。改读 ACT_HI_TASKINST 的未结束行。
+        List<WfTask> tasks = ledgerMode.isDirect()
+            ? taskActReader.residualTasksFromAct(instId)
+            : taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
+                .eq(WfTask::getInstId, instId)
+                .in(WfTask::getStatus, WfTask.STATUS_TODO, WfTask.STATUS_COADJUTANT));
         for (WfTask t : tasks) {
             t.setStatus(WfTask.STATUS_FINISHED);
             t.setOperateTime(new Date());
-            taskMapper.updateById(t);
+            // 批次 1：不再更新 wf_task 台账（下方 sync 已委托直写器写 ACT）
             // 关闭实例残留待办 → 子状态 FINISHED 同步到 ACT_*
             taskActWriter.sync(t);
         }

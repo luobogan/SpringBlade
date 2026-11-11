@@ -74,19 +74,20 @@ class WfBpmnDefNodesTest {
 	@DisplayName("toNodes：覆盖开始节点(nodeType=0)，按 sortOrder 升序，无扩展任务仅回填标识字段")
 	void nodesSortedAndCoverStart() {
 		List<WfProcessNode> nodes = WfBpmnExtensionReader.toNodes(101L, parse(BPMN));
-		assertEquals(6, nodes.size(), "3 个 UserTask + 合成的开始/结束/网关");
+		// 起止节点根治：startEvent 是薄连接器，不再合成节点；UserTask(taskA,nodeType=0) 承担「开始节点」语义
+		assertEquals(5, nodes.size(), "3 个 UserTask + 合成的结束/网关（startEvent 不入节点）");
 		assertEquals("taskA", nodes.get(0).getNodeKey());
 		assertEquals("taskB", nodes.get(1).getNodeKey());
 		assertEquals("taskC", nodes.get(2).getNodeKey(), "无 sortOrder 的排末尾");
-		// 合成节点（无 wf:node 扩展 → 无 sortOrder）：StartEvent→0、EndEvent→3、Gateway→7
-		WfProcessNode startEv = nodes.get(3);
-		assertEquals("start1", startEv.getNodeKey());
-		assertEquals(Integer.valueOf(0), startEv.getNodeType(), "发起页按 nodeType=0 定位开始节点");
-		assertEquals("开始", startEv.getNodeName());
-		assertNull(startEv.getSortOrder());
-		assertEquals(Integer.valueOf(3), nodes.get(4).getNodeType(), "EndEvent→3(归档)");
-		assertEquals("gw1", nodes.get(5).getNodeKey());
-		assertEquals(Integer.valueOf(7), nodes.get(5).getNodeType(), "Gateway→7");
+		// 合成节点（无 wf:node 扩展 → 无 sortOrder）：EndEvent→3、Gateway→7
+		WfProcessNode endEv = nodes.get(3);
+		assertEquals("end1", endEv.getNodeKey());
+		assertEquals(Integer.valueOf(3), endEv.getNodeType(), "EndEvent→3(归档)");
+		assertEquals("结束", endEv.getNodeName());
+		assertNull(endEv.getSortOrder());
+		WfProcessNode gw = nodes.get(4);
+		assertEquals("gw1", gw.getNodeKey());
+		assertEquals(Integer.valueOf(7), gw.getNodeType(), "Gateway→7");
 
 		// 开始 UserTask（nodeType=0）：发起页据此定位
 		WfProcessNode start = nodes.get(0);

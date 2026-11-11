@@ -62,6 +62,7 @@ import org.springblade.workflow.utils.WfNoticeContext;
 import org.springblade.workflow.config.WfRetirementProperties;
 import org.springblade.workflow.config.WfTaskResidueProperties;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springblade.workflow.config.WfLedgerModeProperties;
 import org.springblade.workflow.vo.RejectCandidateVO;
 import org.springblade.workflow.vo.RejectCandidatesVO;
 import org.springblade.workflow.vo.TaskVO;
@@ -128,6 +129,14 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfTaskMapper taskMapper;
     /** 扩展任务权威存储（协办/加签协办/抄送/传阅/已读/退回重提交/自由流程步骤） */
     private final WfExtTaskMapper extTaskMapper;
+    /** 批次 1：按 BIZ_TASK_ID_ 反查 ACT 的双模式任务解析器（取代 taskMapper.selectById） */
+    private final org.springblade.workflow.service.helper.WfTaskBizResolver bizResolver;
+    /** 批次 2：ACT 业务列直写器（转办换人只改办理人列，不覆盖 BIZ_TASK_ID_） */
+    private final org.springblade.workflow.service.helper.WfTaskActDirectWriter directWriter;
+    /** 批次 2（D17 方案 X）：运行中为当前 UserTask 动态新增多实例执行体，生成独立 ACT 任务 */
+    private final org.flowable.engine.RuntimeService runtimeService;
+    /** 批次 2：定位加签后新生成的引擎任务（按实例 + 节点 + 办理人） */
+    private final org.flowable.engine.TaskService flowableTaskService;
     private final WfInstanceMapper instanceMapper;
     /** 二期 T9：审批完成后把该待办的流程通知回写「已处理」（失败仅记日志，不影响审批事务） */
     private final INoticeClient noticeClient;
@@ -179,6 +188,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
     @Autowired
     private WfRetirementProperties retirement = new WfRetirementProperties();
+
+    /** 台账写入模式（direct=不落 wf_task）：降级反模式在 direct 下不可静默走空 wf_task，须抛错暴露 */
+    @Autowired
+    private WfLedgerModeProperties ledgerMode;
 
     /**
      * 「wf_task 兜底残留合并」开关（去 wf_ 表 · P6 退役第一台阶）。
@@ -322,7 +335,6 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 1. 本任务置已办
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
-        taskMapper.updateById(task);
         // 业务列双写 ACT_*：子状态 DONE 落到 ACT_HI_TASKINST（已办读源前置）；开关默认关
         taskActWriter.sync(task);
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), operator,
@@ -348,7 +360,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 WfTask next = nextPending(inst.getId(), task.getNodeKey());
                 if (next != null) {
                     next.setReceiveTime(new Date());
-                    taskMapper.updateById(next);
+                    // 批次 1：不再更新 wf_task 台账（receiveTime 无对应 ACT 业务列，CREATE_TIME_ 已承载）
                     log.info("[blade-workflow] 依次审批激活下一处理人. instId={}, nextTaskId={}",
                         inst.getId(), next.getId());
                     return true;
@@ -613,7 +625,6 @@ public class WfTaskServiceImpl implements IWfTaskService {
 
         task.setStatus(WfTask.STATUS_DONE);
         task.setOperateTime(new Date());
-        taskMapper.updateById(task);
         // 业务列双写 ACT_*：退回也是任务完成态，子状态 DONE 需落到 ACT_HI_TASKINST
         taskActWriter.sync(task);
         // 留痕记「节点接收人」而非当前登录人：代跑/测试态下当前登录人是管理员，记管理员会让
@@ -761,28 +772,18 @@ public class WfTaskServiceImpl implements IWfTaskService {
         // 节点信息 → 运行时消费：未勾选「转办」则不允许转办
         requireOperate(loadNode(inst.getDefId(), task.getNodeKey()), MENU_FORWARD);
 
-        task.setStatus(WfTask.STATUS_DONE);
-        task.setOperateTime(new Date());
-        taskMapper.updateById(task);
-        taskActWriter.sync(task);
+        // 【批次 2 / D17 方案 X 语义修正】转办 = 把「同一条待办」的办理人换给目标人，
+        // bizTaskId 保持不变。旧实现是「原任务置 DONE + 新建同 engineTaskId 的 TODO 行」，
+        // 在 ACT 单行模型下等于原地覆盖（丢掉原 BIZ_TASK_ID_ → 前端已打开的办理页失效），
+        // 且批次 1 起 wf_task 已零写入、第二条行无处落地。
+        // 用户可见效果不变：原办理人的待办消失、目标人看到同一条待办。
+        java.util.LinkedHashMap<String, Object> cols = new java.util.LinkedHashMap<>();
+        cols.put("BIZ_ASSIGNEE_", dto.getAssignee());
+        cols.put("ORIGINAL_USER_", task.getAssignee() == null ? null : String.valueOf(task.getAssignee()));
+        directWriter.writePartial(task.getEngineTaskId(), cols);
+
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_FORWARD, dto.getOpinion());
-
-        // 为目标人生成同节点待办（沿用同一引擎任务）
-        WfTask forwarded = new WfTask();
-        forwarded.setInstId(inst.getId());
-        forwarded.setEngineTaskId(task.getEngineTaskId());
-        forwarded.setNodeKey(task.getNodeKey());
-        forwarded.setAssignee(dto.getAssignee());
-        forwarded.setOriginalUser(task.getAssignee());
-        forwarded.setStatus(WfTask.STATUS_TODO);
-        forwarded.setReceiveTime(new Date());
-        // 标记继承：任务 is_test 必须随实例 —— 否则将来放开「测试域转办」时，
-        // 新建的这条任务会是 is_test=0，任何 is_test 过滤都拦不住它（V10 / C2 标记断层）
-        forwarded.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
-        taskMapper.insert(forwarded);
-        // 双写 ACT_*（会签/或签 N:1 时由写入器内建守卫跳过，不会写坏）
-        taskActWriter.sync(forwarded);
         return true;
     }
 
@@ -799,23 +800,88 @@ public class WfTaskServiceImpl implements IWfTaskService {
             throw new ServiceException("加签人不能为空");
         }
 
-        WfTask added = new WfTask();
-        added.setInstId(inst.getId());
-        added.setEngineTaskId(task.getEngineTaskId());
-        added.setNodeKey(task.getNodeKey());
-        added.setAssignee(dto.getAssignee());
-        added.setSignOrder(dto.getAddSignType());
-        added.setStatus(WfTask.STATUS_TODO);
-        added.setReceiveTime(new Date());
+        // 【批次 2 / D17 方案 X】加签 = 运行中为当前 UserTask 动态新增一个多实例执行体，
+        // 引擎生成「独立 ACT 任务」（独立 ACT_RU_TASK.ID_），从而：
+        //   1) 原办理人待办保留（加签是「增加」办理人，旧实现是「替换」，语义错误）；
+        //   2) 加签人有自己的引擎任务 → 不产生 N:1，1:1 判据恒成立；
+        //   3) 每个加签人有独立 bizTaskId，列表与操作链各自独立。
+        // 前置：该节点须为「部署期已注入多实例」的形态（engine-multi-instance.enabled=true
+        // 且定义已重新部署）。Flowable 8.1 对非 MI 节点抛
+        // FlowableException("No multi instance execution found for activity id ...")，此处转可读提示。
+        String engineInstId = inst.getEngineInstId();
+        String nodeKey = task.getNodeKey();
+        String assignee = String.valueOf(dto.getAssignee());
+
+        // 加签前该实例的引擎任务快照（用于定位新生成的那条）
+        java.util.Set<String> before = new java.util.HashSet<>();
+        for (org.flowable.task.api.Task t : flowableTaskService.createTaskQuery()
+            .processInstanceId(engineInstId).list()) {
+            before.add(t.getId());
+        }
+        try {
+            runtimeService.addMultiInstanceExecution(nodeKey, engineInstId,
+                Map.of("wfMiAssignee", assignee));
+        } catch (org.flowable.common.engine.api.FlowableException e) {
+            throw new ServiceException("当前节点未启用多人会签，无法加签：" + e.getMessage());
+        }
+        org.flowable.task.api.Task addedTask = null;
+        for (org.flowable.task.api.Task t : flowableTaskService.createTaskQuery()
+            .processInstanceId(engineInstId).taskAssignee(assignee).list()) {
+            if (!before.contains(t.getId()) && nodeKey.equals(t.getTaskDefinitionKey())) {
+                addedTask = t;
+                break;
+            }
+        }
+        if (addedTask == null) {
+            throw new ServiceException("加签失败：引擎未生成新的待办任务");
+        }
+        // D17/V6 补偿：加签人并回集合变量，否则驳回重建会丢加签人（见 appendMiAssignee）
+        appendMiAssignee(engineInstId, nodeKey, assignee);
+
+        // 直写新任务的业务列（独立 bizTaskId，1:1 契约）
+        org.springblade.workflow.service.helper.TaskBizRecord rec =
+            new org.springblade.workflow.service.helper.TaskBizRecord();
+        rec.setBizTaskId(com.baomidou.mybatisplus.core.toolkit.IdWorker.getId());
+        rec.setEngineTaskId(addedTask.getId());
+        rec.setInstId(inst.getId());
+        rec.setNodeKey(nodeKey);
+        rec.setAssignee(dto.getAssignee());
+        rec.setSignOrder(dto.getAddSignType());
+        rec.setStatus(WfTask.STATUS_TODO);
+        rec.setReceiveTime(new Date());
         // 标记继承：同 forward（V10 / C2）
-        added.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
-        taskMapper.insert(added);
-        taskActWriter.sync(added);
+        rec.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
+        rec.setTenantId(inst.getTenantId());
+        directWriter.writeFull(rec);
 
         appendLog(inst.getId(), task.getId(), task.getNodeKey(), SecureUtil.getUserId(),
             WfApprovalLog.LOG_COMMENT,
             ("加签：" + (dto.getOpinion() == null ? "" : dto.getOpinion())));
         return true;
+    }
+
+    /**
+     * D17 补偿：把加签人并回部署期注入的多实例集合变量 {@code wfMiAssignees_<nodeKey>}。
+     *
+     * <p>依据 {@code WfAddSignMiSpikeTest} 实证：Flowable 8.1 的
+     * {@code addMultiInstanceExecution} <b>不会写回集合变量</b>，驳回重建按集合变量重建
+     * MI 实例时加签人会丢失（V6 语义）。故加签后必须并回，否则「加签 → 驳回 → 重提」丢加签人。</p>
+     */
+    private void appendMiAssignee(String engineInstId, String nodeKey, String assignee) {
+        String varName = "wfMiAssignees_" + nodeKey;
+        Object cur = runtimeService.getVariable(engineInstId, varName);
+        java.util.List<String> list = new java.util.ArrayList<>();
+        if (cur instanceof java.util.Collection) {
+            for (Object o : (java.util.Collection<?>) cur) {
+                if (o != null) {
+                    list.add(String.valueOf(o));
+                }
+            }
+        }
+        if (!list.contains(assignee)) {
+            list.add(assignee);
+        }
+        runtimeService.setVariable(engineInstId, varName, list);
     }
 
     @Override
@@ -866,23 +932,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
      */
     @Deprecated
     private void insertCirculateToWfTaskDeprecated(WfTask host, WfInstance inst, Long assignee) {
-        WfTask cc = new WfTask();
-        cc.setInstId(inst.getId());
-        cc.setEngineTaskId(host.getEngineTaskId());
-        cc.setNodeKey(host.getNodeKey());
-        cc.setAssignee(assignee);
-        cc.setStatus(WfTask.STATUS_CIRCULATE);
-        cc.setReceiveTime(new Date());
-        cc.setIsTest(inst.getIsTest() == null ? 0 : inst.getIsTest());
-        taskMapper.insert(cc);
-        taskActWriter.sync(cc);
-        if (ccIdentityLinkEnabled && host.getEngineTaskId() != null) {
-            try {
-                processService.addUserIdentityLink(host.getEngineTaskId(), String.valueOf(assignee), "circulate");
-            } catch (Exception e) {
-                log.warn("[WfTaskServiceImpl] 抄送 identity link 写入引擎失败（忽略）: {}", e.getMessage());
-            }
-        }
+        // 批次 1：该旧路径彻底停用 —— 不再写 wf_task、不再 sync、不再预热 identityLink。
+        // 抄送已由 circulate() 写 wf_ext_task；保留方法签名仅供追溯，禁止恢复调用
+        // （恢复会用抄送行的 BIZ_TASK_ID_ 覆盖宿主引擎任务）。
     }
 
     @Override
@@ -942,13 +994,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
         WfTask patch = new WfTask();
         patch.setId(taskId);
         patch.setViewTime(new Date());
-        boolean ok = taskMapper.updateById(patch) > 0;
-        if (ok) {
-            // 双写 ACT_*：patch 仅带 id（updateById 最小更新集），故用已加载的 task（含 engineTaskId）同步
-            task.setViewTime(patch.getViewTime());
-            taskActWriter.sync(task);
-        }
-        return ok;
+        // 批次 1：不再更新 wf_task 台账，直接把 viewTime 同步到 ACT 业务列
+        task.setViewTime(patch.getViewTime());
+        taskActWriter.sync(task);
+        return true;
     }
 
     @Override
@@ -997,6 +1046,12 @@ public class WfTaskServiceImpl implements IWfTaskService {
             try {
                 return taskActReader.countFromAct(target);
             } catch (Exception e) {
+                if (ledgerMode.isDirect()) {
+                    // direct 模式下 wf_task 为空，降级读会得到空角标（用户以为没待办，比报错更危险），
+                    // 故直接抛错暴露 ACT 读取故障，而不是静默返回空。
+                    throw new IllegalStateException(
+                        "读源=act 角标计数读取 ACT_* 失败，direct 模式禁止降级走空 wf_task. assignee=" + target, e);
+                }
                 log.warn("[blade-workflow] 读源=act 角标计数读取 ACT_* 失败，降级走 wf_task. assignee={}, {}",
                     target, e.getMessage());
             }
@@ -1097,6 +1152,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 result.setRecords(records);
                 return result;
             } catch (Exception e) {
+                if (ledgerMode.isDirect()) {
+                    throw new IllegalStateException(
+                        "读源=act 分页读取失败，direct 模式禁止降级走空 wf_task 分页. assignee=" + target, e);
+                }
                 log.warn("[blade-workflow] 读源=act 分页读取失败，降级走 wf_task 分页. assignee={}, {}",
                     target, e.getMessage());
             }
@@ -1176,6 +1235,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
                     java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
                 return merged;
             } catch (Exception e) {
+                if (ledgerMode.isDirect()) {
+                    throw new IllegalStateException(
+                        "任务读源=act 读取 ACT_* 失败，direct 模式禁止降级走空 wf_task. assignee=" + target, e);
+                }
                 log.warn("[blade-workflow] 任务读源=act 读取 ACT_* 失败，降级走 wf_task. assignee={}, {}",
                     target, e.getMessage());
             }
@@ -1730,12 +1793,10 @@ public class WfTaskServiceImpl implements IWfTaskService {
         if (taskId == null) {
             return null;
         }
-        WfTask task = taskMapper.selectById(taskId);
-        if (task == null) {
-            task = taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
-                .eq(WfTask::getEngineTaskId, String.valueOf(taskId)).last("LIMIT 1"));
-        }
-        return task;
+        // 批次 1：改按 BIZ_TASK_ID_ 反查 ACT（模式 A），未命中按引擎 ID_ 兜底
+        // （模式 B：消息中心 bizRefId / 超时通知传入的 Flowable Task.getId()）。
+        // 前端与消息中心的 id 契约保持不变。
+        return bizResolver.resolve(taskId);
     }
 
     private WfTask requireTodoTask(Long taskId) {
@@ -1849,11 +1910,56 @@ public class WfTaskServiceImpl implements IWfTaskService {
                 if (assignees == null) {
                     assignees = List.of();
                 }
-                vars.put("wfMiAssignees_" + nk, new ArrayList<>(assignees));
+                // D17/V6 补偿：驳回/重入不得抹掉运行期加签人。
+                // 若引擎中该集合变量已存在（含 addSign 经 appendMiAssignee 追加的人），以「已有运行期
+                // 办理人」为基准并集「配置操作者」写回，而非按配置覆盖——
+                // 否则 reject/doApprove 重入时 injectMiCollectionVars 会把 wfMiAssignees_<nodeKey>
+                // 重算成纯配置操作者，丢掉 addSign 写回的人，致「加签→驳回→重提」丢加签人
+                // （WfAddSignMiSpikeTest.writeBackCollectionKeepsAddedAssigneeAfterReject 的假阳性即源于
+                // 测试桩 moveActivity 传空 vars 未触发该覆盖）。变量尚不存在（发起首入）时退化为纯配置。
+                String miVar = "wfMiAssignees_" + nk;
+                Object existing = (inst != null && inst.getEngineInstId() != null)
+                    ? runtimeService.getVariable(inst.getEngineInstId(), miVar) : null;
+                vars.put(miVar, mergeMiAssignees(existing, assignees));
             }
         } catch (Exception e) {
             log.warn("[WfTaskServiceImpl] 注入多实例集合变量失败（忽略，节点进入时可能缺集合而失败）: {}", e.getMessage());
         }
+    }
+
+    /**
+     * D17/V6 补偿核心：合并「已有运行期办理人」与「配置操作者」，避免驳回/重入按配置覆盖丢加签人。
+     *
+     * <p>已有引擎集合变量（含 addSign 经 {@link #appendMiAssignee} 追加的人）优先保留；
+     * 配置操作者中尚未出现者补入（覆盖「发起后新增配置操作者」的场景）。变量不存在（发起首入）时
+     * 退化为纯配置。元素按 {@code String} 值判等，兼容引擎变量 Long / String 两种形态。</p>
+     *
+     * <p>纯函数、无外部依赖，便于单测（见 {@code WfTaskServiceImplMiMergeTest}）。</p>
+     */
+    public static java.util.List<Object> mergeMiAssignees(Object existingVar, java.util.List<Long> configAssignees) {
+        java.util.List<Object> merged = new java.util.ArrayList<>();
+        if (existingVar instanceof java.util.Collection) {
+            for (Object o : (java.util.Collection<?>) existingVar) {
+                if (o != null) {
+                    merged.add(o);
+                }
+            }
+        }
+        if (configAssignees != null) {
+            for (Long a : configAssignees) {
+                boolean present = false;
+                for (Object o : merged) {
+                    if (String.valueOf(o).equals(String.valueOf(a))) {
+                        present = true;
+                        break;
+                    }
+                }
+                if (!present) {
+                    merged.add(a);
+                }
+            }
+        }
+        return merged;
     }
 
     private int resolveSignOrder(Long defId, String nodeKey) {
@@ -1918,6 +2024,11 @@ public class WfTaskServiceImpl implements IWfTaskService {
     }
 
     private long countPending(Long instId, String nodeKey) {
+        // direct 模式：自研会签已退役（Mi 化由引擎多实例门禁处理），且 wf_task 为空；
+        // 本方法仅在 !isEngineMultiInstance 守卫内调用，direct 下直接返回 0 避免读空台账。
+        if (ledgerMode.isDirect()) {
+            return 0L;
+        }
         Long count = taskMapper.selectCount(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, instId)
             .eq(WfTask::getNodeKey, nodeKey)
@@ -1926,6 +2037,9 @@ public class WfTaskServiceImpl implements IWfTaskService {
     }
 
     private WfTask nextPending(Long instId, String nodeKey) {
+        if (ledgerMode.isDirect()) {
+            return null;
+        }
         return taskMapper.selectOne(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, instId)
             .eq(WfTask::getNodeKey, nodeKey)
@@ -1935,6 +2049,11 @@ public class WfTaskServiceImpl implements IWfTaskService {
     }
 
     private void closeSiblings(Long instId, String nodeKey, Long excludeTaskId) {
+        // direct 模式：自研会签退役，wf_task 为空；或签关兄弟任务在 Mi 化下由引擎删除事件
+        // (WfStateProjector.onTaskDeleted) 覆盖，此处 no-op 即可，避免读空台账。
+        if (ledgerMode.isDirect()) {
+            return;
+        }
         List<WfTask> siblings = taskMapper.selectList(Wrappers.<WfTask>lambdaQuery()
             .eq(WfTask::getInstId, instId)
             .eq(WfTask::getNodeKey, nodeKey)
@@ -1943,8 +2062,7 @@ public class WfTaskServiceImpl implements IWfTaskService {
         for (WfTask s : siblings) {
             s.setStatus(WfTask.STATUS_FINISHED);
             s.setOperateTime(new Date());
-            taskMapper.updateById(s);
-            // 或签办结同节点其余待办 → 子状态 FINISHED 需同步到 ACT_*
+            // 批次 1：不再更新 wf_task 台账；或签办结同节点其余待办 → 子状态直接同步到 ACT_*
             taskActWriter.sync(s);
         }
     }

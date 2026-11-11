@@ -311,6 +311,277 @@ public class WfTaskActReader {
     }
 
     /** 追加实例维度筛选（标题模糊 / 流程定义 / 表单），作用于 JOIN 的 {@code ACT_HI_PROCINST} 别名。 */
+    /**
+     * 待办判重（direct 模式）：该引擎任务是否已生成业务待办。
+     *
+     * <p><b>为什么必须有</b>：direct 模式下 {@code wf_task} 不落行，旧的
+     * {@code WfInstanceServiceImpl#existsTask}（查 wf_task）恒返回 false，
+     * 于是每轮 {@code advanceInternal} 都会重新调用 {@code insertTask} 生成<b>新的</b>
+     * {@code BIZ_TASK_ID_} 并覆盖 ACT 行 —— 用户手上待办的 id 漂移，提交时报
+     * 「任务不存在（可能该流程已被删除）」。此处按 {@code ACT_RU_TASK} 判重。</p>
+     *
+     * @param instId       业务实例 id（{@code ACT_HI_PROCINST.BUSINESS_ID_}）
+     * @param engineTaskId 引擎任务 id
+     * @param assignee     办理人（null = 不按人区分）
+     * @param status       业务状态（null = 不按状态过滤；传 {@link WfTask#STATUS_TODO} 即待办）
+     */
+    public boolean existsTaskFromAct(Long instId, String engineTaskId, Long assignee, Integer status) {
+        if (instId == null || engineTaskId == null || engineTaskId.isBlank()) {
+            return false;
+        }
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ACT_RU_TASK r "
+            + "LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+            + "WHERE p.BUSINESS_ID_ = ? AND r.ID_ = ? "
+            // 必须要求「业务待办已生成」（BIZ_TASK_ID_ 非空）：引擎任务行在业务建待办之前就已存在，
+            // 若只按引擎行判重，首轮 advance 会误判为「已存在」→ insertTask 被跳过 →
+            // BIZ_TASK_ID_/BIZ_ASSIGNEE_ 等业务列永不写入 → 待办列表 id 为空、用户看不到待办。
+            + "AND r.BIZ_TASK_ID_ IS NOT NULL AND r.BIZ_TASK_ID_ <> 0");
+        List<Object> args = new ArrayList<>();
+        args.add(instId);
+        args.add(engineTaskId);
+        if (assignee != null) {
+            sql.append(" AND COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) = ?");
+            args.add(String.valueOf(assignee));
+        }
+        if (status != null) {
+            sql.append(" AND r.BUSINESS_STATUS_ = ?");
+            args.add(WfTaskActDirectWriter.statusStr(status));
+        }
+        try {
+            Long n = jdbcTemplate.queryForObject(sql.toString(), Long.class, args.toArray());
+            return n != null && n > 0;
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 待办判重失败（按未命中处理）. {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 该实例下「已绑定业务待办」的引擎任务 id 集合（direct 模式的 A 类漂移判据）。
+     *
+     * <p>漂移定义：引擎有活跃 userTask，但其 ACT 行没有 {@code BIZ_TASK_ID_}（业务待办从未生成）
+     * → 用户在待办列表里看不到它。direct 模式下 {@code BIZ_TASK_ID_} 恒非空（建待办即写），
+     * 故本判据在 direct 模式下才成立。</p>
+     */
+    public java.util.Set<String> boundEngineTaskIdsFromAct(Long instId) {
+        java.util.Set<String> bound = new java.util.LinkedHashSet<>();
+        if (instId == null) {
+            return bound;
+        }
+        String sql = "SELECT r.ID_ FROM ACT_RU_TASK r "
+            + "LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+            + "WHERE p.BUSINESS_ID_ = ? AND r.BIZ_TASK_ID_ IS NOT NULL AND r.BIZ_TASK_ID_ <> 0";
+        try {
+            for (String id : jdbcTemplate.queryForList(sql, String.class, instId)) {
+                bound.add(id);
+            }
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] 取已绑定引擎任务集合失败（漂移校验跳过）. {}", e.getMessage());
+        }
+        return bound;
+    }
+
+    /**
+     * direct 模式通用读源：按条件查<b>活跃待办</b>（{@code ACT_RU_TASK}），还原为 {@link WfTask} 内存对象。
+     *
+     * <p>批次 1 把「写侧」单路径化后，仍有若干读点（流程测试域、自由流程、监管动作等）
+     * 用 {@code taskMapper.selectList(instId/nodeKey/status)} 把 {@code wf_task} 当权威源 ——
+     * direct 模式下该表为空 → 静默返回空集。本方法是这些读点的统一翻源落点。</p>
+     *
+     * @param instId   业务实例 id（{@code ACT_HI_PROCINST.BUSINESS_ID_}），null = 不限
+     * @param nodeKey  节点 key，null = 不限
+     * @param assignee 办理人，null = 不限
+     * @param testOnly true = 只取测试态（{@code IS_TEST_=1}）；false/null = 不限
+     */
+    public List<WfTask> activeTasksFromAct(Long instId, String nodeKey, Long assignee, Boolean testOnly) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT r.ID_ AS engineTaskId, r.BIZ_TASK_ID_ AS bizTaskId, r.TASK_DEF_KEY_ AS nodeKey, "
+                + "COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) AS assignee, r.ORIGINAL_USER_ AS originalUser, "
+                + "r.IS_TEST_ AS isTest, r.SIGN_ORDER_ AS signOrder, r.VIEW_TIME_ AS viewTime, "
+                + "r.TIMEOUT_HANDLED_ AS timeoutHandled, r.DUE_DATE_ AS dueTime, "
+                + "r.CREATE_TIME_ AS receiveTime, r.TENANT_ID_ AS tenantId, p.BUSINESS_ID_ AS instId "
+                + "FROM ACT_RU_TASK r LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+                + "WHERE (r.BUSINESS_STATUS_ = 'TODO' OR r.BUSINESS_STATUS_ IS NULL)");
+        List<Object> args = new ArrayList<>();
+        if (instId != null) {
+            sql.append(" AND p.BUSINESS_ID_ = ?");
+            args.add(instId);
+        }
+        if (nodeKey != null) {
+            sql.append(" AND r.TASK_DEF_KEY_ = ?");
+            args.add(nodeKey);
+        }
+        if (assignee != null) {
+            sql.append(" AND COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) = ?");
+            args.add(String.valueOf(assignee));
+        }
+        if (Boolean.TRUE.equals(testOnly)) {
+            sql.append(" AND r.IS_TEST_ = 1");
+        }
+        sql.append(" ORDER BY r.CREATE_TIME_ ASC, r.ID_ ASC");
+        try {
+            return jdbcTemplate.query(sql.toString(), (rs, i) -> taskRow(rs, WfTask.STATUS_TODO), args.toArray());
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 活跃待办查询失败（返回空集）. {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * direct 模式通用读源：按业务待办 id 重读<b>活跃待办</b>；已办结返回 {@code null}。
+     *
+     * <p>用于「逐条办理前重读状态」的场景（如流程测试交互式提交）：或签办结首条会关闭同节点
+     * 其余待办，若不重读会误办已关闭的任务并整笔回滚。direct 模式下 {@code ACT_RU_TASK} 行
+     * 在任务完成时被引擎删除，故查不到即代表「已非待办」，与旧 {@code selectById} 语义等价。</p>
+     */
+    public WfTask activeTaskFromAct(Long bizTaskId) {
+        if (bizTaskId == null) {
+            return null;
+        }
+        String sql = "SELECT r.ID_ AS engineTaskId, r.BIZ_TASK_ID_ AS bizTaskId, r.TASK_DEF_KEY_ AS nodeKey, "
+            + "COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) AS assignee, r.ORIGINAL_USER_ AS originalUser, "
+            + "r.IS_TEST_ AS isTest, r.SIGN_ORDER_ AS signOrder, r.VIEW_TIME_ AS viewTime, "
+            + "r.TIMEOUT_HANDLED_ AS timeoutHandled, r.DUE_DATE_ AS dueTime, "
+            + "r.CREATE_TIME_ AS receiveTime, r.TENANT_ID_ AS tenantId, p.BUSINESS_ID_ AS instId "
+            + "FROM ACT_RU_TASK r LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
+            + "WHERE r.BIZ_TASK_ID_ = ? AND (r.BUSINESS_STATUS_ = 'TODO' OR r.BUSINESS_STATUS_ IS NULL) LIMIT 1";
+        try {
+            List<WfTask> rows = jdbcTemplate.query(sql, (rs, i) -> taskRow(rs, WfTask.STATUS_TODO), bizTaskId);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 待办重读失败（按已办结处理）. {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * direct 模式通用读源：按实例查<b>已办任务数</b>（{@code ACT_HI_TASKINST.END_TIME_} 非空）。
+     * 用于「本实例是否首次提交」这类判据（创建节点必填兜底）。
+     */
+    public long countDoneByInstanceFromAct(Long instId) {
+        if (instId == null) {
+            return 0L;
+        }
+        String sql = "SELECT COUNT(*) FROM ACT_HI_TASKINST h "
+            + "LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+            + "WHERE p.BUSINESS_ID_ = ? AND h.END_TIME_ IS NOT NULL";
+        try {
+            Long n = jdbcTemplate.queryForObject(sql, Long.class, instId);
+            return n == null ? 0L : n;
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 已办任务计数失败（按 0 处理）. {}", e.getMessage());
+            return 0L;
+        }
+    }
+
+    /**
+     * direct 模式通用读源：按实例 + 节点查<b>全部任务（含已办）</b>，供「操作者」面板展示。
+     * 与 {@link #activeTasksFromAct} 的区别：历史行保留在 {@code ACT_HI_TASKINST}，能显示已办过的人。
+     */
+    public List<WfTask> allTasksByInstanceFromAct(Long instId, String nodeKey) {
+        if (instId == null) {
+            return new ArrayList<>();
+        }
+        StringBuilder sql = new StringBuilder(
+            "SELECT h.ID_ AS engineTaskId, h.BIZ_TASK_ID_ AS bizTaskId, h.TASK_DEF_KEY_ AS nodeKey, "
+                + "COALESCE(h.BIZ_ASSIGNEE_, h.ASSIGNEE_) AS assignee, h.ORIGINAL_USER_ AS originalUser, "
+                + "h.IS_TEST_ AS isTest, h.SIGN_ORDER_ AS signOrder, h.VIEW_TIME_ AS viewTime, "
+                + "h.TIMEOUT_HANDLED_ AS timeoutHandled, h.DUE_DATE_ AS dueTime, "
+                + "h.START_TIME_ AS receiveTime, h.TENANT_ID_ AS tenantId, p.BUSINESS_ID_ AS instId "
+                + "FROM ACT_HI_TASKINST h LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+                + "WHERE p.BUSINESS_ID_ = ?");
+        List<Object> args = new ArrayList<>();
+        args.add(instId);
+        if (nodeKey != null) {
+            sql.append(" AND h.TASK_DEF_KEY_ = ?");
+            args.add(nodeKey);
+        }
+        sql.append(" ORDER BY h.START_TIME_ ASC, h.ID_ ASC");
+        try {
+            return jdbcTemplate.query(sql.toString(), (rs, i) -> taskRow(rs, null), args.toArray());
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 实例任务查询失败（返回空集）. {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * direct 模式：取实例下<b>待收尾的残留待办</b>（待办 {@code TODO} / 协办 {@code COADJUTANT}、
+     * 且引擎侧尚未结束），供撤销/撤回/不通过/归档时的关待办循环使用。
+     *
+     * <p>与 {@link #activeTasksFromAct} 的区别：读 {@code ACT_HI_TASKINST}（含协办态、
+     * 以 {@code END_TIME_ IS NULL} 判定未结束），而前者只读 {@code ACT_RU_TASK} 的纯待办态。</p>
+     */
+    public List<WfTask> residualTasksFromAct(Long instId) {
+        if (instId == null) {
+            return new ArrayList<>();
+        }
+        String sql = "SELECT h.ID_ AS engineTaskId, h.BIZ_TASK_ID_ AS bizTaskId, h.TASK_DEF_KEY_ AS nodeKey, "
+            + "COALESCE(h.BIZ_ASSIGNEE_, h.ASSIGNEE_) AS assignee, h.ORIGINAL_USER_ AS originalUser, "
+            + "h.IS_TEST_ AS isTest, h.SIGN_ORDER_ AS signOrder, h.VIEW_TIME_ AS viewTime, "
+            + "h.TIMEOUT_HANDLED_ AS timeoutHandled, h.DUE_DATE_ AS dueTime, "
+            + "h.START_TIME_ AS receiveTime, h.TENANT_ID_ AS tenantId, p.BUSINESS_ID_ AS instId "
+            + "FROM ACT_HI_TASKINST h LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+            + "WHERE p.BUSINESS_ID_ = ? AND h.END_TIME_ IS NULL "
+            + "AND (h.BUSINESS_STATUS_ IN ('TODO', 'COADJUTANT') OR h.BUSINESS_STATUS_ IS NULL) "
+            + "ORDER BY h.START_TIME_ ASC, h.ID_ ASC";
+        try {
+            return jdbcTemplate.query(sql, (rs, i) -> taskRow(rs, WfTask.STATUS_TODO), instId);
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 残留待办查询失败（返回空集）. {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * direct 模式：取实例<b>最后一位实际办理人</b>（最近一条已办任务的办理人），供归档人兜底。
+     *
+     * <p>旧实现查 {@code wf_task.status IN (DONE, FINISHED)} → direct 模式恒空 → 回退发起人，
+     * 归档意见的「归档人」变成发起人而非实际最后办理人。</p>
+     *
+     * @return 办理人 id；无已办记录返回 {@code null}（由调用方继续兜底到发起人）
+     */
+    public Long lastDoneOperatorFromAct(Long instId) {
+        if (instId == null) {
+            return null;
+        }
+        String sql = "SELECT COALESCE(h.BIZ_ASSIGNEE_, h.ASSIGNEE_) AS assignee "
+            + "FROM ACT_HI_TASKINST h LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = h.PROC_INST_ID_ "
+            + "WHERE p.BUSINESS_ID_ = ? AND h.END_TIME_ IS NOT NULL "
+            + "AND COALESCE(h.BIZ_ASSIGNEE_, h.ASSIGNEE_) IS NOT NULL "
+            + "ORDER BY h.END_TIME_ DESC, h.ID_ DESC LIMIT 1";
+        try {
+            List<String> rows = jdbcTemplate.queryForList(sql, String.class, instId);
+            if (rows.isEmpty() || rows.get(0) == null || rows.get(0).isBlank()) {
+                return null;
+            }
+            return Long.valueOf(rows.get(0).trim());
+        } catch (Exception e) {
+            log.warn("[WfTaskActReader] ACT 最后办理人查询失败（回退发起人）. {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** ACT 行 → {@link WfTask}（不落库）；status 为 null 时按 BUSINESS_STATUS_ 反解（调用方 SQL 需带该列） */
+    private static WfTask taskRow(ResultSet rs, Integer status) throws SQLException {
+        WfTask t = new WfTask();
+        t.setId(getLong(rs, "bizTaskId"));
+        t.setEngineTaskId(rs.getString("engineTaskId"));
+        t.setNodeKey(rs.getString("nodeKey"));
+        t.setAssignee(getLong(rs, "assignee"));
+        t.setOriginalUser(getLong(rs, "originalUser"));
+        t.setIsTest(getInt(rs, "isTest"));
+        t.setSignOrder(getInt(rs, "signOrder"));
+        t.setViewTime(rs.getTimestamp("viewTime"));
+        t.setTimeoutHandled(getInt(rs, "timeoutHandled"));
+        t.setDueTime(rs.getTimestamp("dueTime"));
+        t.setReceiveTime(rs.getTimestamp("receiveTime"));
+        t.setInstId(getLong(rs, "instId"));
+        t.setTenantId(rs.getString("tenantId"));
+        t.setStatus(status);
+        return t;
+    }
+
     private static void appendInstanceFilter(StringBuilder sql, List<Object> args, String pAlias, WfTaskListFilter f) {
         if (f == null) {
             return;

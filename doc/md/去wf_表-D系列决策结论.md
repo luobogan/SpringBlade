@@ -106,3 +106,77 @@
 - **已落代码**：`IProcessService` 3 参 `deployProcess/deployProcessForTest` + 租户感知 `latestProcDefId(procKey,tenantId)`/`latestProcessDefinition`；`mode_triggerworkflowset.workflow_key` 加列 + `StartProcessDTO.tenantId`；formmode 双读开关 `blade.workflow.trigger-from-flowable.enabled`（默认关）；workflow 侧 `R-A/R-E` 引擎权威校验、`R-B` 守卫收窄、`R-C` 灰度豁免开关、`R-D` 结构化启动日志。
 - **剩余风险**：租户回填属结构性写入需单独审批；新旧部署并存窗口需「先按 tenant 查再回退默认租户」；`mode_triggerworkflowset` 与 `wf_process_definition` 跨库故 workflow_key 回填走应用侧 Feign 批处理；过渡期双读；`singleResult()` 非唯一风险（已由租户过滤消解）。
 - **详见**：`doc/md/Flowable8承接台账模块-去wf_表改造分析.md` **§十八** 完整记录（决策演进 / 目标方案 / R-A~R-E / P0 前置 / 实施任务 / 剩余风险 / 消歧关系）。
+
+---
+
+## 五、`wf_task` 完全退出验证决策（2026-11-10）
+
+> 来源：《去wf_表-任务读源翻源上线检查.md》§11.9.2 两项起步验证的实测结论。
+> 两项均为 H2 单测：**未改生产代码、未改配置、未写共享 dev 库、未重启服务**。
+
+### D17 —— 加签走 §9.4 方案 X（ACT 原生多实例），不走方案 Y
+
+- **结论**：**选定方案 X**。加签改用 `runtimeService.addMultiInstanceExecution` 生成独立
+  `ACT_RU_TASK.ID_`，N:1 守卫可整体删除，无需补建 `wf_ext_task type=2` 办理链。
+- **依据（H2 spike `WfAddSignMiSpikeTest`，2/2 通过）**：
+  - 既有 V3（`WfEngineAdvancedSemanticsTest:232-262`）已实证 **MI 节点**动态加签可用：
+    生成独立活跃任务、`nrOfInstances=4`、完成条件按新基数求值。
+  - **缺口 1**：对**普通 UserTask（无 `multiInstanceLoopCharacteristics`）**调用同一 API，
+    Flowable 8.1 抛 `FlowableException("No multi instance execution found for activity id ...")`
+    （源码 `AddMultiInstanceExecutionCmd#searchForMultiInstanceActivity` 只匹配
+    `isMultiInstanceRoot()` 的 execution，普通节点返回 null）。
+    → 方案 X **仅适用部署期已注入 MI 的节点**；项目 `engine-multi-instance.enabled=true`
+    且定义已重新部署，目标审批节点满足该前提。
+  - **缺口 2**：V6（同文件 `:335-369`）记录「动态加签不写回集合变量、驳回重建丢加签人」。
+    spike 实证：加签后 `runtimeService.setVariable(instId, "wfMiAssignees_<nodeKey>",
+    含加签人的集合)`，驳回重建后办理人 = `[1001, 1002, 1003, 1004]`，
+    **丢人缺陷可由生产侧写回消除**。
+- **落地必做项**：① 加签时同步写回 `wfMiAssignees_<nodeKey>`；
+  ② 若未来要给未部署为 MI 的普通节点运行中加签，须先改造 BPMN/重新部署注入 MI，
+  否则退方案 Y（并计入 §11.4.2 ⚠️ 的办理链补建成本）。
+- **状态**：✅ **代码已落地（2026-11-10 批次 2）**：`addSign` 改走
+  `runtimeService.addMultiInstanceExecution`（生成独立 `ACT_RU_TASK.ID_`，原办理人待办保留，
+  不再 N:1），并新增 `appendMiAssignee()` 把加签人并回 `wfMiAssignees_<nodeKey>`
+  （补偿 V6 丢人口径）；`forward` 同步改为「换人」语义（`bizTaskId` 不变）。
+  全模块 319 用例仅 2 个既有基线失败、DB/API 12/12、真实流转 E2E 18/18。
+  ✅ **加签业务入口验证已完成（2026-11-11）**：见《去wf_表-任务读源翻源上线检查.md》§12.6.4——
+  新增 `WfAddSignOrchestrationTest`（2/2：成功路径编排 + 降级路径友好报错），
+  配合 `WfAddSignMiSpikeTest`（引擎成功路径）与真实 dev HTTP（降级路径）三层互补验证。
+
+### D18 —— `WfTaskActWriter` 守卫的 `wf_ext_task` 统计应删除
+
+- **结论**：漂移**可复现**；守卫 `WfTaskActWriter:119-122` 对 `wf_ext_task` 的统计
+  属过度保守，**应在批次 1 与 `:113-114` 的 `wf_task` 统计一并删除**。
+- **依据（H2 复现 `WfCirculateDriftReproTest`，3/3 通过）**：
+  - 同一 `engineTaskId` 下 1 条 A 类 `wf_task` + 1 条抄送 `wf_ext_task` →
+    `siblings = 2 > 1` → 审批时 `sync()` 被跳过 →
+    `ACT_RU_TASK` / `ACT_HI_TASKINST` 的 `BUSINESS_STATUS_` 停在 `TODO`
+    （已办列表会把已办显示成待办、角标/筛选失真）。
+  - 对照组（无抄送行）与 `type=7` 装饰行均正常写回 `DONE`（装饰行已被守卫 SQL 排除）。
+  - 根因：`WfExtTask extends TenantEntity`，**非 `WfTask` 子类**，`sync(WfTask)` 不接受它，
+    扩展行从不调用 `sync`、不会踩踏 ACT 单行 → 计入 `siblings` 无必要。
+- **为何不用 dev 库复现**：`seed_wf_ext_task.py:197-206` 的
+  `insert_ext(engine_task_id='')` 默认空串，现有造数数据不共享 `engineTaskId`，
+  守卫扩展段统计不会触发；H2 结论明确，**不启用 dev 受控流转兜底**、不写共享库。
+- **状态**：✅ **已落地（2026-11-10 批次 1）**：`WfTaskActWriter:112-134` 守卫整段删除，
+  `sync()` 委托 `WfTaskActDirectWriter`；`WfCirculateDriftReproTest` / `WfTaskActWriterTest`
+  断言反转为「正常写回 DONE」并固化为回归基线。
+
+### D19 —— `wf_task` 采用「标记式退役 + 运行时零写入」融合收尾
+
+- **结论**：用户 2026-11-10 同时选定「标记式退役收尾」与「升级为零写入·批次 1」，
+  **两者融合执行，非二选一**。最终态 = 表 / Entity / Mapper / Service **保留但打废弃标记**
+  （不物理删除、不 DROP），同时运行时 `wf_task` **零写入**。
+- **落地**：① id 上移（`IdWorker.getId()`）② `WfTaskActDirectWriter` 直写 ACT 业务列
+  ③ `WfTaskBizResolver` 按 `BIZ_TASK_ID_` 反查 ACT；`WfTask`/`WfTaskMapper` 加
+  `@Deprecated`；表用 `ALTER TABLE ... COMMENT` 标记废弃。详见
+  《去wf_表-任务读源翻源上线检查.md》**§12**。
+- **表级废弃标记为本项目首个此类约定**：`V2026.11.10_001__wf_task_deprecate.sql`
+  只改 COMMENT、不改结构、幂等可逆；后续其它 `wf_*` 表退役沿用同一格式
+  （`【已废弃·P6 YYYY-MM-DD】…` + 回滚语句注释 + 信息登记）。
+- **可回退**：`blade.workflow.task-ledger-mode = direct | legacy` 单路径开关
+  （任意时刻只有一个写入路径，**不是双写**）；回退配 `WfTaskActRebuilder#rebuild()`
+  从存量台账幂等重建 ACT 业务列。
+- **验收**：全模块 318 用例仅 2 个既有基线失败；DB/API 14/14；真实流转 E2E 18/18，
+  流转前后 `wf_task` 行数 0→0。
+- **状态**：✅ **批次 1 已落地**（2026-11-10）；D17 方案 X 的加签改造属批次 2，待实施。

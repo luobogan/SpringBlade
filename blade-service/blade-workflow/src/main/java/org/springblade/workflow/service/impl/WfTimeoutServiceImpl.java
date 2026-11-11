@@ -18,7 +18,6 @@ import org.springblade.workflow.entity.WfTask;
 import org.springblade.workflow.mapper.WfNodeTimeoutMapper;
 import org.springblade.workflow.mapper.WfProcessDefinitionMapper;
 import org.springblade.workflow.mapper.WfProcessNodeMapper;
-import org.springblade.workflow.mapper.WfTaskMapper;
 import org.springblade.workflow.resolver.WfBpmnExtensionReader;
 import org.springblade.workflow.service.IWfInstanceService;
 import org.springblade.workflow.service.IWfTaskService;
@@ -51,7 +50,6 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
 
     private final WfNodeTimeoutMapper timeoutMapper;
     private final WfProcessNodeMapper nodeMapper;
-    private final WfTaskMapper taskMapper;
     private final WfProcessDefinitionMapper definitionMapper;
     private final IWfTaskService taskService;
     /** T11.2：超时提醒同步推送统一消息中心（失败仅记日志，不影响超时动作） */
@@ -260,8 +258,7 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
 
         // 仅成功才标记已执行，避免重复触发
         task.setTimeoutHandled(1);
-        taskMapper.updateById(task);
-        // 超时已执行标记同步到 ACT_*（TIMEOUT_HANDLED_ 为 wf_task 独有列）
+        // 批次 1：不再更新 wf_task 台账，直接把 TIMEOUT_HANDLED_ 同步到 ACT_*
         taskActWriter.sync(task);
     }
 
@@ -276,7 +273,8 @@ public class WfTimeoutServiceImpl implements IWfTimeoutService {
                 Long uid = Long.valueOf(s.trim());
                 if (uid != null && uid > 0) {
                     task.setAssignee(uid);
-                    taskMapper.updateById(task);
+                    // 批次 1：不再更新 wf_task 台账，直接把 BIZ_ASSIGNEE_ 同步到 ACT_*
+                    taskActWriter.sync(task);
                     log.info("[blade-workflow] 超时转办. taskId={}, to={}", task.getId(), uid);
                     return true;
                 }

@@ -64,6 +64,13 @@ public class WfTimeoutJob {
     private final WfTaskActWriter taskActWriter;
     /** 仅用于 D9 选主锁的获取/释放（在同一条连接上完成，保证 GET_LOCK 与 RELEASE_LOCK 同会话） */
     private final JdbcTemplate jdbcTemplate;
+    /**
+     * 台账写入模式（direct=不落 wf_task / legacy=落 wf_task）。
+     *
+     * <p>direct 模式下 wf_task 为空 → 超时扫描不能再回读 wf_task 反查业务任务，
+     * 改为用 ACT_RU_TASK 的列在内存组装（见 {@link #taskFromActRow}）。</p>
+     */
+    private final org.springblade.workflow.config.WfLedgerModeProperties ledgerMode;
 
     /** 定时扫描（默认 10 分钟一次；首次延迟 1 分钟，等应用完全就绪） */
     @Scheduled(initialDelayString = "${blade.workflow.timeout-initial-delay-ms:60000}",
@@ -134,8 +141,11 @@ public class WfTimeoutJob {
      * {@link #handle} 的纵深防御再滤一层。</p>
      */
     private List<WfTask> scanDueFromAct(Date now) {
-        String sql = "SELECT r.ID_ AS engine_task_id, r.BIZ_TASK_ID_, r.DUE_DATE_ "
+        String sql = "SELECT r.ID_ AS engine_task_id, r.BIZ_TASK_ID_, r.DUE_DATE_, "
+            + "r.TASK_DEF_KEY_, COALESCE(r.BIZ_ASSIGNEE_, r.ASSIGNEE_) AS assignee, "
+            + "r.IS_TEST_, r.TIMEOUT_HANDLED_, r.PROC_INST_ID_, p.BUSINESS_ID_ AS inst_id "
             + "FROM ACT_RU_TASK r "
+            + "LEFT JOIN ACT_HI_PROCINST p ON p.ID_ = r.PROC_INST_ID_ "
             + "WHERE r.SUSPENSION_STATE_ = 1 AND r.DUE_DATE_ IS NOT NULL AND r.DUE_DATE_ <= ? "
             + "AND (r.TIMEOUT_HANDLED_ IS NULL OR r.TIMEOUT_HANDLED_ = 0) "
             + "AND COALESCE(r.IS_TEST_, 0) = 0 "
@@ -145,11 +155,11 @@ public class WfTimeoutJob {
         for (Map<String, Object> row : rows) {
             WfTask task = resolveBizTask(row);
             if (task == null) {
-                log.warn("[blade-workflow] 到期引擎任务无对应 wf_task，跳过. engineTaskId={}, bizTaskId={}",
+                log.warn("[blade-workflow] 到期引擎任务无法解析为业务任务，跳过. engineTaskId={}, bizTaskId={}",
                     row.get("engine_task_id"), row.get("BIZ_TASK_ID_"));
                 continue;
             }
-            // 双保险：wf_task 口径复核（待办 / 有到期时间 / 未处理 / 非测试态 / 未删除）
+            // 双保险：口径复核（待办 / 有到期时间 / 未处理 / 非测试态 / 未删除）
             if (!Integer.valueOf(WfTask.STATUS_TODO).equals(task.getStatus())
                 || task.getDueTime() == null
                 || task.getDueTime().after(now)
@@ -163,8 +173,21 @@ public class WfTimeoutJob {
         return result;
     }
 
-    /** 引擎任务 → wf_task 解析：优先 BIZ_TASK_ID_，回退 engine_task_id（取待办态一条） */
+    /**
+     * 引擎任务 → 业务任务解析。
+     *
+     * <p><b>direct 模式（去 wf_ 表批次 1 之后）</b>：{@code wf_task} 不落行，
+     * 旧实现「先按 BIZ_TASK_ID_ 查 wf_task、再按 engine_task_id 查 wf_task」<b>必然查不到</b>
+     * → 返回 null → 逐条跳过 → <b>超时自动通过 / 转办 / 催办 100% 不触发</b>，
+     * 且 {@code TIMEOUT_HANDLED_} 永不置位（每轮重复扫描 + 重复告警）。
+     * 现改为直接用扫描 SQL 已取到的 ACT 列在内存里组装 {@link WfTask}，不再回读 wf_task。</p>
+     *
+     * <p>legacy 模式保留旧链路（回退开关时行为不变）。</p>
+     */
     private WfTask resolveBizTask(Map<String, Object> row) {
+        if (ledgerMode.isDirect()) {
+            return taskFromActRow(row);
+        }
         Object biz = row.get("BIZ_TASK_ID_");
         if (biz != null && !biz.toString().isBlank()) {
             try {
@@ -184,6 +207,67 @@ public class WfTimeoutJob {
             .eq(WfTask::getEngineTaskId, engineId.toString())
             .eq(WfTask::getStatus, WfTask.STATUS_TODO)
             .last("LIMIT 1"));
+    }
+
+    /** 用扫描 SQL 已取到的 ACT 列在内存组装业务任务（direct 模式） */
+    private static WfTask taskFromActRow(Map<String, Object> row) {
+        Object engineId = row.get("engine_task_id");
+        if (engineId == null) {
+            return null;
+        }
+        WfTask t = new WfTask();
+        t.setEngineTaskId(String.valueOf(engineId));
+        t.setId(asLong(row.get("BIZ_TASK_ID_")));
+        t.setNodeKey(asString(row.get("TASK_DEF_KEY_")));
+        t.setAssignee(asLong(row.get("assignee")));
+        t.setIsTest(asInt(row.get("IS_TEST_")));
+        t.setTimeoutHandled(asInt(row.get("TIMEOUT_HANDLED_")));
+        t.setDueTime(asDate(row.get("DUE_DATE_")));
+        t.setInstId(asLong(row.get("inst_id")));
+        t.setStatus(WfTask.STATUS_TODO);
+        return t;
+    }
+
+    private static String asString(Object v) {
+        return v == null ? null : String.valueOf(v);
+    }
+
+    private static Long asLong(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.valueOf(String.valueOf(v).trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Integer asInt(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return Integer.valueOf(String.valueOf(v).trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Date asDate(Object v) {
+        if (v instanceof java.sql.Timestamp ts) {
+            return new Date(ts.getTime());
+        }
+        if (v instanceof Date d) {
+            return d;
+        }
+        return null;
     }
 
     private void handle(WfTask task, Date now) {
@@ -231,7 +315,7 @@ public class WfTimeoutJob {
 
     private void markHandled(WfTask task) {
         task.setTimeoutHandled(1);
-        taskMapper.updateById(task);
+        // 批次 1：不再更新 wf_task 台账（下方 sync 已委托直写器写 ACT）
         // 超时防重标记同步到 ACT_*（TIMEOUT_HANDLED_ 为 wf_task 独有列，须双写）
         taskActWriter.sync(task);
     }

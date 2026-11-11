@@ -35,7 +35,6 @@ import static org.mockito.Mockito.when;
 class OdocSealAdvancerTest {
 
 	private WfOdocSignFlowMapper flowMapper;
-	private WfTaskMapper taskMapper;
 	private WfInstanceMapper instanceMapper;
 	private WfProcessNodeMapper nodeMapper;
 	private WfBpmnExtensionReader bpmnReader;
@@ -43,12 +42,13 @@ class OdocSealAdvancerTest {
 	private IWfInstanceService instanceService;
 	private NodeActionExecutor nodeActionExecutor;
 	private INoticeClient noticeClient;
+	private org.springblade.workflow.service.helper.WfTaskBizResolver bizResolver;
+	private org.springblade.workflow.service.helper.WfTaskActWriter taskActWriter;
 	private OdocSealAdvancer advancer;
 
 	@BeforeEach
 	void setUp() {
 		flowMapper = mock(WfOdocSignFlowMapper.class);
-		taskMapper = mock(WfTaskMapper.class);
 		instanceMapper = mock(WfInstanceMapper.class);
 		nodeMapper = mock(WfProcessNodeMapper.class);
 		bpmnReader = mock(WfBpmnExtensionReader.class);
@@ -56,7 +56,11 @@ class OdocSealAdvancerTest {
 		instanceService = mock(IWfInstanceService.class);
 		nodeActionExecutor = mock(NodeActionExecutor.class);
 		noticeClient = mock(INoticeClient.class);
-		advancer = new OdocSealAdvancer(flowMapper, taskMapper, instanceMapper, nodeMapper, bpmnReader,
+		bizResolver = mock(org.springblade.workflow.service.helper.WfTaskBizResolver.class);
+		taskActWriter = mock(org.springblade.workflow.service.helper.WfTaskActWriter.class);
+		advancer = new OdocSealAdvancer(flowMapper,
+			bizResolver, taskActWriter,
+			instanceMapper, nodeMapper, bpmnReader,
 			processService, instanceService, nodeActionExecutor, noticeClient);
 	}
 
@@ -156,12 +160,15 @@ class OdocSealAdvancerTest {
 		WfTask task = new WfTask();
 		task.setId(555L);
 		task.setStatus(WfTask.STATUS_DONE);
-		when(taskMapper.selectById(555L)).thenReturn(task);
+		// 批次 1：改按 BIZ_TASK_ID_ 反查 ACT，不再 taskMapper.selectById
+		when(bizResolver.resolve(555L)).thenReturn(task);
 
 		advancer.terminate(1L, "拒签");
 
 		assertEquals(WfOdocSignFlow.ADVANCE_STATUS_TERMINATED, f.getAdvanceStatus());
 		assertEquals(WfTask.STATUS_TODO, task.getStatus());
-		verify(taskMapper).updateById(task);
+		// 批次 1：不再更新 wf_task 台账，改为直写 ACT 业务列
+		verify(taskActWriter).sync(task);
+		verify(taskMapper, never()).updateById(task);
 	}
 }

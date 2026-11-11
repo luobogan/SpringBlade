@@ -132,12 +132,11 @@ public class FlowableConfig {
         configuration.setHistory("audit");
         // 禁止异步历史：HISTORIC_* 事件跨事务写入，开启后存在漏派风险（方案 C §3.4 要求保持关闭）
         configuration.setAsyncHistoryEnabled(false);
-        // ⚠️ 硬约束（方案C 启用真实反写时必读）：上面两行（关闭异步历史 + 关闭异步作业执行器）是方案C 杜绝
-        // 定时/异步漏派漂移的【前提】。若将来把 blade.workflow.ledger-listener.enabled=true 并在
-        // WfStateProjector 内落地真实反写，必须同步把 WfEngineEventListener.isFailOnException() 改回 true
-        // （C1 强一致：写 wf_* 失败即回滚引擎事务，台账与引擎同生共死）。当前监听处于影子模式、isFailOnException=false
-        // 仅打日志不回滚，是【阶段1 验证期】的安全值；一旦开启真实反写却忘了改回 true，事件同事务派发虽已无跨事务漏派，
-        // 但台账写库失败不会回滚引擎，仍会留下"引擎成/台账丢"的漂移——此开关只是消除异步那一维，强一致那维须靠 isFailOnException 兜底。
+        // ⚠️ 历史（方案C 阶段2）：曾要求 WfStateProjector 真实反写时把
+        // WfEngineEventListener.isFailOnException() 置 true（台账写失败即回滚引擎，C1 强一致）。
+        // 【批次 1 / 2026-11-10 订正】任务级补偿已改为直写 ACT、wf_task 运行时零写入，
+        // isFailOnException 已降为 false；实例级投影仍写 wf_instance，但失败仅告警、不回滚引擎事务。
+        // 上面两行（关闭异步历史 + 关闭异步作业执行器）仍是杜绝定时/异步漏派漂移的前提，保持不变。
         // 方案C 事件驱动台账投影：仅当开关 blade.workflow.ledger-listener.enabled=true 时注册全局监听（默认关）。
         // 监听仅依赖 wf_* Mapper（无引擎 Service 依赖），故走 setEventListeners 直接装配（方案C §2.2 方式一），
         // 避免与 processEngineConfiguration 形成构造期循环依赖。关闭开关时 bean 不存在，不注册、完全回到方案A 双写。
