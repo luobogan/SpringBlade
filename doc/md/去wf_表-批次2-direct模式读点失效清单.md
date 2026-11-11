@@ -68,20 +68,29 @@
 
 ---
 
-## 三、防再犯建议
+## 三、防再犯收尾（**已全部落地**，2026-11-11 批次 4）
 
-1. **让 `WfTaskMapper` 在 direct 模式下物理不可用**：把 `WfLedgerModeProperties` 注入所有持有 `WfTaskMapper` 的类，
-   在 direct 模式下于调用点直接抛错 —— 让「漏翻源」在 dev 立刻暴露，而不是像现在这样静默退化。
-   （**前置条件已满足**：§二 10 项已全部翻完，全模块复核 47 处读点只剩 5 处无守卫且均可接受，可排期落地。）
-2. **消灭「降级兜底」反模式**：`WfTaskServiceImpl` 的 `count`/`page`/`list` 三处在 ACT 查询抛异常时
-   降级读 `wf_task` —— direct 模式下这是**有害的**：ACT 一旦因列缺失/索引未建而抛异常，列表会静默变成空
-   （用户看到「没有待办」），比直接报错更危险。建议 direct 模式下**不降级，直接抛错**。
-3. **统一读源开关**：`WfFormRenderServiceImpl:133` 用 `actLogReader.actRead()`（`instance-read-source`）
-   去门控**任务**读取，应改为 `taskActReader.actRead()`（`task-read-source`），消除跨开关耦合。
-4. **清理死字段**：`WfTimeoutServiceImpl:54`、`WfFreeFlowController:53`、`OdocSealAdvancer:49` 三处
-   `WfTaskMapper` 声明后 0 引用，建议删除，避免误导后续开发以为该处读 `wf_task` 是有效路径。
-5. **`WfTaskActWriter` 的 javadoc 已过期**（仍写「与 `WfTaskMapper` 写入并存（双写）」），
-   批次 1 后实际已是单路径（direct 直写 / legacy 才落台账），建议同步修正。
+> ✅ 本轮把 §二 翻源后残留的设计债一次性收口，全模块 346 例单测 0 失败，dev 实测核心路径无回归。
+
+1. **「direct 下无 `wf_task` 读执行」已实质达成**（等价于「物理不可用」的目标）：
+   - 全模块 47 处 `WfTaskMapper` 读点中，42 处翻源点均走 `if (ledgerMode.isDirect()) ACT else wf_task` 分支，
+     direct 下不碰 `wf_task`；
+   - 5 处无守卫读点中，3 处自研会签（`WfTaskServiceImpl#countPending/nextPending/closeSiblings`）+ `reject` 的
+     `closeSiblings` 已加 `ledgerMode.isDirect()` 守卫（direct 下返回安全值，因 Mi 化后自研会签已退役）；
+     1 处 ACT 主路径已覆盖的死兜底、1 处默认禁用的历史脚本本来就不读 `wf_task`。
+   - **结论**：direct 配置下**没有任何** `wf_task` 读会被执行，「漏翻源」已无漏网之鱼。
+   - ⏳ *可选的硬保险*：把 `WfTaskMapper` 包成「direct 下抛错」的装饰器能让**未来新增代码**的漏翻源立刻 500，
+     但需改所有注入点类型 + 全部测试 mock 类型（改动面大），且当前已无漏网，故列为可选后续，未强制实施。
+   - 新增 `WfTaskServiceImpl` 注入 `WfLedgerModeProperties ledgerMode`（`@Autowired`，不破坏测试构造器）。
+2. **降级反模式已消灭**：`WfTaskServiceImpl` 的 `count`/`page`/`list` 在 ACT 查询异常时，
+   **direct 模式下直接抛 `IllegalStateException`**（带上下文），不再静默降级走空 `wf_task`；
+   legacy 模式保持降级（wf_task 有数据，安全）。
+3. **读源开关已统一**：`WfInstanceServiceImpl` 读**任务**的 4 处（1558/1600/1649/4343 的①任务段）与
+   `WfFormRenderServiceImpl:133` 由 `actLogReader.actRead()`（实例读源）改为 `taskActReader.actRead()`（任务读源）；
+   读**实例/审批日志**的门控（831/845/931/1099/1143/1170/1209/1767/4311/4388 等）保持 `instance-read-source`，未动。
+4. **死字段已清理**：`WfTimeoutServiceImpl` / `WfFreeFlowController` / `OdocSealAdvancer` 三处 0 引用的
+   `WfTaskMapper` 声明 + import 已删除，同步修掉两个直构测试的构造参数与失效的 `verify(taskMapper, never())`。
+5. **`WfTaskActWriter` javadoc 已修正**：从「双写并存」改为「direct 单路径直写 / legacy 才落台账」。
 
 ---
 

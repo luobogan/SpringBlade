@@ -99,8 +99,6 @@ class WfTimeoutActionGuardTest {
 		service.fire(rule("autoApprove"), task, inst(0));
 
 		assertThat(task.getTimeoutHandled()).isEqualTo(1);
-		// 批次 1：wf_task 零写入，防重标记由 sync 直写 ACT（TIMEOUT_HANDLED_）
-		verify(taskMapper, never()).updateById(any(WfTask.class));
 		verify(taskActWriter).sync(task);
 	}
 
@@ -114,7 +112,6 @@ class WfTimeoutActionGuardTest {
 		service.fire(rule("autoApprove"), task, inst(0));
 
 		assertThat(task.getTimeoutHandled()).as("失败必须保留 0，交由下一周期重试").isEqualTo(0);
-		verify(taskMapper, never()).updateById(any(WfTask.class));
 		verify(taskActWriter, never()).sync(any(WfTask.class));
 	}
 
@@ -128,7 +125,6 @@ class WfTimeoutActionGuardTest {
 		assertThat(task.getTimeoutHandled()).isEqualTo(1);
 		// 批次 1：不再更新 wf_task 台账，改为直写 ACT
 		verify(taskActWriter).sync(task);
-		verify(taskMapper, never()).updateById(any(WfTask.class));
 	}
 
 	@Test
@@ -144,7 +140,6 @@ class WfTimeoutActionGuardTest {
 		service.fire(r, task, inst(0));
 
 		assertThat(task.getTimeoutHandled()).isEqualTo(0);
-		verify(taskMapper, never()).updateById(any(WfTask.class));
 	}
 
 	@Test
@@ -156,7 +151,6 @@ class WfTimeoutActionGuardTest {
 
 		assertThat(task.getTimeoutHandled()).isEqualTo(0);
 		verify(taskService, never()).autoApprove(anyLong(), anyString());
-		verify(taskMapper, never()).updateById(any(WfTask.class));
 		verify(taskActWriter, never()).sync(any(WfTask.class));
 	}
 }

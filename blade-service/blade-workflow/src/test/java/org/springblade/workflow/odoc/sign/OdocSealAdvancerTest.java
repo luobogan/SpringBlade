@@ -169,6 +169,5 @@ class OdocSealAdvancerTest {
 		assertEquals(WfTask.STATUS_TODO, task.getStatus());
 		// 批次 1：不再更新 wf_task 台账，改为直写 ACT 业务列
 		verify(taskActWriter).sync(task);
-		verify(taskMapper, never()).updateById(task);
 	}
 }
