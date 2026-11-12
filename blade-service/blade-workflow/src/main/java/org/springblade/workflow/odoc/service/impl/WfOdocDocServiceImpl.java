@@ -5,6 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.common.wps.WpsEditorConfig;
+import org.springblade.common.wps.WpsFileId;
+import org.springblade.common.wps.WpsFileMeta;
+import org.springblade.common.wps.WpsProperties;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.workflow.odoc.OdocUrlSigner;
 import org.springblade.workflow.odoc.config.OdocProperties;
@@ -18,6 +22,7 @@ import org.springblade.workflow.odoc.vo.OdocDocInitVO;
 import org.springblade.workflow.odoc.vo.OdocEditorConfigVO;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -35,11 +40,18 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 	private final IOdocFileStore fileStore;
 	private final OdocProperties properties;
 	private final OdocUrlSigner signer;
+	private final WpsProperties wpsProperties;
 
 	private static final Integer DOC_STATUS_DRAFT = 9;
 
 	@Override
 	public OdocDocInitVO initDoc(Long instanceId, Long defId, String title, boolean edit) {
+		// 历史 4 参入口默认 editor=auto（= 当前 OnlyOffice 行为），保持存量前端零变化
+		return initDoc(instanceId, defId, title, edit, "auto");
+	}
+
+	@Override
+	public OdocDocInitVO initDoc(Long instanceId, Long defId, String title, boolean edit, String editor) {
 		WfOdocDoc doc = docMapper.selectOne(
 			Wrappers.<WfOdocDoc>lambdaQuery().eq(WfOdocDoc::getInstanceId, instanceId));
 		if (doc == null) {
@@ -66,9 +78,24 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 				.orderByDesc(WfOdocDocVersion::getVersionId));
 		vo.setVersions(versions);
 
-		boolean canEdit = isDocServerConfigured() && current != null && isEditableType(current.getDocFileType());
-		vo.setCanEdit(canEdit);
-		vo.setEditorConfig(canEdit && edit ? buildEditorConfig(doc.getId(), current.getId(), true) : null);
+		String eff = (editor == null || editor.isBlank()) ? "auto" : editor;
+		if ("wps".equals(eff) && isWpsConfigured()) {
+			// WPS WebOffice 方案（WPS 统一改造 P2）
+			boolean editable = edit && current != null && isEditableType(current.getDocFileType());
+			vo.setEditorType("wps");
+			vo.setCanEdit(isWpsConfigured() && current != null
+				&& isEditableType(current.getDocFileType()));
+			vo.setWpsEditorConfig(buildWpsEditorConfig(doc.getId(), current.getId(), editable));
+			vo.setEditorConfig(null);
+		} else {
+			// 现有 OnlyOffice 路径（auto 默认 = OnlyOffice）
+			boolean canEdit = isDocServerConfigured() && current != null
+				&& isEditableType(current.getDocFileType());
+			vo.setEditorType("onlyoffice");
+			vo.setCanEdit(canEdit);
+			vo.setEditorConfig(canEdit && edit ? buildEditorConfig(doc.getId(), current.getId(), true) : null);
+			vo.setWpsEditorConfig(null);
+		}
 		return vo;
 	}
 
@@ -302,6 +329,150 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 				.select(WfOdocDocVersion::getVersionId));
 		return all.stream().map(WfOdocDocVersion::getVersionId)
 			.max(Comparator.naturalOrder()).orElse(0) + 1;
+	}
+
+	// ───────────── WPS WebOffice（WPS 统一改造 P2） ─────────────
+
+	@Override
+	public boolean isWpsConfigured() {
+		return wpsProperties.isConfigured();
+	}
+
+	@Override
+	public WpsEditorConfig buildWpsEditorConfig(Long docId, Long versionId, boolean edit) {
+		if (!isWpsConfigured()) {
+			return null;
+		}
+		WfOdocDocVersion version = versionMapper.selectById(versionId);
+		if (version == null) {
+			return null;
+		}
+		boolean editable = edit && isEditableType(version.getDocFileType());
+		WpsEditorConfig wc = new WpsEditorConfig();
+		wc.setDomain(WpsFileId.DOMAIN_ODOC);
+		wc.setMode(editable ? "edit" : "view");
+		wc.setReadOnly(!editable);
+		wc.setFileName(version.getFileName());
+		wc.setFileExt(extOf(version.getDocFileType()));
+		wc.setAppId(wpsProperties.getAppId());
+		String wire = WpsFileId.of(WpsFileId.DOMAIN_ODOC, String.valueOf(docId));
+		wc.setFileId(wire);
+		wc.setToken(signer.sign("wps:" + wire));
+		wc.setTimestamp(System.currentTimeMillis() / 1000);
+		wc.setPermission(editable ? "write" : "read");
+		wc.setUserId(String.valueOf(SecureUtil.getUserId()));
+		try {
+			wc.setUserName(SecureUtil.getUser().getUserName());
+		} catch (Exception ignored) {
+			wc.setUserName("");
+		}
+		wc.setJssdkUrl(wpsProperties.getJssdkUrl());
+		// contentUrl 供前端/SDK 参考（实际下载由 WPS 中台经 v3 协议拉取），指向 workflow 直连端点
+		String base = stripTrailingSlash(wpsProperties.getPublicBase());
+		wc.setContentUrl(base + "/blade-workflow/odoc/wps/content?docId=" + docId
+			+ "&version=" + version.getVersionId() + "&token=" + signer.sign(docId + ":" + version.getVersionId()));
+		return wc;
+	}
+
+	@Override
+	public WpsFileMeta wpsMeta(Long docId) {
+		WfOdocDoc doc = docMapper.selectById(docId);
+		if (doc == null) {
+			return null;
+		}
+		WfOdocDocVersion cur = doc.getDocEditionId() == null ? null
+			: versionMapper.selectById(doc.getDocEditionId());
+		return cur == null ? null : toWpsMeta(docId, cur);
+	}
+
+	@Override
+	public List<WpsFileMeta> wpsVersions(Long docId) {
+		List<WfOdocDocVersion> all = versionMapper.selectList(
+			Wrappers.<WfOdocDocVersion>lambdaQuery().eq(WfOdocDocVersion::getDocId, docId)
+				.orderByAsc(WfOdocDocVersion::getVersionId));
+		List<WpsFileMeta> out = new ArrayList<>();
+		for (WfOdocDocVersion v : all) {
+			out.add(toWpsMeta(docId, v));
+		}
+		return out;
+	}
+
+	@Override
+	public WpsFileMeta wpsVersionMeta(Long versionId) {
+		WfOdocDocVersion v = versionMapper.selectById(versionId);
+		return v == null ? null : toWpsMeta(v.getDocId(), v);
+	}
+
+	@Override
+	public WpsFileMeta saveWpsVersion(Long docId, byte[] content, String name) {
+		WfOdocDoc doc = docMapper.selectById(docId);
+		if (doc == null) {
+			throw new IllegalArgumentException("正文不存在: " + docId);
+		}
+		Long fileId = fileStore.store(content, name);
+		Integer next = nextVersionId(docId);
+		WfOdocDocVersion v = new WfOdocDocVersion();
+		v.setDocId(docId);
+		v.setVersionId(next);
+		v.setFileId(fileId);
+		v.setFileName(name);
+		v.setDocFileType(extToType(name));
+		// R6：保留文档级套红态（hasUsedTemplet），WPS 保存新版本不重置（待产品确认）
+		v.setHasUsedTemplet(doc.getHasUsedTemplet());
+		v.setIsExtFile(0);
+		v.setVersionDetail("WPS在线编辑保存");
+		try {
+			v.setCreateUser(SecureUtil.getUserId());
+		} catch (Exception ignored) {
+			v.setCreateUser(0L);
+		}
+		versionMapper.insert(v);
+		doc.setDocEditionId(v.getId());
+		docMapper.updateById(doc);
+		WpsFileMeta m = toWpsMeta(docId, v);
+		m.setSize((long) content.length);
+		return m;
+	}
+
+	@Override
+	public byte[] wpsVersionContent(Long docId, int version) {
+		WfOdocDocVersion v = versionMapper.selectOne(
+			Wrappers.<WfOdocDocVersion>lambdaQuery()
+				.eq(WfOdocDocVersion::getDocId, docId)
+				.eq(WfOdocDocVersion::getVersionId, version));
+		if (v == null) {
+			return null;
+		}
+		return fileStore.download(v.getFileId());
+	}
+
+	private WpsFileMeta toWpsMeta(Long docId, WfOdocDocVersion v) {
+		WpsFileMeta m = new WpsFileMeta();
+		m.setId(WpsFileId.of(WpsFileId.DOMAIN_ODOC, String.valueOf(docId)));
+		m.setName(v.getFileName());
+		m.setVersion(v.getVersionId());
+		m.setSize(0L);
+		long now = System.currentTimeMillis() / 1000;
+		m.setCreateTime(now);
+		m.setModifyTime(now);
+		return m;
+	}
+
+	private Integer extToType(String name) {
+		if (name == null) {
+			return 7;
+		}
+		String lower = name.toLowerCase();
+		if (lower.endsWith(".doc")) {
+			return 3;
+		}
+		if (lower.endsWith(".pdf")) {
+			return 12;
+		}
+		if (lower.endsWith(".ofd")) {
+			return 13;
+		}
+		return 7;
 	}
 
 	private boolean isDocServerConfigured() {

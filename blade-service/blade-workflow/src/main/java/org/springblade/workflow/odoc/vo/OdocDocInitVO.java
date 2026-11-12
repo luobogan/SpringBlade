@@ -2,8 +2,9 @@ package org.springblade.workflow.odoc.vo;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
-import org.springblade.workflow.odoc.entity.WfOdocDoc;
+import org.springblade.common.wps.WpsEditorConfig;
 import org.springblade.workflow.odoc.entity.WfOdocDocVersion;
+import org.springblade.workflow.odoc.vo.OdocEditorConfigVO;
 
 import java.util.List;
 
@@ -29,9 +30,15 @@ public class OdocDocInitVO {
 	@Schema(description = "版本历史（按版本号倒序）")
 	private List<WfOdocDocVersion> versions;
 
-	@Schema(description = "在线编辑配置；未部署 OnlyOffice 时为 null")
+	@Schema(description = "编辑器类型：onlyoffice / wps（WPS 统一改造 P2）")
+	private String editorType;
+
+	@Schema(description = "在线编辑配置（OnlyOffice）；不可编辑或未部署 DOCS 时为 null")
 	private OdocEditorConfigVO editorConfig;
 
-	@Schema(description = "是否可在线编辑（依赖 OnlyOffice 已部署）")
+	@Schema(description = "WPS WebOffice 配置（WPS 已配置且 editor=wps 时非 null；P2 新增）")
+	private WpsEditorConfig wpsEditorConfig;
+
+	@Schema(description = "是否可在线编辑")
 	private Boolean canEdit;
 }

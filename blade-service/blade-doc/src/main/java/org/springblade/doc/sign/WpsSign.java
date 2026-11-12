@@ -7,11 +7,21 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * WPS 文档中台签名（前后端同一规则）。
+ * WPS 文档中台 SHA1 签名（{@code _w_*} 参数族）——<b>未启用，P3.4 降级保留</b>。
  *
- * <p>参与签名的参数按 key 字典序排序，拼接为 {@code key=value&key=value…}，追加 appSecret，做 SHA1。
- * 客户端签名转大写（透传给 jssdk 校验）；服务端校验大小写不敏感（WPS 中台下发，个别版本大小写不一致）。</p>
+ * <p>⚠️ 全项目零调用点，{@code DocEditorConfig.wpsSignature} 从未赋值，SDK 加载器
+ * （v2.0.7）中也检不出 {@code _w_signature} / {@code X-WebOffice-Token}。
+ * 当前实际鉴权链路是：{@code WpsUrlSigner} 签发 {@code wps:{fileId}} token →
+ * 前端 {@code WebOfficeSDK.init({token})} → WPS 中台回调经 {@code X-WebOffice-Token} 回传 →
+ * {@code WpsCallbackSupport.tokenValid} 硬校验（P3.3）。<b>不要把本类当作"已有验签"沿用。</b></p>
+ *
+ * <p>保留原因：v2.0.7 的回调签名口径尚未在 WPS 中台联调中确认（方案 §0.2 ③ / P2.7）。
+ * 若联调证实中台使用 {@code _w_signature}，需重新核验本类算法后<b>再</b>接入，
+ * 并在 {@code WpsCallbackController#authGuard} 中增加对应校验分支。未确认前请勿调用。</p>
+ *
+ * @deprecated 未启用且签名口径未核验，见类注释；实际鉴权走 {@link org.springblade.common.wps.WpsUrlSigner}。
  */
+@Deprecated
 public final class WpsSign {
 
     private WpsSign() {

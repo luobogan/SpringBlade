@@ -51,7 +51,7 @@
 | 影响 | 位置 | 功能 | direct 下的表现 |
 |---|---|---|---|
 | 高 | `WfTestServiceImpl:1719` | 流程测试单步提交前「重读待办」 | `fresh == null` → `continue` → **自动测试一步都走不了**（静默跳过，无报错） |
-| 高 | `WfTestServiceImpl:2623,2632` | MI 场景自测（逐人驱动门禁 + 断言） | `todos` 恒空 → 循环立即 break → **自测必然判失败**（`failReason` 误导） |
+| 高 | `WfTestServiceImpl:2623,2632` | ~~MI 场景自测（逐人驱动门禁 + 断言）~~ **已修复(e3d32c5)** | `todos` 恒空 → 循环立即 break → 自测必然判失败（failReason 误导）；根因为 `miBpmn` 缺 `wf:operator` 扩展、测试定义未置 `status=3` 锚定 BPMN 读源、操作者 `signOrder` 与会签关系（`combineSignOrder`）冲突、`completeStarterCreateTask` 误吞首个 MI 任务，已在 `e3d32c5` 一并修复并经端到端验证 `allPassed=true`（会签/或签/依次三模式全过） |
 | 中 | `WfInstanceServiceImpl:3260` | MI 对账：关闭被完成条件取消的兄弟待办 | `pendings` 空 → 不收口（与 D2 同源，D2 修好后多数场景已覆盖） |
 | 中 | `WfInstanceServiceImpl:2269,2273` | 监管动作（强制归档/回退）前关闭待办 + sync ACT | `selectBatchIds` 返回空 → **监管动作前的待办收尾完全不发生**（漂移） |
 | 中 | `WfInstanceServiceImpl:2971` | 当前节点定位（强制归档范围 / 监控回退落点） | 回退到 `inst.getCurrentNodeKey()` 单一值 → 并行分支下可能落错节点 |

@@ -84,7 +84,9 @@ public class DocOnlineEditorController {
             throw new ServiceException("文档不存在");
         }
         // 默认编辑方案（editor=auto 时据此选择；WPS 还需已配置 appId/appSecret 才生效）
-        String defaultEngine = engineSettingService.get("default_engine", "univer");
+        // WPS 统一改造 P1-1.6：知识管理已定稿 WPS Web（历史库表配置 default_engine=wps，
+        // 见 blade-2026-11-04 dump），此处默认值同步为 wps；Univer 仍可经 editor=univer 显式选用。
+        String defaultEngine = engineSettingService.get("default_engine", "wps");
 
         // 附件预览：按指定 fileId 构建（只读），与主文件编辑互不干扰
         if (fileId != null) {

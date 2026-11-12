@@ -17,6 +17,11 @@ blade:
       # 文档附件本地直链（springBlade/uploads）：免鉴权，供前端原生 iframe 预览
       - /blade-doc/uploads/**
       - /api/blade-doc/uploads/**
+      # WPS WebOffice v3 回调（P3.5）：WPS 中台不带 Blade-Auth。
+      # ⚠️ 仅在 blade-doc 的 blade.wps.callback-auth-strict=true（默认）时可放行；
+      # 联调临时关闭硬校验时必须同步删掉这两行，否则回调端点完全裸奔。
+      - /v3/3rd/**
+      - /blade-doc/v3/3rd/**
   #多团队协作服务配置
   loadbalancer:
     #开启配置

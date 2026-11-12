@@ -42,3 +42,11 @@ blade:
       - doc_reply
       - doc_praise
       - doc_score
+
+  # WPS 统一改造共享配置（blade.wps.*）：doc/odoc 两侧共用一把签名密钥与回调公网 base，
+  # 否则 odoc 在 blade-doc 单回调入口验签会失败（R2 / P3.1 前移）。dev 复用 doc 本地密钥做统一值，
+  # 生产经 Nacos 下发高熵值。public-base 与 doc_engine_setting.wps_public_base 一致。
+  wps:
+    url-sign-secret: doc-dev-secret-change-me
+    url-sign-ttl-seconds: 300
+    public-base: https://www.zwymding.top

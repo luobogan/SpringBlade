@@ -97,3 +97,66 @@ mvn -o -pl blade-service/blade-workflow spring-boot:run   # 后台启动，日�
 - **机构代字**：已并入院文号 `prefix` 与字典 `org_abbr`，基本可用，未独立建表。
 - **列设置**：当前按列表（管理员级默认），非按用户。
 - **套红/版式像素级正确性**：需在真实 OFD/PDF 阅读器（数科/福昕/WPS）核验；CA 签章待接厂商 SDK。
+
+---
+
+## 7. WPS WebOffice 联调（2026-11-12 新增，P2.7 / P3.5，需人工）
+
+> 本节对应《收发文落地-编辑器WPS统一改造方案.md》P1–P3 与《收发文落地-验收清单.md》W1–W9。
+> §1–§6 是 2026-10-16/17 的字典/意见/单位/文号等增量，与本节互不依赖。
+
+### 7.1 前置确认（人工，WPS 控制台）
+- WPS 开放平台登记的**回调地址**、`appId` 是否与知识管理 `blade-doc` 同一套；控制台是否允许调整回调路径。
+- `wps_public_base=https://www.zwymding.top` 的实际转发拓扑：`/v3/3rd/**` 由网关路由还是 nginx 改写落到 blade-doc。
+- 商业授权是否有效、并发数与有效期。
+
+### 7.2 配置检查（勿擅自发布共享 Nacos）
+- `blade.wps.app-id` / `app-secret`：当前两个服务 yml 仍带明文默认值（`blade-doc/application.yml:16-17`、`blade-workflow/application-dev.yml:39-40`），**按泄露凭据处理，轮换步骤见方案文档 3.2**。
+- `blade.wps.url-sign-secret`：**doc 与 odoc 必须同一把**，否则 odoc 回调在 blade-doc 单入口验签失败（R2）。
+- `blade.wps.callback-auth-strict=true`（默认）：P3.3 起所有回调硬校验。
+- 网关 `secure.skip-url` 已含 `/v3/3rd/**`（代码层 `AuthProvider.DEFAULT_SKIP_URL` + 网关 dev yml）；**但白名单不等于可达**，还需 7.3 的路由。
+
+### 7.3 让 `/v3/3rd/**` 落到 blade-doc（二选一）
+现有网关路由只有 `Path=/blade-doc/**` + `StripPrefix=1`，而回调路径**不带服务前缀**：
+
+- **A 网关加路由**（Nacos `blade.yaml` 的 `spring.cloud.gateway.routes` 追加，勿整文件覆盖）：
+
+  ```yaml
+  - id: blade-wps-callback
+    uri: lb://blade-doc
+    predicates:
+      - Path=/v3/3rd/**
+  ```
+
+  不要 `StripPrefix`，控制器路径本身就是 `/v3/3rd/**`。
+- **B nginx 改写**：`/v3/3rd/(.*)` → `/blade-doc/v3/3rd/$1`，复用既有 `StripPrefix=1`。
+
+### 7.4 重建与重启顺序
+```bat
+cd d:\workproject\springbladeandreact\springBlade
+mvn -o -pl blade-common install -DskipTests
+mvn -o -pl blade-service-api/blade-workflow-api,blade-service/blade-workflow install -DskipTests
+mvn -o -pl blade-service/blade-doc install -DskipTests
+```
+依次重启：`blade-workflow`(8111) → `blade-doc` → `blade-gateway`(81) → 前端 8000。端口占用须先停旧进程。
+
+### 7.5 冒烟（先证明链路，再谈编辑）
+```bat
+curl -i https://www.zwymding.top/v3/3rd/files/doc:1
+```
+**预期 `code=40101`**（token 缺失被硬校验拒绝）。能拿到 40101 即同时证明：网关可达、白名单生效、`authGuard` 生效。返回 401 = 白名单未生效；404 = 路由未配；200 = 硬校验没开（立刻排查 `callback-auth-strict`）。
+
+> ⚠️ 联调期若怀疑 WPS 中台未回传 `X-WebOffice-Token` 导致回调全挂，**不要**直接把 `callback-auth-strict` 设为 `false`（白名单已开 → `/v3/3rd/**` 含 `objectPut` 写库端点完全裸奔）。先抓回调头，必要时同步移除白名单再排障。
+
+### 7.6 全链路（对应验收清单 W2–W8）
+1. `POST /api/blade-workflow/odoc/doc/init?instanceId=...&editor=wps` → 校验 `editorType=wps`、`wpsEditorConfig.appId/fileId=odoc:{docId}/token/jssdkUrl`。
+2. 表单正文卡片点「在线编辑」→ `OdocEditorModal` 按 `editorType` 渲染 `WpsEditor` → `WebOfficeSDK.init` 成功。
+3. 编辑保存 → WPS 中台三阶段（`prepare` → `address` → PUT `/odoc/wps/upload/odoc:{docId}`）→ 新版本落库。
+4. `/odoc/doc/{docId}/versions` 校验版本递增；下载内容比对。
+5. 套红 / 取消套红；`editor=onlyoffice` 降级；伪造/过期 token 与跨域 fileId 应分别返回 `40101`/`40005`。
+6. 日志观测点：`WpsCallbackController` 的 `WPS info 到站 fileId=... hasToken=...`、验签失败的 `WPS 回调 token 校验未通过`。
+
+### 7.7 回滚
+- 关闭 WPS 路径：`init` 传 `editor=onlyoffice` 并配 `odoc.doc-server-url`，回到 OnlyOffice 降级。
+- 关闭回调入口：移除网关 `/v3/3rd/**` 白名单与 7.3 的路由；注意此时 `callback-auth-strict` 可一并设 `false`，二者必须同时操作。
+- 代码回退：`git checkout` 本轮 WPS 改造文件（纯增量）。

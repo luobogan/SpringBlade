@@ -107,8 +107,9 @@ public class WfOdocController {
 	public R<OdocDocInitVO> init(@RequestParam Long instanceId,
 								 @RequestParam(required = false) Long defId,
 								 @RequestParam(required = false) String title,
-								 @RequestParam(defaultValue = "false") boolean edit) {
-		return R.data(docService.initDoc(instanceId, defId, title, edit));
+								 @RequestParam(defaultValue = "false") boolean edit,
+								 @RequestParam(defaultValue = "auto") String editor) {
+		return R.data(docService.initDoc(instanceId, defId, title, edit, editor));
 	}
 
 	@GetMapping("/doc/{docId}")

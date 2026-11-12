@@ -30,3 +30,16 @@ odoc:
   # 本地不再写死，避免与配置中心双源冲突（app-id/app-secret 也绝不进仓库）。
   # 未配置时「第三方电子签章」方案在设置页显示为未就绪且不可选，流程自动降级、不阻断。
 
+# WPS 统一改造共享配置（blade.wps.*）：odoc 与 doc 共用同一把签名密钥与 WPS 开放平台凭证，
+# 且 odoc 回调经 blade-doc 单入口验签，因此密钥必须一致（R2 / P3.1 前移）。
+# dev 复用 doc 的 WPS 开放平台凭证（同一套 appId，WPS 控制台单回调地址登记于 blade-doc）；
+# 生产经 Nacos 下发高熵值，app-id/app-secret 明文仅 dev 临时，P3.2 收口。
+blade:
+  wps:
+    app-id: ${WPS_APP_ID:SX20261023ZYNJCZ}
+    app-secret: ${WPS_APP_SECRET:UquMoKZlDLGqbfnZUxNxFYMQglHvLIRY}
+    jssdk-url: https://wwo.wps.cn/office/jssdk/jssdk.js
+    url-sign-secret: doc-dev-secret-change-me
+    url-sign-ttl-seconds: 300
+    public-base: https://www.zwymding.top
+

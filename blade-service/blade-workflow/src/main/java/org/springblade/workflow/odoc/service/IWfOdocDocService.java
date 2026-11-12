@@ -1,6 +1,8 @@
 package org.springblade.workflow.odoc.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.springblade.common.wps.WpsEditorConfig;
+import org.springblade.common.wps.WpsFileMeta;
 import org.springblade.workflow.odoc.entity.WfOdocDoc;
 import org.springblade.workflow.odoc.entity.WfOdocDocVersion;
 import org.springblade.workflow.odoc.vo.OdocDocInitVO;
@@ -26,6 +28,9 @@ public interface IWfOdocDocService {
 	 * @param edit       是否请求可编辑配置（false 仅预览）
 	 */
 	OdocDocInitVO initDoc(Long instanceId, Long defId, String title, boolean edit);
+
+	/** 同 {@link #initDoc}，增加编辑器选择：auto(默认，当前=OnlyOffice) / onlyoffice / wps */
+	OdocDocInitVO initDoc(Long instanceId, Long defId, String title, boolean edit, String editor);
 
 	/** 文档主记录 */
 	WfOdocDoc getDoc(Long docId);
@@ -58,6 +63,27 @@ public interface IWfOdocDocService {
 
 	/** 构建 OnlyOffice 编辑/预览配置（未部署 DOCS 时返回 null） */
 	OdocEditorConfigVO buildEditorConfig(Long docId, Long versionId, boolean edit);
+
+	/** WPS WebOffice 是否已配置（app-id/app-secret 均存在）——P2 接入判据 */
+	boolean isWpsConfigured();
+
+	/** 构建 WPS WebOffice 编辑配置（未配置或当前版本不可编辑类型时返回 null） */
+	WpsEditorConfig buildWpsEditorConfig(Long docId, Long versionId, boolean edit);
+
+	/** WPS v3 元信息（当前版本） */
+	WpsFileMeta wpsMeta(Long docId);
+
+	/** WPS v3 版本链（升序） */
+	List<WpsFileMeta> wpsVersions(Long docId);
+
+	/** WPS v3 单版本元信息 */
+	WpsFileMeta wpsVersionMeta(Long versionId);
+
+	/** WPS 三阶段保存：落库新版本（content 为编辑后 docx 字节） */
+	WpsFileMeta saveWpsVersion(Long docId, byte[] content, String name);
+
+	/** WPS 下载：按版本序号解析到版本记录并返回文件字节 */
+	byte[] wpsVersionContent(Long docId, int version);
 
 	/** 取某版本文件字节（内容代理） */
 	byte[] content(Long versionId);

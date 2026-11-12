@@ -1,6 +1,7 @@
 package org.springblade.doc.vo;
 
 import lombok.Data;
+import org.springblade.common.wps.WpsEditorConfig;
 
 /**
  * 在线编辑器配置（多格式在线编辑 / 预览调度）。
@@ -49,7 +50,16 @@ public class DocEditorConfig {
     /** 签名保护的保存回调 URL（仅可写方案签发） */
     private String saveUrl;
 
-    // ───────────── WPS SDK(kdocs jssdk) 专属 ─────────────
+    /**
+     * WPS 统一改造 P1-1.7：公共契约（与收发文共用）。
+     *
+     * <p>后端组装统一以本对象为准；下方 {@code wps*} 字段在 P1 保留为兼容投影，
+     * 供尚未改造的 {@code WpsEditor.tsx} 读取。P2.6 前端统一到公共组件后，
+     * 删除这些投影字段，前端直接消费本对象。</p>
+     */
+    private WpsEditorConfig wpsConfig;
+
+    // ───────────── WPS SDK(kdocs jssdk) 专属（P1 兼容投影，P2.6 收敛） ─────────────
     /** WPS 应用 ID */
     private String wpsAppId;
 
@@ -68,7 +78,12 @@ public class DocEditorConfig {
     /** 待编辑文件地址（签名 content URL，前端透传给 jssdk） */
     private String wpsFileUrl;
 
-    /** 服务端为本次编辑签发的签名（前端透传给 jssdk；需与 WPS 开放平台签名规则一致） */
+    /**
+     * @deprecated P3.4：从未赋值，全项目零调用点；前端实际用 {@code wpsToken}
+     * （由 {@code WpsEditorConfig.token} 投影而来）经 {@code WebOfficeSDK.init} 透传。
+     * 保留字段仅为不破坏既有前端契约，勿再写入或读取。
+     */
+    @Deprecated
     private String wpsSignature;
 
     /** 签名时间戳（秒） */

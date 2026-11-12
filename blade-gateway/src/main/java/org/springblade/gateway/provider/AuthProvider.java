@@ -65,6 +65,13 @@ public class AuthProvider {
 		// 网关 AuthFilter 只认 Blade-Auth，故需放行 /ws/message/**（发现定位器已剥离 /blade-message 前缀，
 		// 网关实际看到的是 /ws/message/**）。生产环境建议改放 Nacos blade.yaml 的 blade.secure.skip-url。
 		DEFAULT_SKIP_URL.add("/ws/message/**");
+		// WPS WebOffice v3 回调（WPS 统一改造 P3.5）：WPS 中台按控制台登记的回调地址调用，
+		// 不带 Blade-Auth，必须放行。路径无服务前缀，同时兼容 nginx 改写为带前缀的形态。
+		// ⚠️ 安全前提：blade-doc 的 WpsCallbackController#authGuard 必须处于硬校验模式
+		// （blade.wps.callback-auth-strict=true，默认即为 true）。若联调临时把开关设为 false，
+		// 必须同步移除本白名单，否则 /v3/3rd/** 将完全无鉴权暴露（含 objectPut 写库端点）。
+		DEFAULT_SKIP_URL.add("/v3/3rd/**");
+		DEFAULT_SKIP_URL.add("/blade-doc/v3/3rd/**");
 	}
 
 	/**

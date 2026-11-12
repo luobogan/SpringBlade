@@ -684,7 +684,9 @@ GET  /api/blade-workflow/odoc/{defId}/doc/{docId}/bookmarks
 | B. WPS Web 开放平台 / 永中 Office Web | 商用办公套件 Web 化，与 E9 的 WPS 路径最接近 | 贴合，但有授权成本 |
 | C. 自研「HTML 正文 + 服务端 docx 合成」 | 复用 `RichTextEditor`/FluentEditor 采集 HTML → 服务端 `convertHtmlToDocx` → 再套红 | **这正是 E9 已有路径**：`onlineEditStore.previewWithTempl()`（`src4js/pc4mobx/odoc/stores/onlineEditStore.js:128-147`）调 `/api/odoc/odocFile/convertHtmlToDocx`，多传 `docId + showMouldId` 即由服务端完成套红 |
 
-**建议**：以 A（或 B）为主编辑器；C 作为"轻量公文/移动端"兜底。选型的关键约束见 11.3（留痕）。
+**建议（当时）**：以 A（或 B）为主编辑器；C 作为"轻量公文/移动端"兜底。选型的关键约束见 11.3（留痕）。
+
+> **【决策变更 2026-11-12】** 上表与本节建议为 E9 分析阶段的选型过程记录，**D1 现已定稿为方案 B：WPS Web（WebOffice SDK）**，与知识管理 `blade-doc` 共用公共层；方案 A（OnlyOffice）仅作 `editor=onlyoffice` 降级，AGPL 合规问题消解，方案 C 保留为移动端兜底。实现与验收见《收发文落地-编辑器WPS统一改造方案.md》。留痕约束仍成立且更需警惕：WPS SDK 无程序化清稿/留痕 API，待核验中台服务端能力。
 
 ### 11.2 打印 / 呈批表（初版仅一句带过，实为独立子系统）
 
@@ -837,7 +839,7 @@ public int smartOfficial(int mouldImagefileId, int imageFileId, String imagefile
 | 阶段 | 目标 | 关键交付 | 前置决策 |
 |---|---|---|---|
 | P0 | 公文流程建模 | 流程类型（发文/收文/签报）+ 环节模板 + 表单字段（文号/主送/抄送/印发日期/紧急程度/密级/主题词） | — |
-| P1 | 正文模块 + **编辑器选型** | `wf_odoc_doc` / `wf_odoc_doc_version` + 正文上传/编辑/版本 + 编辑器集成 | **A OnlyOffice / B WPS Web / C 自研 HTML→docx（决定留痕能力）** |
+| P1 | 正文模块 + **编辑器选型** | `wf_odoc_doc` / `wf_odoc_doc_version` + 正文上传/编辑/版本 + 编辑器集成 | ✅ **D1 已定稿 B WPS Web**（A OnlyOffice 仅降级 / C 自研 HTML→docx 仅移动端兜底；留痕能力待中台核验） |
 | P2 | 模板与书签 | `wf_odoc_mould` / `wf_odoc_mould_bookmark` / `wf_odoc_mould_wf` + 流程建文设置（绑定模板/书签映射/套红节点） | 书签 vs 占位符 |
 | P3 | 套红（服务端合成） | 合成服务 + 套红/确认/取消接口 + 状态与版本 + 提交拦截 + 清稿版本 | 合成引擎（docx4j/POI/LibreOffice/办公套件） |
 | P4 | 文号 + 智能排版/范文/敏感词 | `wf_odoc_number` + Flowable 出口监听器 + 占用/回写/保留号；排版/范文/敏感词 | — |
@@ -865,6 +867,6 @@ public int smartOfficial(int mouldImagefileId, int imageFileId, String imagefile
 2. 收文/发文共用同一套页面与渲染引擎，差异由 `officaltype` 与环节配置驱动；发文独有套红、文号、印发，收文独有登记、来文单位、交换。
 3. `flowtable` 并非正文/明细表，而是后台设置页 CSS 类与「工作流程表」数据源，迁移时需重新定义术语。
 4. 套红本质是「红头模板 + 书签替换 + 正文插入 + 生成新版本」；SpringBlade 只能走服务端合成路径。
-5. **正文编辑器选型（OnlyOffice / WPS Web / 自研）是整个收发文落地的核心决策**，直接决定留痕、清稿、OFD 等能力上限。
+5. **正文编辑器选型是整个收发文落地的核心决策**（2026-11-12 已定稿 **WPS Web**，OnlyOffice 降级、自研仅移动端兜底），直接决定留痕、清稿、OFD 等能力上限；其中留痕/清稿因 WPS SDK 无程序化 API 仍待中台能力核验，OFD 输出与编辑器解耦、走版式文件路线。
 6. 除套红外，还必须纳入：**打印呈批表、清稿留痕、智能排版、范文、敏感词、OFD 国标、电子签章、转文、移动端**九个面；其中打印呈批表与清稿留痕对公文场景是刚需。
 7. 表单渲染与字段权限可完全复用现有体系；主要工作量集中在正文文档体系、服务端合成引擎与上述增值子系统。

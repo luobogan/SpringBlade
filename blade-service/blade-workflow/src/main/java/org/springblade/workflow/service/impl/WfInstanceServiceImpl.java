@@ -3726,15 +3726,20 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         return timeoutService.resolveDueTime(defId, nodeKey, task, inst);
     }
 
-    /** 按 defId + nodeKey 取节点（取不到返回 null） */
+    /**
+     * 按 defId + nodeKey 取节点（取不到返回 null）。
+     *
+     * <p>读源切换收口：与 {@link #loadNodes(Long)} / {@link #findStartNodeKey(Long)} 统一委托
+     * {@link #loadNodeReadOnly(Long, String)}。此前本方法直接查 {@code wf_process_node}，
+     * 在 {@code definition-from-bpmn.enabled=true} 时，设计器改 BPMN 并发布刷新 proc_def_id 后，
+     * 8 处运行期调用仍会读到旧表节点（nodeKey/nodeType/extJson 与流程图不一致，T-14 退役开启后更会直接取空）。
+     * 默认配置（开关关闭且未退役）下 loadNodeReadOnly 仍回退同一条 nodeMapper 查询，行为完全等价。</p>
+     *
+     * <p>8 处调用均只读取 nodeType / nodeName / extJson 或传给 rejectManager、nodeActionExecutor，
+     * 不依赖 BPMN 节点没有的数据库主键 id，故可安全收口。</p>
+     */
     private WfProcessNode loadNode(Long defId, String nodeKey) {
-        if (defId == null || nodeKey == null) {
-            return null;
-        }
-        return nodeMapper.selectOne(Wrappers.<WfProcessNode>lambdaQuery()
-            .eq(WfProcessNode::getDefId, defId)
-            .eq(WfProcessNode::getNodeKey, nodeKey)
-            .last("LIMIT 1"));
+        return loadNodeReadOnly(defId, nodeKey);
     }
 
     // ------------------------------------------------------------------ 私有方法
