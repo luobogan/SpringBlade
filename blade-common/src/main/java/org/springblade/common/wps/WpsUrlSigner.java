@@ -5,6 +5,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 
 /**
  * WPS WebOffice 内容/回调 URL 签名（HMAC-SHA256 + 时效），纯 JDK 实现。
@@ -18,21 +20,29 @@ import java.security.NoSuchAlgorithmException;
  */
 public class WpsUrlSigner {
 
-	private final String secret;
-	private final int ttlSeconds;
+	private final Supplier<String> secretSupplier;
+	private final IntSupplier ttlSupplier;
 
 	public WpsUrlSigner(String secret, int ttlSeconds) {
-		this.secret = secret == null ? "" : secret;
-		this.ttlSeconds = ttlSeconds > 0 ? ttlSeconds : 300;
+		this(secret == null ? () -> "" : () -> secret, () -> ttlSeconds > 0 ? ttlSeconds : 300);
 	}
 
 	public WpsUrlSigner(WpsProperties properties) {
 		this(properties.getUrlSignSecret(), properties.getUrlSignTtlSeconds());
 	}
 
+	/**
+	 * 动态密钥构造：每次签发/校验现场取当前生效配置，供「编辑器设置」页面保存后立即生效
+	 * （单一下发源为 {@code doc_engine_setting} 库表），无需重启服务。
+	 */
+	public WpsUrlSigner(Supplier<String> secretSupplier, IntSupplier ttlSupplier) {
+		this.secretSupplier = secretSupplier == null ? () -> "" : secretSupplier;
+		this.ttlSupplier = ttlSupplier == null ? () -> 300 : ttlSupplier;
+	}
+
 	/** 签发带时效的 token：{@code exp.hexHmac} */
 	public String sign(String resource) {
-		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
+		long exp = (System.currentTimeMillis() / 1000) + Math.max(1, ttlSupplier.getAsInt());
 		return exp + "." + hmac(resource + ":" + exp);
 	}
 
@@ -58,6 +68,10 @@ public class WpsUrlSigner {
 
 	private String hmac(String data) {
 		try {
+			String secret = secretSupplier.get();
+			if (secret == null) {
+				secret = "";
+			}
 			Mac mac = Mac.getInstance("HmacSHA256");
 			mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
 			return hex(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));

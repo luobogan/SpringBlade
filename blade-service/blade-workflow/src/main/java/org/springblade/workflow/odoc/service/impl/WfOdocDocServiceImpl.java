@@ -8,7 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.common.wps.WpsEditorConfig;
 import org.springblade.common.wps.WpsFileId;
 import org.springblade.common.wps.WpsFileMeta;
-import org.springblade.common.wps.WpsProperties;
+import org.springblade.common.wps.WpsSettings;
+import org.springblade.workflow.odoc.config.WpsSettingStore;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.workflow.odoc.OdocUrlSigner;
 import org.springblade.workflow.odoc.config.OdocProperties;
@@ -40,7 +41,7 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 	private final IOdocFileStore fileStore;
 	private final OdocProperties properties;
 	private final OdocUrlSigner signer;
-	private final WpsProperties wpsProperties;
+	private final WpsSettingStore settings;
 
 	private static final Integer DOC_STATUS_DRAFT = 9;
 
@@ -335,7 +336,7 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 
 	@Override
 	public boolean isWpsConfigured() {
-		return wpsProperties.isConfigured();
+		return settings.current().isConfigured();
 	}
 
 	@Override
@@ -348,13 +349,14 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 			return null;
 		}
 		boolean editable = edit && isEditableType(version.getDocFileType());
+		final WpsSettings wps = settings.current();
 		WpsEditorConfig wc = new WpsEditorConfig();
 		wc.setDomain(WpsFileId.DOMAIN_ODOC);
 		wc.setMode(editable ? "edit" : "view");
 		wc.setReadOnly(!editable);
 		wc.setFileName(version.getFileName());
 		wc.setFileExt(extOf(version.getDocFileType()));
-		wc.setAppId(wpsProperties.getAppId());
+		wc.setAppId(wps.getAppId());
 		String wire = WpsFileId.of(WpsFileId.DOMAIN_ODOC, String.valueOf(docId));
 		wc.setFileId(wire);
 		wc.setToken(signer.sign("wps:" + wire));
@@ -366,9 +368,9 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 		} catch (Exception ignored) {
 			wc.setUserName("");
 		}
-		wc.setJssdkUrl(wpsProperties.getJssdkUrl());
+		wc.setJssdkUrl(wps.getJssdkUrl());
 		// contentUrl 供前端/SDK 参考（实际下载由 WPS 中台经 v3 协议拉取），指向 workflow 直连端点
-		String base = stripTrailingSlash(wpsProperties.getPublicBase());
+		String base = stripTrailingSlash(wps.getPublicBase());
 		wc.setContentUrl(base + "/blade-workflow/odoc/wps/content?docId=" + docId
 			+ "&version=" + version.getVersionId() + "&token=" + signer.sign(docId + ":" + version.getVersionId()));
 		return wc;

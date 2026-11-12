@@ -20,8 +20,13 @@ blade:
     # 双写默认关会导致真实待办永远不被超时扫描命中。联调/运行必须开启（与扫描源强耦合）。
     task-act-write:
       enabled: true
+  # ⚠️ 顶层 key `blade` 只能有一处：SnakeYAML 拒绝重复键，重复即导致服务启动失败。
+  # WPS 接入配置（blade.wps.*）已全部迁入 doc_engine_setting 库表，由「编辑器设置」页面
+  # 统一维护；本服务经 WpsSettingStore 读同一张表，与 blade-doc 共用 WpsSettingsResolver，
+  # 不再本地维护 app-id/app-secret/jssdk-url/sign-secret/public-base 明文。
+  # 库表全空时由 WpsProperties 的 POJO 默认值兜底，WPS 方案自动不可用。
 
-# 公文内容/回调 URL 签名密钥（加固 DOC-P0-4 可枚举下载，见 OdocUrlSigner）
+# 公文内容/回调 URL 签名密钥（OnlyOffice 存量链路；WPS 链路已统一读库表）
 # 生产必须通过 Nacos 配置中心覆盖为高熵值：odoc.url-sign-secret
 odoc:
   url-sign-secret: odoc-dev-secret-change-me
@@ -29,17 +34,4 @@ odoc:
   # e签宝电子签章配置统一由 Nacos 下发（data_id=blade-workflow-dev.yaml，根级 odoc.esign），
   # 本地不再写死，避免与配置中心双源冲突（app-id/app-secret 也绝不进仓库）。
   # 未配置时「第三方电子签章」方案在设置页显示为未就绪且不可选，流程自动降级、不阻断。
-
-# WPS 统一改造共享配置（blade.wps.*）：odoc 与 doc 共用同一把签名密钥与 WPS 开放平台凭证，
-# 且 odoc 回调经 blade-doc 单入口验签，因此密钥必须一致（R2 / P3.1 前移）。
-# dev 复用 doc 的 WPS 开放平台凭证（同一套 appId，WPS 控制台单回调地址登记于 blade-doc）；
-# 生产经 Nacos 下发高熵值，app-id/app-secret 明文仅 dev 临时，P3.2 收口。
-blade:
-  wps:
-    app-id: ${WPS_APP_ID:SX20261023ZYNJCZ}
-    app-secret: ${WPS_APP_SECRET:UquMoKZlDLGqbfnZUxNxFYMQglHvLIRY}
-    jssdk-url: https://wwo.wps.cn/office/jssdk/jssdk.js
-    url-sign-secret: doc-dev-secret-change-me
-    url-sign-ttl-seconds: 300
-    public-base: https://www.zwymding.top
 

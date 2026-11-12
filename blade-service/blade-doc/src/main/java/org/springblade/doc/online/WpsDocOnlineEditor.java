@@ -5,10 +5,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.common.wps.WpsEditorConfig;
 import org.springblade.common.wps.WpsFileId;
+import org.springblade.common.wps.WpsSettings;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.doc.config.DocProperties;
+import org.springblade.doc.config.WpsSettingStore;
 import org.springblade.doc.entity.DocDetail;
 import org.springblade.doc.service.IDocEngineSettingService;
 import org.springblade.doc.entity.DocImageFile;
@@ -37,7 +39,7 @@ public class WpsDocOnlineEditor implements IDocOnlineEditor {
     private final DocDetailMapper detailMapper;
     private final DocImageFileMapper imageFileMapper;
     private final DocUrlSigner signer;
-    private final DocProperties docProperties;
+    private final WpsSettingStore settings;
     private final IDocEngineSettingService settingService;
 
     /**
@@ -50,31 +52,17 @@ public class WpsDocOnlineEditor implements IDocOnlineEditor {
         if (platform != null && !"wps".equals(platform)) {
             return false; // 前端明确关闭第三方平台
         }
-        DocProperties.Wps eff = getEffectiveWps();
-        boolean hasCred = eff.getAppId() != null && !eff.getAppId().isBlank()
-            && eff.getAppSecret() != null && !eff.getAppSecret().isBlank();
-        // 库表未配置平台时，沿用 application.yml：WPS 已配即启用
-        return hasCred;
+        return getEffectiveWps().isConfigured();
     }
 
-    /** 读取当前生效的 WPS 配置（库表设置优先，缺省回退到 application.yml） */
-    public DocProperties.Wps getEffectiveWps() {
-        DocProperties.Wps src = docProperties.getWps();
-        DocProperties.Wps eff = new DocProperties.Wps();
-        String appId = settingService.get("wps_app_id", null);
-        eff.setAppId(appId == null ? src.getAppId() : appId);
-        String appSecret = settingService.get("wps_app_secret", null);
-        eff.setAppSecret(appSecret == null ? src.getAppSecret() : appSecret);
-        String jssdkUrl = settingService.get("wps_jssdk_url", null);
-        eff.setJssdkUrl(jssdkUrl == null ? src.getJssdkUrl() : jssdkUrl);
-        String publicBase = settingService.get("wps_public_base", null);
-        eff.setPublicBase(publicBase == null ? src.getPublicBase() : publicBase);
-        return eff;
+    /** 读取当前生效的 WPS 配置：统一委托 WpsSettingStore（库表优先、空白回退兜底） */
+    public WpsSettings getEffectiveWps() {
+        return settings.current();
     }
 
     @Override
     public DocEditorConfig buildConfig(Long docId, String mode, String editorType) {
-        DocProperties.Wps wps = getEffectiveWps();
+        WpsSettings wps = getEffectiveWps();
         if (!isEnabled()) {
             throw new ServiceException("WPS 编辑方案未启用（未配置 app-id/app-secret）");
         }
@@ -148,7 +136,7 @@ public class WpsDocOnlineEditor implements IDocOnlineEditor {
 
     @Override
     public DocEditorConfig buildConfigFromFile(Long docId, String mode, String editorType, Long fileId) {
-        DocProperties.Wps wps = getEffectiveWps();
+        WpsSettings wps = getEffectiveWps();
         if (!isEnabled()) {
             throw new ServiceException("WPS 编辑方案未启用（未配置 app-id/app-secret）");
         }

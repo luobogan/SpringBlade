@@ -1,16 +1,21 @@
 package org.springblade.doc.online;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.common.wps.WpsCallbackSupport;
 import org.springblade.common.wps.WpsFileId;
 import org.springblade.common.wps.WpsFileMeta;
 import org.springblade.common.wps.WpsFileProvider;
 import org.springblade.common.wps.WpsProperties;
+import org.springblade.common.wps.WpsSettings;
+import org.springblade.common.wps.WpsSettingsResolver;
 import org.springblade.common.wps.WpsUrlSigner;
 import org.springblade.core.tool.api.R;
+import org.springblade.doc.config.WpsSettingStore;
 import org.springblade.workflow.api.IWpsOdocFileClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
+import java.util.function.Supplier;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -33,12 +38,27 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class OdocWpsProvider implements WpsFileProvider {
 
 	private final IWpsOdocFileClient client;
 	private final WpsUrlSigner signer;
-	private final WpsProperties wpsProperties;
+	private final Supplier<WpsSettings> settings;
+
+	@Autowired
+	public OdocWpsProvider(IWpsOdocFileClient client, WpsUrlSigner signer, WpsSettingStore store) {
+		this(client, signer, store::current);
+	}
+
+	/** 兼容构造器：协议层单测脱离 Spring 容器时注入固定兜底配置 */
+	public OdocWpsProvider(IWpsOdocFileClient client, WpsUrlSigner signer, WpsProperties fallback) {
+		this(client, signer, () -> WpsSettingsResolver.resolve(key -> null, fallback));
+	}
+
+	private OdocWpsProvider(IWpsOdocFileClient client, WpsUrlSigner signer, Supplier<WpsSettings> settings) {
+		this.client = client;
+		this.signer = signer;
+		this.settings = settings;
+	}
 
 	@Override
 	public String domain() {
@@ -47,13 +67,13 @@ public class OdocWpsProvider implements WpsFileProvider {
 
 	@Override
 	public String publicBase() {
-		return wpsProperties.getPublicBase();
+		return settings.get().getPublicBase();
 	}
 
 	/** workflow 可达 base（WPS 中台视角）：public-base + 网关路由前缀 /blade-workflow */
 	private String base() {
-		String b = wpsProperties.getPublicBase();
-		if (b == null) {
+		String b = publicBase();
+		if (b == null || b.isBlank()) {
 			return "/blade-workflow";
 		}
 		return b.replaceAll("/+$", "") + "/blade-workflow";

@@ -7,13 +7,11 @@ import org.springblade.common.wps.WpsCallbackSupport;
 import org.springblade.common.wps.WpsFileId;
 import org.springblade.common.wps.WpsFileMeta;
 import org.springblade.common.wps.WpsFileProvider;
-import org.springblade.common.wps.WpsProperties;
-import org.springblade.doc.config.DocProperties;
+import org.springblade.doc.config.WpsSettingStore;
 import org.springblade.doc.entity.DocDetail;
 import org.springblade.doc.entity.DocImageFile;
 import org.springblade.doc.mapper.DocDetailMapper;
 import org.springblade.doc.mapper.DocImageFileMapper;
-import org.springblade.doc.service.IDocEngineSettingService;
 import org.springblade.doc.sign.DocUrlSigner;
 import org.springblade.doc.store.IDocFileStore;
 import org.springframework.stereotype.Component;
@@ -47,28 +45,17 @@ public class DocWpsProvider implements WpsFileProvider {
 	private final DocImageFileMapper imageFileMapper;
 	private final IDocFileStore fileStore;
 	private final DocUrlSigner signer;
-	private final IDocEngineSettingService settingService;
-	private final DocProperties properties;
-	private final WpsProperties wpsProperties;
+	private final WpsSettingStore settings;
 
 	@Override
 	public String domain() {
 		return WpsFileId.DOMAIN_DOC;
 	}
 
-	/** 生效的公网 base：库表设置 > blade.doc.wps.public-base > blade.wps.public-base（可能为空，由入口按请求兜底） */
+	/** 生效的公网 base：统一走 WpsSettingStore（库表优先、空白回退兜底），与编辑器配置同源 */
 	@Override
 	public String publicBase() {
-		String fromTable = settingService.get("wps_public_base", null);
-		if (fromTable != null && !fromTable.isBlank()) {
-			return fromTable.trim().replaceAll("/+$", "");
-		}
-		String fromDoc = properties.getWps().getPublicBase();
-		if (fromDoc != null && !fromDoc.isBlank()) {
-			return fromDoc.trim().replaceAll("/+$", "");
-		}
-		String fromCommon = wpsProperties.getPublicBase();
-		return fromCommon == null ? "" : fromCommon.trim().replaceAll("/+$", "");
+		return settings.current().getPublicBase();
 	}
 
 	/**

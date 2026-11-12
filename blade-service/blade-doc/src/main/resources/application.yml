@@ -10,12 +10,10 @@ blade:
     # 内容/回调 URL 签名（加固 DOC-P0-4，见 DocUrlSigner）；生产必须由 Nacos 覆盖为高熵值
     url-sign-secret: doc-dev-secret-change-me
     url-sign-ttl-seconds: 300
-    # WPS 在线编辑 SDK（kdocs jssdk / WPS 文档中台）：仅当 app-id/app-secret 均配置时才启用 WPS 编辑方案
-    # 默认值已填入开放平台下发的密钥；生产建议改用 Nacos/密钥管理覆盖，避免明文入库。
-    wps:
-      app-id: ${WPS_APP_ID:SX20261023ZYNJCZ}
-      app-secret: ${WPS_APP_SECRET:UquMoKZlDLGqbfnZUxNxFYMQglHvLIRY}
-      jssdk-url: https://wwo.wps.cn/office/jssdk/jssdk.js
+    # WPS 接入配置（app-id/app-secret/jssdk-url/public-base/sign-secret）统一由
+    # 「编辑器设置」页面写入 doc_engine_setting 库表，经 WpsSettingsResolver 下发；
+    # 此处不再维护明文凭证（历史默认值已在仓库泄露，见 P3.2 密钥轮换）。
+    # 库表全空时由 WpsProperties 的 POJO 默认值兜底，此时 WPS 方案自动不可用。
   # DataScope：显式排除框架 FlowMapper，避免无数据权限配置时 DataScopeCache 对 null 调 getResourceCode() NPE
   data-scope:
     mapper-exclude:
@@ -43,10 +41,8 @@ blade:
       - doc_praise
       - doc_score
 
-  # WPS 统一改造共享配置（blade.wps.*）：doc/odoc 两侧共用一把签名密钥与回调公网 base，
-  # 否则 odoc 在 blade-doc 单回调入口验签会失败（R2 / P3.1 前移）。dev 复用 doc 本地密钥做统一值，
-  # 生产经 Nacos 下发高熵值。public-base 与 doc_engine_setting.wps_public_base 一致。
-  wps:
-    url-sign-secret: doc-dev-secret-change-me
-    url-sign-ttl-seconds: 300
-    public-base: https://www.zwymding.top
+  # WPS 统一改造共享配置（blade.wps.*）已全部迁入 doc_engine_setting 库表：
+  # 由「编辑器设置」页面统一维护，blade-doc / blade-workflow 两侧经 WpsSettingsResolver 共用。
+  # 本文件与 workflow 的 application-dev.yml 均不再维护任何 WPS 凭证/URL 明文，
+  # 避免「改一处漏两处」；库表全空时 WpsProperties 的 POJO 默认值兜底（WPS 自动不可用）。
+  # callback 安全开关仍由 WpsProperties 启动期默认值控制，刻意不经页面暴露。
