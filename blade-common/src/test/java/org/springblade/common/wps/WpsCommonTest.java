@@ -71,6 +71,29 @@ class WpsCommonTest {
 	}
 
 	@Test
+	void fileId_odocWireFormUsesUnderscore() {
+		// WPS 中台要求 file_id 只能由数字/字母/下划线组成且不以下划线开头，
+		// 故公文域下发 odoc_{docId}；知识管理域沿用纯数字 legacy 不受影响
+		assertThat(WpsFileId.wireValue("odoc", "456")).isEqualTo("odoc_456");
+
+		WpsFileId wire = WpsFileId.parse("odoc_456");
+		assertThat(wire.domain()).isEqualTo("odoc");
+		assertThat(wire.bizId()).isEqualTo("456");
+		assertThat(wire.legacy()).isFalse();
+		// 幂等：解析后再序列化仍是下划线形态
+		assertThat(wire.wireValue()).isEqualTo("odoc_456");
+
+		// 旧冒号格式仍可解析（迁移期兼容），但对外形态已切换为下划线
+		WpsFileId legacyColon = WpsFileId.parse("odoc:456");
+		assertThat(legacyColon.wireValue()).isEqualTo("odoc_456");
+
+		// 非法下划线形态必须拒绝（域不匹配 / bizId 非数字）
+		assertThat(WpsFileId.parse("doc_456")).isNull();
+		assertThat(WpsFileId.parse("odoc_abc")).isNull();
+		assertThat(WpsFileId.parse("_456")).isNull();
+	}
+
+	@Test
 	void fileId_legacyNumericFallsBackToDoc() {
 		// 知识管理既有 WPS 回调用纯数字 fileId，迁移期不清洗历史链接
 		WpsFileId legacy = WpsFileId.parse("2113499007952486402");

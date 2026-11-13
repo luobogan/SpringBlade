@@ -134,8 +134,33 @@ class WpsCallbackProtocolTest {
 	}
 
 	@Test
+	void info_odocWireForm_parsedAsOdocDomain_notRoutedToDocProvider() {
+		// WPS 中台合法 file_id 形态为 odoc_{docId}（下划线），必须被识别为 odoc 域：
+		// 未注册 odoc Provider 时返回 40005，且绝不能落到 doc Provider（防跨域越权）
+		String before = docProvider.lastBizId;
+		ResponseEntity<Map<String, Object>> resp = controller.info(authed("odoc_7"), "odoc_7");
+
+		assertThat(body(resp).get("code")).isEqualTo(40005);
+		assertThat(docProvider.lastBizId).isEqualTo(before);
+	}
+
+	@Test
+	void info_odocWireForm_tokenVerifiedAgainstWireFileId() {
+		// token resource = wps:{wireFileId}，必须与下发给中台的 odoc_{docId} 同源，
+		// 否则中台回调会被判 unauthorized callback
+		ResponseEntity<Map<String, Object>> ok = controller.info(authed("odoc_7"), "odoc_7");
+		assertThat(body(ok).get("code")).isEqualTo(40005); // 未注册 odoc Provider，但鉴权已通过
+
+		// 用错误口径的 token（旧冒号形态）必须被拒
+		MockHttpServletRequest bad = req("odoc_7");
+		bad.addHeader("X-WebOffice-Token", signer.sign("wps:odoc:7"));
+		assertThat(body(controller.info(bad, "odoc_7")).get("code"))
+			.isEqualTo(WpsCallbackSupport.CODE_AUTH_FAILED);
+	}
+
+	@Test
 	void info_invalidFileId_returns40005() {
-		for (String bad : new String[]{"unknown:1", "doc:", "abc", ":9"}) {
+		for (String bad : new String[]{"unknown:1", "doc:", "abc", ":9", "doc_1", "odoc_abc", "_1"}) {
 			assertThat(body(controller.info(authed(bad), bad)).get("code")).isEqualTo(40005);
 		}
 	}

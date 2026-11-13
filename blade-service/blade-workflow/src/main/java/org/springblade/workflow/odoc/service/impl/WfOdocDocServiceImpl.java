@@ -80,7 +80,10 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 		vo.setVersions(versions);
 
 		String eff = (editor == null || editor.isBlank()) ? "auto" : editor;
-		if ("wps".equals(eff) && isWpsConfigured()) {
+		// auto 兜底：WPS 已配置（单一配置源 doc_engine_setting）时优先走 WPS 方案，
+		// 保证前端「在线编辑」按钮能真正弹出 WPS 编辑器；未配置才回落 OnlyOffice。
+		boolean useWps = ("wps".equals(eff) || "auto".equals(eff)) && isWpsConfigured();
+		if (useWps) {
 			// WPS WebOffice 方案（WPS 统一改造 P2）
 			boolean editable = edit && current != null && isEditableType(current.getDocFileType());
 			vo.setEditorType("wps");
@@ -357,7 +360,9 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 		wc.setFileName(version.getFileName());
 		wc.setFileExt(extOf(version.getDocFileType()));
 		wc.setAppId(wps.getAppId());
-		String wire = WpsFileId.of(WpsFileId.DOMAIN_ODOC, String.valueOf(docId));
+		// 下发给 WPS 中台的 fileId 必须满足中台字符集（数字/字母/下划线），故用 wire 形态
+		// odoc_{docId}；token 的 resource（wps:{wireFileId}）与回调/upload 验签口径随之自动一致
+		String wire = WpsFileId.wireValue(WpsFileId.DOMAIN_ODOC, String.valueOf(docId));
 		wc.setFileId(wire);
 		wc.setToken(signer.sign("wps:" + wire));
 		wc.setTimestamp(System.currentTimeMillis() / 1000);
@@ -450,7 +455,7 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 
 	private WpsFileMeta toWpsMeta(Long docId, WfOdocDocVersion v) {
 		WpsFileMeta m = new WpsFileMeta();
-		m.setId(WpsFileId.of(WpsFileId.DOMAIN_ODOC, String.valueOf(docId)));
+		m.setId(WpsFileId.wireValue(WpsFileId.DOMAIN_ODOC, String.valueOf(docId)));
 		m.setName(v.getFileName());
 		m.setVersion(v.getVersionId());
 		m.setSize(0L);

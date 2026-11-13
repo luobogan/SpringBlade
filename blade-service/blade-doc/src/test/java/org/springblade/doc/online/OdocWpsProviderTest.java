@@ -54,7 +54,8 @@ class OdocWpsProviderTest {
 
 	private WpsFileMeta meta() {
 		WpsFileMeta m = new WpsFileMeta();
-		m.setId("odoc:7");
+		// wire 形态：WPS 中台要求 file_id 只能由数字/字母/下划线组成，故公文域用 odoc_{docId}
+		m.setId("odoc_7");
 		m.setName("a.docx");
 		m.setVersion(3);
 		return m;
@@ -86,12 +87,13 @@ class OdocWpsProviderTest {
 	void uploadUrl_carriesWireFileIdAndEmbeddedToken() {
 		OdocWpsProvider p = build(stub(meta(), List.of(meta())));
 
-		String up = p.uploadUrl("odoc:7", "正文.docx");
+		String up = p.uploadUrl("odoc_7", "正文.docx");
 
-		assertThat(up).contains("/blade-workflow/odoc/wps/upload/odoc:7");
+		assertThat(up).contains("/blade-workflow/odoc/wps/upload/odoc_7");
 		assertThat(up).contains("name=" + URLEncoder.encode("正文.docx", StandardCharsets.UTF_8));
 		// token 内嵌在 URL 中，供 workflow WfOdocWpsController.upload 验签
-		assertThat(up).contains("token=" + signer.sign("wps:odoc:7"));
+		// resource = wps:{wireFileId}，与回调 authGuard 口径一致
+		assertThat(up).contains("token=" + signer.sign("wps:odoc_7"));
 	}
 
 	@Test
@@ -99,7 +101,7 @@ class OdocWpsProviderTest {
 		IWpsOdocFileClient client = stub(meta(), List.of(meta()));
 		OdocWpsProvider p = build(client);
 
-		assertThat(p.info("7").getId()).isEqualTo("odoc:7");
+		assertThat(p.info("7").getId()).isEqualTo("odoc_7");
 		assertThat(p.versions("7")).hasSize(1);
 
 		verify(client).meta(eq(7L), signed("meta", 7L));
@@ -111,7 +113,7 @@ class OdocWpsProviderTest {
 		IWpsOdocFileClient client = stub(meta(), List.of(meta()));
 		OdocWpsProvider p = build(client);
 
-		assertThat(p.saveNewVersion("7", "hello".getBytes(), "a.docx").getId()).isEqualTo("odoc:7");
+		assertThat(p.saveNewVersion("7", "hello".getBytes(), "a.docx").getId()).isEqualTo("odoc_7");
 
 		verify(client).save(eq(7L), eq("a.docx"), signed("save", 7L), any(byte[].class));
 	}
