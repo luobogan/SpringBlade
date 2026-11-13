@@ -89,7 +89,9 @@ public class WfOdocDocServiceImpl implements IWfOdocDocService {
 			vo.setEditorType("wps");
 			vo.setCanEdit(isWpsConfigured() && current != null
 				&& isEditableType(current.getDocFileType()));
-			vo.setWpsEditorConfig(buildWpsEditorConfig(doc.getId(), current.getId(), editable));
+			// current 为空（正文刚创建、尚未上传版本）时传 null，buildWpsEditorConfig 已对
+			// versionId==null 安全返回 null，避免 current.getId() 触发 NPE（见「正文未创建」态）
+			vo.setWpsEditorConfig(buildWpsEditorConfig(doc.getId(), current == null ? null : current.getId(), editable));
 			vo.setEditorConfig(null);
 		} else {
 			// 现有 OnlyOffice 路径（auto 默认 = OnlyOffice）

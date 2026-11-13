@@ -151,6 +151,8 @@ curl -i https://www.zwymding.top/v3/3rd/files/doc:1
 ### 7.6 全链路（对应验收清单 W2–W8）
 1. `POST /api/blade-workflow/odoc/doc/init?instanceId=...&editor=wps` → 校验 `editorType=wps`、`wpsEditorConfig.appId/fileId=odoc:{docId}/token/jssdkUrl`。
 2. 表单正文卡片点「在线编辑」→ `OdocEditorModal` 按 `editorType` 渲染 `WpsEditor` → `WebOfficeSDK.init` 成功。
+
+> ⚠️ 「在线编辑」按钮**仅在存在当前版本后**出现：正文刚创建（无版本）时后端 `canEdit=false`、按钮隐藏，须先「上传新版本」再点「在线编辑」。上传 / 回滚 / 套红后 `OdocField.reload` 会重新拉 `init` 刷新 `canEdit` 与 `wpsEditorConfig`，无需重开表单（否则上传首个版本后按钮不出现，属已修复缺陷）。
 3. 编辑保存 → WPS 中台三阶段（`prepare` → `address` → PUT `/odoc/wps/upload/odoc:{docId}`）→ 新版本落库。
 4. `/odoc/doc/{docId}/versions` 校验版本递增；下载内容比对。
 5. 套红 / 取消套红；`editor=onlyoffice` 降级；伪造/过期 token 与跨域 fileId 应分别返回 `40101`/`40005`。
