@@ -148,8 +148,8 @@ public class WfFreeFlowManager {
                 throw new ServiceException("第 " + order + " 步未指定办理人");
             }
             // 发起后实例通常停在「创建」节点（真实 UserTask，非池内节点）。若把第 1 步
-            // 绑定到 Free_1，driver.submit 拿当前节点去查步骤会落空并拒绝提交。
-            // 故第 1 步直接绑定到实例当前节点，后续步骤才用池内 Free_k。
+            // 绑定到池内节点（如 Free_2），driver.submit 拿当前节点去查步骤会落空并拒绝提交。
+            // 故第 1 步直接绑定到实例当前节点，后续步骤才用池内 Free_k（Free_2 起）。
             String boundKey = POOL_NODE_PREFIX + order;
             String startKey = inst.getCurrentNodeKey();
             if (i == 0 && startKey != null && !startKey.isBlank()

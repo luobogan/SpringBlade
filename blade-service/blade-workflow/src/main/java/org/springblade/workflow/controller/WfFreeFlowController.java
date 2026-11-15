@@ -119,8 +119,9 @@ public class WfFreeFlowController {
         if (!free) {
             return R.data(vo);
         }
-        List<NextNodeCandidateVO> nodes = new ArrayList<>(pool);
-        for (int i = 1; i <= pool; i++) {
+        // 预置池从 Free_2 起（Free_1 永不用于步骤绑定，step1 恒绑定「创建」节点；见 WfFreeFlowManager.saveSteps）
+        List<NextNodeCandidateVO> nodes = new ArrayList<>(Math.max(0, pool - 1));
+        for (int i = 2; i <= pool; i++) {
             String key = WfFreeFlowManager.POOL_NODE_PREFIX + i;
             if (key.equals(task.getNodeKey())) {
                 continue;
