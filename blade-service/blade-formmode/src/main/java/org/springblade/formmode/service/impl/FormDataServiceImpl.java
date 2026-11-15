@@ -2,6 +2,7 @@ package org.springblade.formmode.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.AuthUtil;
@@ -27,6 +28,7 @@ import org.springblade.formmode.utils.TableNameUtil;
 import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
 import org.springblade.formmode.vo.FormDataVO;
+import org.springblade.system.datascope.DataScopeValueResolver;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,9 @@ public class FormDataServiceImpl implements IFormDataService {
      *  允许负号是因为表单表名形如 formtable_main_{-N}（A 方案新建表单 billid 为负数，
      *  表名天然带负号）；所有表名均反引号包裹，'-' 非 SQL 元字符，放开无注入风险。 */
     private static final Pattern SAFE_IDENT = Pattern.compile("^[A-Za-z0-9_-]+$");
+
+    /** 列名白名单：与前端 Datascope.tsx 的 SAFE_SQL_COLUMN 保持一致（防注入） */
+    private static final Pattern SAFE_COLUMN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_$]*$");
 
     private final ModeInfoMapper modeInfoMapper;
     private final WorkflowBillMapper workflowBillMapper;
@@ -741,6 +746,229 @@ public class FormDataServiceImpl implements IFormDataService {
             result.setRecords(records);
             return result;
         });
+    }
+
+    @Override
+    public Page<Map<String, Object>> pageFormDataByScope(Long formId, Page<?> page,
+                                                          Map<String, Object> params, String resourceCode) {
+        String mainTableName = resolveMainTableName(formId);
+        if (mainTableName == null) {
+            return new Page<>(page.getCurrent(), page.getSize());
+        }
+        // formmode 自身的行级数据范围（modedatasharerule）：与 pageFormData 同口径，叠加生效
+        Long realModeId = formRightService.resolveModeIdByFormId(formId);
+        if (realModeId == null) {
+            realModeId = formId;
+        }
+        final DataScope scope = formRightService.resolveDataScope(realModeId);
+        final ScopeRule rule = loadScopeRule(resourceCode);
+        final String table = mainTableName;
+
+        return TableNameContextHolder.executeWithTableName(table, () -> {
+            Map<String, BizValueCoercer.ColumnMeta> colMeta =
+                BizValueCoercer.loadColumnMeta(jdbcTemplate, table);
+            Set<String> tableCols = new HashSet<>(colMeta.keySet());
+
+            // 列清单：优先规则的 scope_field（可见字段），非法/不存在的列剔除后回落 SELECT *
+            String selectCols = "*";
+            if (rule != null && StringUtil.isNotBlank(rule.getScopeField())) {
+                String sf = rule.getScopeField().trim();
+                if (!"*".equals(sf)) {
+                    List<String> cols = Arrays.stream(sf.split(","))
+                        .map(String::trim)
+                        .filter(StringUtil::isNotBlank)
+                        .filter(c -> SAFE_COLUMN.matcher(c).matches())
+                        .filter(tableCols::contains)
+                        .distinct()
+                        .collect(Collectors.toList());
+                    if (!cols.isEmpty()) {
+                        selectCols = cols.stream().map(c -> "`" + c + "`").collect(Collectors.joining(","));
+                    }
+                }
+            }
+
+            StringBuilder countSql = new StringBuilder("SELECT COUNT(*) FROM `" + table + "` WHERE 1=1");
+            StringBuilder dataSql = new StringBuilder("SELECT " + selectCols + " FROM `" + table + "` WHERE 1=1");
+            List<Object> queryParams = new ArrayList<>();
+
+            // ① formmode 行级范围：非全量可见 → 仅本人创建（无 creator 列/无用户则 1=0 安全空结果）
+            if (!scope.isCanViewAll()) {
+                String creatorCol = tableCols.contains("modedatacreator") ? "modedatacreator"
+                    : (tableCols.contains("modedatacreater") ? "modedatacreater" : null);
+                if (creatorCol != null && scope.getCreatorId() != null) {
+                    countSql.append(" AND `").append(creatorCol).append("` = ?");
+                    dataSql.append(" AND `").append(creatorCol).append("` = ?");
+                    queryParams.add(scope.getCreatorId());
+                } else {
+                    countSql.append(" AND 1=0");
+                    dataSql.append(" AND 1=0");
+                }
+            }
+
+            // ② 数据权限规则行级过滤（blade_scope_data）
+            applyScopeRuleFilter(rule, tableCols, countSql, dataSql);
+
+            // ③ 查询条件（与 pageFormData 同口径：LIKE 模糊）
+            if (params != null) {
+                for (Map.Entry<String, Object> entry : params.entrySet()) {
+                    String key = entry.getKey();
+                    if (key == null || entry.getValue() == null || isSystemField(key)) {
+                        continue;
+                    }
+                    if (!SAFE_COLUMN.matcher(key).matches() || !tableCols.contains(key)) {
+                        continue;
+                    }
+                    countSql.append(" AND `").append(key).append("` LIKE ?");
+                    dataSql.append(" AND `").append(key).append("` LIKE ?");
+                    queryParams.add("%" + entry.getValue() + "%");
+                }
+            }
+
+            Long total = jdbcTemplate.queryForObject(countSql.toString(), Long.class, queryParams.toArray());
+
+            long offset = (page.getCurrent() - 1) * page.getSize();
+            dataSql.append(" ORDER BY id DESC LIMIT ? OFFSET ?");
+            List<Object> pageParams = new ArrayList<>(queryParams);
+            pageParams.add(page.getSize());
+            pageParams.add(offset);
+
+            List<Map<String, Object>> records = jdbcTemplate.queryForList(dataSql.toString(), pageParams.toArray());
+
+            Page<Map<String, Object>> result = new Page<>(page.getCurrent(), page.getSize(), total);
+            result.setRecords(records);
+            return result;
+        });
+    }
+
+    /**
+     * 应用数据权限规则的行级过滤：{@code `col` IN (值域)}。
+     *
+     * <p>值域语义统一由 {@link DataScopeValueResolver} 给出（与上游
+     * {@code BladeDataScopeHandler#sqlCondition} 对齐）：全部(1)/管理员 → 不过滤；
+     * 本人(2) → 当前用户；本部门(3) → 当前部门；本部门及子级(4) → 当前部门 + 其子孙部门；
+     * 自定义(5) → 受限形态的 scope_value。</p>
+     *
+     * <p><b>安全口径</b>：规则存在但无法安全应用时（类型未知 / 自定义值域不是受限形态 /
+     * 权限列非法或不在表内），一律按「无可见数据」处理（1=0），
+     * <b>绝不降级为「不过滤」</b>——否则「配了权限」会变成「实际没限制」，属越权。
+     * 上游对同样情形的表现是拼出非法 SQL 让查询报错（同样 fail-closed）。</p>
+     */
+    private void applyScopeRuleFilter(ScopeRule rule, Set<String> tableCols,
+                                      StringBuilder countSql, StringBuilder dataSql) {
+        if (rule == null) {
+            return;
+        }
+        DataScopeValueResolver.ScopeValue value = DataScopeValueResolver.resolve(
+            rule.getScopeType(), rule.getScopeColumn(), rule.getScopeValue(),
+            AuthUtil.getUser(), this::queryChildDeptIds);
+
+        // 全部数据 / 管理员：不过滤
+        if (value.isUnrestricted()) {
+            return;
+        }
+        // 规则无法安全应用：拒绝（安全优先），不降级为「不过滤」
+        if (value.isRejected()) {
+            log.error("[formmode] 数据权限规则无法安全应用，按无可见数据处理. resourceCode={}, scopeType={}, reason={}",
+                rule.getResourceCode(), rule.getScopeType(), value.getReason());
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
+            return;
+        }
+        String col = value.getColumn() == null ? "" : value.getColumn().trim();
+        if (!SAFE_COLUMN.matcher(col).matches() || !tableCols.contains(col)) {
+            log.error("[formmode] 数据权限规则的权限列非法，按无可见数据处理. resourceCode={}, scopeColumn={}",
+                rule.getResourceCode(), value.getColumn());
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
+            return;
+        }
+        appendInCondition(countSql, dataSql, col, value.getIds());
+    }
+
+    /** 追加 {@code AND `col` IN (...)}；值域为空 → 追加 1=0（无可见数据，安全优先） */
+    private void appendInCondition(StringBuilder countSql, StringBuilder dataSql, String col, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
+            return;
+        }
+        String in = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
+        countSql.append(" AND `").append(col).append("` IN (").append(in).append(")");
+        dataSql.append(" AND `").append(col).append("` IN (").append(in).append(")");
+    }
+
+    /**
+     * 查询某部门的全部子孙部门 id。
+     *
+     * <p><b>为什么不能用 {@code ancestors LIKE '%,deptId,%'}</b>：本项目 {@code blade_dept.ancestors}
+     * 的真实形态是 {@code 0,1000000008}（顶级部门为 {@code 0}，<b>末尾没有逗号</b>），
+     * 该模式要求 deptId 前后都带逗号，会<b>漏掉所有直属子部门</b>（子部门的 ancestors 恰好结尾无逗号）。
+     * 这里改成「两端补逗号再匹配」：既能命中直属子部门（{@code ,0,1000000008,}），
+     * 又不会像上游的 {@code LIKE '%deptId%'} 那样把 {@code 10000000081} 误判为子部门。</p>
+     */
+    private List<Long> queryChildDeptIds(Long deptId) {
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_dept WHERE is_deleted = 0 AND CONCAT(',', ancestors, ',') LIKE ?",
+                "%," + deptId + ",%");
+            List<Long> ids = new ArrayList<>();
+            for (Map<String, Object> row : rows) {
+                Object id = row.get("id");
+                if (id instanceof Number) {
+                    ids.add(((Number) id).longValue());
+                }
+            }
+            return ids;
+        } catch (Exception e) {
+            log.warn("[formmode] 查询子孙部门失败，仅按本部门过滤. deptId={}, err={}", deptId, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /** 按资源编号读取数据权限规则（blade_scope_data）；无规则返回 null（不套规则） */
+    private ScopeRule loadScopeRule(String resourceCode) {
+        if (StringUtil.isBlank(resourceCode)) {
+            return null;
+        }
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT resource_code, scope_field, scope_column, scope_type, scope_value "
+                    + "FROM blade_scope_data WHERE resource_code = ? AND is_deleted = 0 ORDER BY id LIMIT 1",
+                resourceCode);
+            if (rows.isEmpty()) {
+                return null;
+            }
+            Map<String, Object> row = rows.get(0);
+            ScopeRule rule = new ScopeRule();
+            rule.setResourceCode(toStringOrNull(row.get("resource_code")));
+            rule.setScopeField(toStringOrNull(row.get("scope_field")));
+            rule.setScopeColumn(toStringOrNull(row.get("scope_column")));
+            rule.setScopeValue(toStringOrNull(row.get("scope_value")));
+            Object scopeType = row.get("scope_type");
+            rule.setScopeType(scopeType instanceof Number ? ((Number) scopeType).intValue() : null);
+            return rule;
+        } catch (Exception e) {
+            log.warn("[formmode] 读取数据权限规则失败，按无规则处理. resourceCode={}, err={}", resourceCode, e.getMessage());
+            return null;
+        }
+    }
+
+    private String toStringOrNull(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    /** 数据权限规则（blade_scope_data 的一行） */
+    @Data
+    private static class ScopeRule {
+        private String resourceCode;
+        /** 可见字段（列清单，逗号串或 *） */
+        private String scopeField;
+        /** 行级过滤列 */
+        private String scopeColumn;
+        /** 1全部 2本人 3本部门 4本部门及子级 5自定义 */
+        private Integer scopeType;
+        /** 自定义值域 */
+        private String scopeValue;
     }
 
     @Override

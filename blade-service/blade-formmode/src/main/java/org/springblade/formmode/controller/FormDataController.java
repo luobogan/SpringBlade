@@ -208,6 +208,34 @@ public class FormDataController extends BladeController {
     }
 
     /**
+     * 按「数据权限规则」分页查询业务数据（数据权限 · 列表预览专用）。
+     *
+     * <p>与 {@code /page/{modeId}} 的差异：叠加 {@code blade_scope_data} 的列清单
+     * （scope_field）与行级规则（scope_column / scope_type / scope_value），
+     * 语义与 {@code BladeDataScopeHandler#sqlCondition} 一致。</p>
+     *
+     * <p>用途：数据权限的「列表预览」必须展示<b>当前数据权限配置下的真实数据</b>，
+     * 而不是 mock 数据。</p>
+     *
+     * @param modeId       表单ID
+     * @param current      页码
+     * @param size         每页条数
+     * @param resourceCode 资源编号（= 菜单 code），用于定位数据权限规则；为空则不套规则
+     * @param params       过滤条件（字段名 → 值，LIKE 模糊）
+     */
+    @PostMapping("/page-scope/{modeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Page<Map<String, Object>>> pageByScope(@PathVariable Long modeId,
+                                                    @RequestParam(defaultValue = "1") long current,
+                                                    @RequestParam(defaultValue = "10") long size,
+                                                    @RequestParam(required = false) String resourceCode,
+                                                    @RequestBody(required = false) Map<String, Object> params) {
+        Page<?> page = new Page<>(current, size);
+        Page<Map<String, Object>> result = formDataService.pageFormDataByScope(modeId, page, params, resourceCode);
+        return R.data(result);
+    }
+
+    /**
      * 删除数据
      */
     @DeleteMapping("/{modeId}/{dataId}")

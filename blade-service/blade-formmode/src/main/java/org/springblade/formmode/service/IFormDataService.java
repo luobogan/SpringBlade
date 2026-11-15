@@ -41,6 +41,26 @@ public interface IFormDataService {
     Page<Map<String, Object>> pageFormData(Long modeId, Page<?> page, Map<String, Object> params);
 
     /**
+     * 按「数据权限规则」分页查询业务数据（数据权限 · 列表预览专用）。
+     *
+     * <p>与 {@link #pageFormData} 的差异：额外叠加 {@code blade_scope_data} 的
+     * 列清单（scope_field）与行级规则（scope_column / scope_type / scope_value），
+     * 语义与 {@code BladeDataScopeHandler#sqlCondition} 一致
+     * （{@code select {scopeField} from (原SQL) scope where scope.{scopeColumn} in (...)}）。</p>
+     *
+     * <p>背景：{@code blade_scope_data} 的行级规则只在 MyBatis Mapper SQL 链路生效，
+     * formmode 的动态 JDBC 查询走不到它；而「列表预览」必须展示
+     * <b>当前数据权限配置下的真实数据</b>，故在此显式应用规则。</p>
+     *
+     * @param formId       表单ID（workflow_bill.id）
+     * @param page         分页参数
+     * @param params       过滤条件（字段名 → 值，LIKE 模糊）
+     * @param resourceCode 资源编号（= 菜单 code），用于定位数据权限规则；为空则不套规则
+     * @return 分页数据（records / total）
+     */
+    Page<Map<String, Object>> pageFormDataByScope(Long formId, Page<?> page, Map<String, Object> params, String resourceCode);
+
+    /**
      * 删除数据
      */
     boolean deleteFormData(Long modeId, Long dataId);

@@ -26,6 +26,12 @@
             <groupId>org.springblade</groupId>
             <artifactId>blade-starter-datascope</artifactId>
         </dependency>
+        <!-- 单元测试（数据权限值域解析器语义固化） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
