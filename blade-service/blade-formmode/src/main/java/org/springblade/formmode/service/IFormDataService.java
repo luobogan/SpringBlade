@@ -61,6 +61,24 @@ public interface IFormDataService {
     Page<Map<String, Object>> pageFormDataByScope(Long formId, Page<?> page, Map<String, Object> params, String resourceCode);
 
     /**
+     * 按「单元格」更新单条业务数据（通用列表行内编辑专用）。
+     *
+     * <p>与 {@link #saveBusinessData}（整体覆盖）的差异：<b>只更新指定的一个字段</b>，
+     * 其余字段一律保留库中原值 —— 通用列表的行内编辑只能提交「这一格改了什么」，
+     * 若走整体覆盖会把未加载/未渲染的字段清空。</p>
+     *
+     * <p>安全约束：字段名必须是合法标识符且真实存在于该表单主表（否则拒绝）；
+     * 值按目标列类型转换（复用 {@code BizValueCoercer}）；同时刷新修改人/修改时间审计列。</p>
+     *
+     * @param formId   表单ID（workflow_bill.id）
+     * @param dataId   数据行主键
+     * @param fieldName 字段名（数据库列名）
+     * @param value    新值（按列类型自动转换）
+     * @return 是否更新成功
+     */
+    Boolean updateFormDataCell(Long formId, Long dataId, String fieldName, Object value);
+
+    /**
      * 删除数据
      */
     boolean deleteFormData(Long modeId, Long dataId);

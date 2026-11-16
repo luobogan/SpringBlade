@@ -33,11 +33,20 @@ public class TableNameContextHolder {
 
     /**
      * 在指定范围内执行动态表名操作
+     *
+     * <p><b>异常语义不可被吞掉</b>：原先统一包成 {@code RuntimeException("动态表名操作异常")}，
+     * 导致块内抛出的业务异常（如 {@code ServiceException("字段不存在于主表: hrmid")}）
+     * 在前端只剩一个 500 + 无意义文案，看不到真正原因。
+     * 故这里对 {@link RuntimeException}（含业务异常）原样透传，
+     * 只把受检异常包装为 RuntimeException，保证全局异常处理器能给出可读提示。</p>
      */
     public static <T> T executeWithTableName(String tableName, java.util.concurrent.Callable<T> callable) {
         try {
             set(tableName);
             return callable.call();
+        } catch (RuntimeException e) {
+            // 业务异常原样抛出，保留可读原因（ServiceException 等）
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("动态表名操作异常", e);
         } finally {

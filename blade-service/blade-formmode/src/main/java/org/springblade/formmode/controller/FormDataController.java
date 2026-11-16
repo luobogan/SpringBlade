@@ -162,6 +162,30 @@ public class FormDataController extends BladeController {
     }
 
     /**
+     * 按「单元格」更新业务数据（通用列表行内编辑专用）。
+     *
+     * <p>前端契约：{@code PUT /form-data/{formId}/{dataId}/cell}，body = {@code {fieldName, value}}。</p>
+     *
+     * <p>与 {@link #updateByForm}（整体覆盖）的差异：<b>只更新指定的一个字段</b>，
+     * 其余字段一律保留库中原值 —— 通用列表的行内编辑只能提交「这一格改了什么」，
+     * 若走整体覆盖会把未加载/未渲染的字段清空。</p>
+     */
+    @PutMapping("/{formId}/{dataId}/cell")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> updateCellByForm(@PathVariable Long formId,
+                                       @PathVariable Long dataId,
+                                       @RequestBody Map<String, Object> payload) {
+        assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.EDIT, writeRightEnforce);
+        if (payload == null) {
+            throw new ServiceException("请求体不能为空");
+        }
+        Object fieldName = payload.get("fieldName");
+        Boolean ok = formDataService.updateFormDataCell(formId, dataId,
+            fieldName == null ? null : String.valueOf(fieldName), payload.get("value"));
+        return R.data(ok, ok ? "单元格更新成功" : "未更新到数据");
+    }
+
+    /**
      * 按「表单ID」批量删除业务数据行（前端契约：POST /form-data/{formId}/batch-delete）。
      *
      * <p>对齐前端 {@code dataApi.batchDelete(formId, ids)}（body=ids 数组）。

@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.AuthUtil;
+import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.dto.FormDataDTO;
 import org.springblade.formmode.dto.FormDataSaveDTO;
@@ -782,6 +783,14 @@ public class FormDataServiceImpl implements IFormDataService {
                         .distinct()
                         .collect(Collectors.toList());
                     if (!cols.isEmpty()) {
+                        // 主键必须保留：通用列表靠 id 做行主键（行编辑/行选择/新增行都依赖它）。
+                        // scope_field 若不含 id，裁剪后数据行将失去主键（前端 data-row-key 为空、
+                        // 行编辑态会因行键全等而串到所有行），故这里强制补回。
+                        boolean hasId = cols.stream().anyMatch(c -> "id".equalsIgnoreCase(c));
+                        if (!hasId) {
+                            cols = new ArrayList<>(cols);
+                            cols.add("id");
+                        }
                         selectCols = cols.stream().map(c -> "`" + c + "`").collect(Collectors.joining(","));
                     }
                 }
@@ -838,6 +847,57 @@ public class FormDataServiceImpl implements IFormDataService {
             result.setRecords(records);
             return result;
         });
+    }
+
+    /**
+     * 按单元格更新单条业务数据（通用列表行内编辑）。
+     *
+     * <p>只改一格、其余字段保留库中原值（整体覆盖会把未渲染字段清空）；
+     * 字段名必须是合法标识符且真实存在于主表；值按目标列类型转换（复用 BizValueCoercer）。</p>
+     */
+    @Override
+    public Boolean updateFormDataCell(Long formId, Long dataId, String fieldName, Object value) {
+        if (formId == null || dataId == null) {
+            throw new ServiceException("参数不完整（formId / dataId）");
+        }
+        String col = fieldName == null ? "" : fieldName.trim();
+        if (!SAFE_COLUMN.matcher(col).matches()) {
+            throw new ServiceException("字段名非法: " + fieldName);
+        }
+        String table = resolveMainTableName(formId);
+        if (table == null) {
+            throw new ServiceException("未找到该表单的主表");
+        }
+        final String finalCol = col;
+        final Object rawValue = value;
+        return Boolean.TRUE.equals(TableNameContextHolder.executeWithTableName(table, () -> {
+            Map<String, BizValueCoercer.ColumnMeta> colMeta = BizValueCoercer.loadColumnMeta(jdbcTemplate, table);
+            BizValueCoercer.ColumnMeta meta = colMeta.get(finalCol.toLowerCase());
+            if (meta == null) {
+                throw new ServiceException("字段不存在于主表: " + finalCol);
+            }
+            Set<String> tableCols = new HashSet<>(colMeta.keySet());
+            List<String> setParts = new ArrayList<>();
+            List<Object> setValues = new ArrayList<>();
+            setParts.add("`" + finalCol + "`=?");
+            setValues.add(BizValueCoercer.coerce(meta, rawValue));
+
+            // 修改人/修改时间审计列（只写主表真实存在的列；取不到用户时不动修改人，避免清空）
+            Long editor = currentUserId();
+            if (editor != null) {
+                appendAuditSet(setParts, setValues, tableCols, new String[]{"modedatamodifier"}, editor);
+            }
+            appendAuditSet(setParts, setValues, tableCols, new String[]{"modedatamodifydate"}, LocalDate.now().toString());
+            appendAuditSet(setParts, setValues, tableCols, new String[]{"modedatamodifytime"},
+                LocalTime.now().toString().substring(0, 8));
+            appendAuditSet(setParts, setValues, tableCols, new String[]{"lastModDate"}, LocalDate.now().toString());
+            appendAuditSet(setParts, setValues, tableCols, new String[]{"lastModTime"},
+                LocalTime.now().toString().substring(0, 8));
+
+            String sql = "UPDATE `" + table + "` SET " + String.join(",", setParts) + " WHERE id=?";
+            setValues.add(dataId);
+            return jdbcTemplate.update(sql, setValues.toArray()) > 0;
+        }));
     }
 
     /**
