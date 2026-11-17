@@ -26,6 +26,8 @@ import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -91,11 +93,14 @@ public class FormRightServiceImpl implements IFormRightService {
      * 故在 formmode 权限查询中显式加 tenant_id 条件；取不到时回退默认租户 000000，
      * 与三表 tenant_id 默认值一致，兼容存量数据。</p>
      */
-    private static String currentTenant() {
+    public static String currentTenant() {
         return Func.toStr(SecureUtil.getTenantId(), "000000");
     }
 
     @Override
+    @Cacheable(cacheNames = "formmode:right-check",
+        key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + #rightType + ':' + #userId",
+        unless = "#result == null")
     public boolean checkRight(Long modeId, Integer rightType, Long userId) {
         String tenant = currentTenant();
         List<ModeRightInfo> rights = modeRightInfoMapper.selectList(
@@ -119,6 +124,7 @@ public class FormRightServiceImpl implements IFormRightService {
         Set<Long> roleIds = parseIds(user != null ? user.getRoleId() : null);
         Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
         Set<Long> postIds = subjectResolver.resolvePostIds(uid);
+        Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
 
         for (ModeRightInfo r : rights) {
             Integer objType = r.getObjtype();
@@ -148,6 +154,11 @@ public class FormRightServiceImpl implements IFormRightService {
                     break;
                 case 3: // 岗位：由 blade_user.post_id 解析
                     if (postIds.contains(objId)) {
+                        return true;
+                    }
+                    break;
+                case 5: // 分部：由用户部门反查 blade_dept.subcompany_id（对标 E9 rolelevel=1）
+                    if (subcompanyIds.contains(objId)) {
                         return true;
                     }
                     break;
@@ -192,6 +203,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
     public boolean saveModeRights(Long modeId, List<ModeRightInfo> rights) {
         String tenant = currentTenant();
         // 删除旧权限（限定当前租户，避免误删异租户配置）
@@ -223,6 +235,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
     public boolean saveFieldAuthorizes(Long modeId, List<ModeFieldAuthorize> authorizes) {
         String tenant = currentTenant();
         modeFieldAuthorizeMapper.delete(
@@ -324,6 +337,8 @@ public class FormRightServiceImpl implements IFormRightService {
     }
 
     @Override
+    @Cacheable(cacheNames = "formmode:field-perm",
+        key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + T(org.springblade.core.secure.utils.SecureUtil).getUserId()")
     public List<FieldPermVO> listFieldPerm(Long modeId) {
         if (modeId == null) {
             return new ArrayList<>();
@@ -356,6 +371,7 @@ public class FormRightServiceImpl implements IFormRightService {
         Set<Long> roleIds = parseIds(user != null ? user.getRoleId() : null);
         Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
         Set<Long> postIds = subjectResolver.resolvePostIds(uid);
+        Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
 
         // 命中用户的授权 → fieldId → rightvalue（多条命中取最宽松：可编辑 > 可见）
         Map<Integer, Integer> fieldRight = new LinkedHashMap<>();
@@ -363,7 +379,7 @@ public class FormRightServiceImpl implements IFormRightService {
             if (a == null || a.getFieldid() == null || a.getRightvalue() == null) {
                 continue;
             }
-            if (!matchAuthorizeObject(a, uid, roleIds, deptIds, postIds)) {
+            if (!matchAuthorizeObject(a, uid, roleIds, deptIds, postIds, subcompanyIds)) {
                 continue;
             }
             fieldRight.merge(a.getFieldid(), a.getRightvalue(), Math::max);
@@ -414,9 +430,7 @@ public class FormRightServiceImpl implements IFormRightService {
         Long primaryDept = deptIds.isEmpty() ? null : deptIds.iterator().next();
         DataScope scope = dataScopeService.resolve(modeId, uid, primaryDept, new ArrayList<>(roleIds), new ArrayList<>(postIds));
         // 单条共享：查询共享给当前用户（人员/角色/部门/岗位）的数据行 ID。
-        // 注意：sharedDataIds 目前用于「详情读取 + 行级写校验」（inDataScope）；列表查询
-        // （pageFormData/pageFormDataByScope）暂未纳入，即被单条共享的行可通过 URL 直达详情，
-        // 但不会出现在列表里——这是为避免改写 creator 过滤为 OR 引入越权风险而做的保守取舍。
+        // sharedDataIds 同时用于列表过滤（creator OR id IN sharedIds）、详情读取与行级写校验。
         try {
             String tenant = currentTenant();
             List<ModeDataShareSingle> shares = modeDataShareSingleMapper.selectList(
@@ -424,6 +438,8 @@ public class FormRightServiceImpl implements IFormRightService {
                     .eq(ModeDataShareSingle::getModeid, modeId)
                     .eq(ModeDataShareSingle::getTenantId, tenant));
             List<Long> sharedIds = new ArrayList<>();
+            List<Long> editableIds = new ArrayList<>();
+            Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
             for (ModeDataShareSingle s : shares) {
                 if (s == null || s.getDataId() == null) continue;
                 Integer t = s.getObjtype();
@@ -431,10 +447,17 @@ public class FormRightServiceImpl implements IFormRightService {
                 boolean hit = (t == 4 && uid != null && uid.equals(o))
                     || (t == 1 && roleIds.contains(o))
                     || (t == 2 && deptIds.contains(o))
-                    || (t == 3 && postIds.contains(o));
-                if (hit) sharedIds.add(s.getDataId());
+                    || (t == 3 && postIds.contains(o))
+                    || (t == 5 && subcompanyIds.contains(o));
+                if (hit) {
+                    sharedIds.add(s.getDataId());
+                    if (s.getShareLevel() != null && s.getShareLevel() >= 2) {
+                        editableIds.add(s.getDataId());
+                    }
+                }
             }
             if (!sharedIds.isEmpty()) scope.setSharedDataIds(sharedIds);
+            if (!editableIds.isEmpty()) scope.setEditableSharedDataIds(editableIds);
         } catch (Exception e) {
             log.warn("[formmode] 查询单条共享失败，忽略. modeId={}, err={}", modeId, e.getMessage());
         }
@@ -463,7 +486,22 @@ public class FormRightServiceImpl implements IFormRightService {
     }
 
     @Override
-    public boolean shareDataRow(Long modeId, Long dataId, Integer objtype, Long objid, Integer shareLevel) {
+    public boolean canEditDataRow(Long modeId, Long creatorIdOfRow, Long dataId) {
+        DataScope scope = resolveDataScope(modeId);
+        if (scope.isCanViewAll()) {
+            return true;
+        }
+        if (Objects.equals(creatorIdOfRow, scope.getCreatorId())) {
+            return true; // 创建人天然完全控制
+        }
+        // 单条共享仅 level>=2（可编辑）允许写
+        return dataId != null && scope.getEditableSharedDataIds() != null
+            && scope.getEditableSharedDataIds().contains(dataId);
+    }
+
+    @Override
+    public boolean shareDataRow(Long modeId, Long dataId, Integer objtype, Long objid, Integer shareLevel,
+                                String conditionField, String matrixValueField) {
         if (modeId == null || dataId == null || objtype == null || objid == null) {
             return false;
         }
@@ -484,11 +522,15 @@ public class FormRightServiceImpl implements IFormRightService {
             s.setObjtype(objtype);
             s.setObjid(objid);
             s.setShareLevel(level);
+            s.setConditionField(conditionField);
+            s.setMatrixValueField(matrixValueField);
             s.setTenantId(tenant);
             s.setCreateTime(new java.util.Date());
             modeDataShareSingleMapper.insert(s);
         } else {
             exist.setShareLevel(level);
+            exist.setConditionField(conditionField);
+            exist.setMatrixValueField(matrixValueField);
             modeDataShareSingleMapper.updateById(exist);
         }
         return true;
@@ -527,7 +569,7 @@ public class FormRightServiceImpl implements IFormRightService {
      * 模块级/数据范围级已支持）。</p>
      */
     private boolean matchAuthorizeObject(ModeFieldAuthorize a, Long uid, Set<Long> roleIds,
-                                         Set<Long> deptIds, Set<Long> postIds) {
+                                         Set<Long> deptIds, Set<Long> postIds, Set<Long> subcompanyIds) {
         Integer objType = a.getObjtype();
         Integer objId = a.getObjid();
         if (objType == null || objId == null) {
@@ -545,6 +587,8 @@ public class FormRightServiceImpl implements IFormRightService {
                 return subjectResolver.matchDept(objId.longValue(), deptIds, a.getIncludesub());
             case 3: // 岗位
                 return postIds.contains(objId.longValue());
+            case 5: // 分部
+                return subcompanyIds.contains(objId.longValue());
             default:
                 return false;
         }
@@ -634,6 +678,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
     public boolean saveAll(Long modeId, org.springblade.formmode.dto.ModeRightBatchDTO batch) {
         if (modeId == null || batch == null) {
             return false;

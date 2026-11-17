@@ -32,7 +32,7 @@ public class ModeDataShareSingle implements Serializable {
     @Schema(description = "业务数据行ID")
     private Long dataId;
 
-    @Schema(description = "授权对象类型：1角色 2部门 3岗位 4人员")
+    @Schema(description = "授权对象类型：1角色 2部门 3岗位 4人员 5分部")
     private Integer objtype;
 
     @Schema(description = "授权对象ID")
@@ -40,6 +40,12 @@ public class ModeDataShareSingle implements Serializable {
 
     @Schema(description = "共享级别：1查看 2编辑")
     private Integer shareLevel;
+
+    @Schema(description = "矩阵主体（objtype=7）业务条件字段名")
+    private String conditionField;
+
+    @Schema(description = "矩阵主体（objtype=7）结果字段名")
+    private String matrixValueField;
 
     @Schema(description = "租户ID")
     private String tenantId;

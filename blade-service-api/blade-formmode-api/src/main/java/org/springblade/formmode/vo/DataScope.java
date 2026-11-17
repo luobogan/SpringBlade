@@ -38,6 +38,9 @@ public class DataScope {
      */
     private List<Long> sharedDataIds;
 
+    /** 单条共享中「可编辑」（shareLevel>=2）的数据行 ID 集合 */
+    private List<Long> editableSharedDataIds;
+
     /** 行级条件项 */
     @Data
     @Schema(description = "行级数据条件")

@@ -157,8 +157,11 @@ public class FormRightController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Boolean> shareDataRow(@PathVariable Long modeId, @PathVariable Long dataId,
                                    @RequestParam Integer objtype, @RequestParam Long objid,
-                                   @RequestParam(defaultValue = "1") Integer shareLevel) {
-        return R.data(formRightService.shareDataRow(modeId, dataId, objtype, objid, shareLevel));
+                                   @RequestParam(defaultValue = "1") Integer shareLevel,
+                                   @RequestParam(required = false) String conditionField,
+                                   @RequestParam(required = false) String matrixValueField) {
+        return R.data(formRightService.shareDataRow(modeId, dataId, objtype, objid, shareLevel,
+            conditionField, matrixValueField));
     }
 
     /** 取消某条数据行的主体共享 */

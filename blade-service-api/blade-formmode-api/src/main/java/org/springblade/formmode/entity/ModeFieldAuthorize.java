@@ -35,7 +35,7 @@ public class ModeFieldAuthorize implements Serializable {
     @Schema(description = "字段ID（workflow_billfield.id）")
     private Integer fieldid;
 
-    @Schema(description = "授权对象类型：1角色 2部门 3岗位 4人员")
+    @Schema(description = "授权对象类型：1角色 2部门 3岗位 4人员 5分部")
     private Integer objtype;
 
     @Schema(description = "授权对象ID")

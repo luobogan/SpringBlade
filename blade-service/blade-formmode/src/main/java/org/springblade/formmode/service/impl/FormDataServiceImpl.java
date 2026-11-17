@@ -6,7 +6,9 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.utils.AuthUtil;
+import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
+import org.springblade.core.tool.utils.Func;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.dto.FormDataDTO;
 import org.springblade.formmode.dto.FormDataSaveDTO;
@@ -24,6 +26,7 @@ import org.springblade.formmode.service.IFormRightService;
 import org.springblade.formmode.entity.FormLayout;
 import org.springblade.formmode.utils.BizValueCoercer;
 import org.springblade.formmode.utils.LayoutFormulaResolver;
+import org.springblade.formmode.utils.MatrixSubjectResolver;
 import org.springblade.formmode.utils.TableNameContextHolder;
 import org.springblade.formmode.utils.TableNameUtil;
 import org.springblade.formmode.vo.DataScope;
@@ -68,6 +71,7 @@ public class FormDataServiceImpl implements IFormDataService {
     private final IFormRightService formRightService;
     private final IFormLayoutService formLayoutService;
     private final JdbcTemplate jdbcTemplate;
+    private final MatrixSubjectResolver matrixSubjectResolver;
 
     /**
      * 行级「写」权限校验开关（编辑/删除他人创建的数据）。
@@ -77,6 +81,10 @@ public class FormDataServiceImpl implements IFormDataService {
      */
     @Value("${blade.formmode.row-write-scope.enforce:true}")
     private boolean rowWriteScopeEnforce;
+
+    /** 字段级「写」权限裁剪开关（编辑/新建/单元格写入不可编辑字段）；默认开启 */
+    @Value("${blade.formmode.field-perm.write-enforce:true}")
+    private boolean fieldWritePermEnforce;
 
     /**
      * 按表单布局重算公式，返回「目标字段 → 计算结果」。
@@ -441,8 +449,8 @@ public class FormDataServiceImpl implements IFormDataService {
             if (realModeId == null) {
                 realModeId = formId;
             }
-            if (!formRightService.inDataScope(realModeId, creatorId, dataId)) {
-                throw new ServiceException("无权操作他人创建的数据");
+            if (!formRightService.canEditDataRow(realModeId, creatorId, dataId)) {
+                throw new ServiceException("无权编辑他人创建的数据（仅查看共享）");
             }
         } catch (ServiceException e) {
             throw e;
@@ -450,6 +458,126 @@ public class FormDataServiceImpl implements IFormDataService {
             // 校验链路异常：fail-open 放行（不因权限组件故障阻断写入），但留存告警
             log.warn("[formmode] 行级写权限校验异常，按放行处理. formId={}, dataId={}, err={}",
                 formId, dataId, e.getMessage());
+        }
+    }
+
+    /**
+     * 矩阵主体（objtype=7）单条共享：扫描共享表中矩阵规则，按数据行字段值解析当前用户是否命中。
+     *
+     * <p>返回命中的 dataId 集合，与常规单条共享合并。运行时求值、不物化，异常 fail-closed（不计入）。</p>
+     */
+    private List<Long> matrixSharedDataIds(Long modeId, String tableName, Long userId) {
+        List<Long> hit = new ArrayList<>();
+        if (modeId == null || userId == null || tableName == null) {
+            return hit;
+        }
+        try {
+            List<Map<String, Object>> rules = jdbcTemplate.queryForList(
+                "SELECT data_id, condition_field, matrix_value_field, objid FROM modedatashare_single "
+                    + "WHERE modeid=? AND objtype=7 AND tenant_id=?",
+                modeId, Func.toStr(SecureUtil.getTenantId(), "000000"));
+            for (Map<String, Object> r : rules) {
+                Object dataIdObj = r.get("data_id");
+                Object matrixIdObj = r.get("objid");
+                Object bizFieldObj = r.get("condition_field");
+                if (!(dataIdObj instanceof Number) || !(matrixIdObj instanceof Number) || bizFieldObj == null) {
+                    continue;
+                }
+                long dataId = ((Number) dataIdObj).longValue();
+                long matrixId = ((Number) matrixIdObj).longValue();
+                String bizField = String.valueOf(bizFieldObj).trim().toLowerCase();
+                String valueField = r.get("matrix_value_field") == null ? null : String.valueOf(r.get("matrix_value_field"));
+                // 取该数据行的字段值（含列名大小写归一）
+                List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT * FROM `" + tableName + "` WHERE id=?", dataId);
+                if (rows == null || rows.isEmpty()) continue;
+                Map<String, Object> row = new LinkedHashMap<>();
+                rows.get(0).forEach((k, v) -> row.put(k.toLowerCase(), v));
+                if (matrixSubjectResolver.matches(matrixId, bizField, valueField, row, userId)) {
+                    hit.add(dataId);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 矩阵共享扫描失败，忽略. modeId={}, table={}, err={}", modeId, tableName, e.getMessage());
+        }
+        return hit;
+    }
+
+    /** 单行矩阵共享判定（详情读取用）：该 dataId 是否有 objtype=7 且当前用户命中的矩阵共享 */
+    private boolean matrixRowShared(Long modeId, Long dataId, Map<String, Object> row, Long userId) {
+        if (modeId == null || dataId == null || row == null || userId == null) {
+            return false;
+        }
+        try {
+            List<Map<String, Object>> rules = jdbcTemplate.queryForList(
+                "SELECT objid, condition_field, matrix_value_field FROM modedatashare_single "
+                    + "WHERE modeid=? AND data_id=? AND objtype=7 AND tenant_id=?",
+                modeId, dataId, Func.toStr(SecureUtil.getTenantId(), "000000"));
+            for (Map<String, Object> r : rules) {
+                Object matrixIdObj = r.get("objid");
+                Object bizFieldObj = r.get("condition_field");
+                if (!(matrixIdObj instanceof Number) || bizFieldObj == null) continue;
+                String valueField = r.get("matrix_value_field") == null ? null : String.valueOf(r.get("matrix_value_field"));
+                if (matrixSubjectResolver.matches(((Number) matrixIdObj).longValue(),
+                    String.valueOf(bizFieldObj), valueField, row, userId)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 单行矩阵共享判定失败，按无权限. modeId={}, dataId={}, err={}",
+                modeId, dataId, e.getMessage());
+        }
+        return false;
+    }
+
+    /** 把矩阵共享命中的 dataId 合并进 scope.sharedDataIds（去重） */
+    private void mergeMatrixShared(DataScope scope, Long modeId, String tableName) {
+        if (scope == null || scope.isCanViewAll()) {
+            return;
+        }
+        List<Long> hit = matrixSharedDataIds(modeId, tableName, currentUserId());
+        if (hit.isEmpty()) {
+            return;
+        }
+        List<Long> merged = new ArrayList<>();
+        if (scope.getSharedDataIds() != null) merged.addAll(scope.getSharedDataIds());
+        for (Long id : hit) if (!merged.contains(id)) merged.add(id);
+        scope.setSharedDataIds(merged);
+    }
+
+    /**
+     * 行级范围：本人创建 OR 单条共享给我的数据行。
+     *
+     * <p>仅在非全量可见时调用。sharedDataIds 来自服务端查询（受控数字 ID），参数化拼接无注入风险。</p>
+     */
+    private void appendCreatorAndSharedFilter(DataScope scope, Set<String> tableCols,
+                                              StringBuilder countSql, StringBuilder dataSql, List<Object> params) {
+        List<Long> shared = scope.getSharedDataIds();
+        boolean hasShared = shared != null && !shared.isEmpty();
+        String creatorCol = tableCols.contains("modedatacreator") ? "modedatacreator"
+            : (tableCols.contains("modedatacreater") ? "modedatacreater" : null);
+        boolean hasCreator = creatorCol != null && scope.getCreatorId() != null;
+        if (hasCreator && hasShared) {
+            String marks = String.join(",", java.util.Collections.nCopies(shared.size(), "?"));
+            String clause = " AND (`" + creatorCol + "` = ? OR `id` IN (" + marks + "))";
+            countSql.append(clause);
+            dataSql.append(clause);
+            params.add(scope.getCreatorId());
+            params.addAll(shared);
+        } else if (hasCreator) {
+            String clause = " AND `" + creatorCol + "` = ?";
+            countSql.append(clause);
+            dataSql.append(clause);
+            params.add(scope.getCreatorId());
+        } else if (hasShared) {
+            String marks = String.join(",", java.util.Collections.nCopies(shared.size(), "?"));
+            String clause = " AND `id` IN (" + marks + ")";
+            countSql.append(clause);
+            dataSql.append(clause);
+            params.addAll(shared);
+        } else {
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
         }
     }
 
@@ -800,8 +928,8 @@ public class FormDataServiceImpl implements IFormDataService {
         }
 
         // 行级数据范围（P2-2 Step4）：越权行返回 null（仅本人创建可见）
-        Long realModeId = formRightService.resolveModeIdByFormId(formId);
-        if (realModeId == null) realModeId = formId;
+        Long resolvedModeId = formRightService.resolveModeIdByFormId(formId);
+        final Long realModeId = (resolvedModeId == null) ? formId : resolvedModeId;
         final DataScope scope = formRightService.resolveDataScope(realModeId);
 
         final String finalTable = tableName;
@@ -812,10 +940,16 @@ public class FormDataServiceImpl implements IFormDataService {
 
             Map<String, Object> row = rows.get(0);
 
-            // 数据范围：非全量可见且非本人创建 → 视为无权限
+            // 数据范围：非全量可见且非本人创建 → 检查常规共享 / 矩阵共享，否则无权限
             if (!scope.isCanViewAll()) {
                 Long creatorOfRow = parseRowCreator(row);
-                if (!Objects.equals(creatorOfRow, scope.getCreatorId())) {
+                boolean selfCreated = Objects.equals(creatorOfRow, scope.getCreatorId());
+                boolean shared = scope.getSharedDataIds() != null && scope.getSharedDataIds().contains(dataId);
+                Map<String, Object> rowLower = new LinkedHashMap<>();
+                row.forEach((k, v) -> rowLower.put(k.toLowerCase(), v));
+                boolean matrixShared = (!selfCreated && !shared)
+                    && matrixRowShared(realModeId, dataId, rowLower, currentUserId());
+                if (!selfCreated && !shared && !matrixShared) {
                     return null;
                 }
             }
@@ -864,6 +998,8 @@ public class FormDataServiceImpl implements IFormDataService {
             realModeId = modeId;
         }
         final DataScope scope = formRightService.resolveDataScope(realModeId);
+        // 矩阵主体（objtype=7）：按行字段值解析的单条共享，合并进 scope.sharedDataIds
+        mergeMatrixShared(scope, realModeId, mainTableName);
 
         return TableNameContextHolder.executeWithTableName(mainTableName, () -> {
             Map<String, BizValueCoercer.ColumnMeta> colMeta =
@@ -875,20 +1011,11 @@ public class FormDataServiceImpl implements IFormDataService {
             StringBuilder dataSql = new StringBuilder("SELECT * FROM `" + mainTableName + "` WHERE 1=1");
             List<Object> queryParams = new ArrayList<>();
 
-            // 数据范围：非全量可见 → 仅本人创建（无 creator 列/无用户则 1=0 安全空结果）
+            // 数据范围：非全量可见 → 本人创建 OR 单条共享给我的行（都无则 1=0 安全空结果）
             if (!scope.isCanViewAll()) {
-                String creatorCol = tableCols.contains("modedatacreator") ? "modedatacreator"
-                    : (tableCols.contains("modedatacreater") ? "modedatacreater" : null);
-                if (creatorCol != null && scope.getCreatorId() != null) {
-                    countSql.append(" AND `").append(creatorCol).append("` = ?");
-                    dataSql.append(" AND `").append(creatorCol).append("` = ?");
-                    queryParams.add(scope.getCreatorId());
-                } else {
-                    countSql.append(" AND 1=0");
-                    dataSql.append(" AND 1=0");
-                }
+                appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
             }
-            // 条件化授权：命中共享规则时行还需满足结构化条件（与 creator 过滤 AND 叠加）
+            // 条件化授权：命中共享规则时行还需满足结构化条件（与范围过滤 AND 叠加）
             appendRowCondition(scope, tableCols, countSql, dataSql, queryParams);
 
             // 添加查询条件
@@ -935,6 +1062,8 @@ public class FormDataServiceImpl implements IFormDataService {
         final DataScope scope = formRightService.resolveDataScope(realModeId);
         final ScopeRule rule = loadScopeRule(resourceCode);
         final String table = mainTableName;
+        // 矩阵主体（objtype=7）：合并单条共享中按行字段值解析出的可访问行
+        mergeMatrixShared(scope, realModeId, table);
 
         return TableNameContextHolder.executeWithTableName(table, () -> {
             Map<String, BizValueCoercer.ColumnMeta> colMeta =
@@ -971,18 +1100,9 @@ public class FormDataServiceImpl implements IFormDataService {
             StringBuilder dataSql = new StringBuilder("SELECT " + selectCols + " FROM `" + table + "` WHERE 1=1");
             List<Object> queryParams = new ArrayList<>();
 
-            // ① formmode 行级范围：非全量可见 → 仅本人创建（无 creator 列/无用户则 1=0 安全空结果）
+            // ① formmode 行级范围：非全量可见 → 本人创建 OR 单条共享给我的行
             if (!scope.isCanViewAll()) {
-                String creatorCol = tableCols.contains("modedatacreator") ? "modedatacreator"
-                    : (tableCols.contains("modedatacreater") ? "modedatacreater" : null);
-                if (creatorCol != null && scope.getCreatorId() != null) {
-                    countSql.append(" AND `").append(creatorCol).append("` = ?");
-                    dataSql.append(" AND `").append(creatorCol).append("` = ?");
-                    queryParams.add(scope.getCreatorId());
-                } else {
-                    countSql.append(" AND 1=0");
-                    dataSql.append(" AND 1=0");
-                }
+                appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
             }
 
             // ①-b 条件化授权：命中共享规则时行还需满足结构化条件
@@ -1037,6 +1157,10 @@ public class FormDataServiceImpl implements IFormDataService {
         String col = fieldName == null ? "" : fieldName.trim();
         if (!SAFE_COLUMN.matcher(col).matches()) {
             throw new ServiceException("字段名非法: " + fieldName);
+        }
+        // 字段权限：显式配置了且不可编辑 → 拒绝行内编辑（防越权写隐藏/只读字段）
+        if (loadNonEditableFields(formId).contains(col.toLowerCase())) {
+            throw new ServiceException("无权编辑该字段: " + fieldName);
         }
         String table = resolveMainTableName(formId);
         if (table == null) {
@@ -1362,6 +1486,51 @@ public class FormDataServiceImpl implements IFormDataService {
         }
     }
 
+    /**
+     * 加载当前用户「不可编辑」的字段名集合（小写 fieldName + dbName），供 saveBusinessData 裁剪。
+     *
+     * <p>无权限配置 / 查询失败 → 返回空集合（fail-open，保持流程场景兼容）；
+     * 管理员由 listFieldPerm 返回空 → 不裁剪。</p>
+     */
+    private Set<String> loadNonEditableFields(Long formId) {
+        Set<String> denied = new HashSet<>();
+        if (!fieldWritePermEnforce || formId == null) {
+            return denied;
+        }
+        try {
+            Long modeId = formRightService.resolveModeIdByFormId(formId);
+            if (modeId == null) {
+                return denied;
+            }
+            List<FieldPermVO> perms = formRightService.listFieldPerm(modeId);
+            if (perms == null || perms.isEmpty()) {
+                return denied;
+            }
+            Map<String, FieldPermVO> byName = new LinkedHashMap<>();
+            for (FieldPermVO p : perms) {
+                if (p != null && p.getFieldName() != null) {
+                    byName.put(p.getFieldName().toLowerCase(), p);
+                }
+            }
+            // 显式配置了权限且该字段不可编辑 → 拒绝写入；同时按 dbName 索引
+            List<WorkflowBillField> fields = workflowBillFieldMapper.selectByBillId(formId);
+            if (fields != null) {
+                for (WorkflowBillField f : fields) {
+                    if (f == null || f.getFieldname() == null) continue;
+                    FieldPermVO p = byName.get(f.getFieldname().toLowerCase());
+                    if (p != null && !Boolean.TRUE.equals(p.getEditable())) {
+                        denied.add(f.getFieldname().toLowerCase());
+                        if (f.getFielddbname() != null) denied.add(f.getFielddbname().toLowerCase());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 字段权限裁剪加载失败，按 fail-open 跳过. formId={}, err={}", formId, e.getMessage());
+            return new HashSet<>();
+        }
+        return denied;
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Long saveBusinessData(FormDataSaveDTO dto) {
@@ -1430,12 +1599,17 @@ public class FormDataServiceImpl implements IFormDataService {
             row.put("id", dataId);
         }
         Map<String, Object> fieldValues = dto.getFieldValues();
+        Set<String> nonEditable = loadNonEditableFields(dto.getFormId());
         if (fieldValues != null) {
             fieldValues.forEach((k, v) -> {
                 if (StringUtil.isBlank(k)) {
                     return;
                 }
                 String ck = k.toLowerCase();
+                // 字段权限：显式配置了且不可编辑 → 忽略客户端值（防越权写隐藏/只读字段）
+                if (nonEditable.contains(ck)) {
+                    return;
+                }
                 String col = columns.get(ck);
                 // 表里没这列 / 是系统列（由审计逻辑接管，不被业务值覆盖）→ 忽略
                 if (col == null || isSystemField(col)) {

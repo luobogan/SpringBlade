@@ -103,10 +103,14 @@ public interface IFormRightService {
      */
     boolean inDataScope(Long modeId, Long creatorIdOfRow, Long dataId);
 
+    /** 判断当前用户是否可编辑该行（创建人 / 共享级别>=2） */
+    boolean canEditDataRow(Long modeId, Long creatorIdOfRow, Long dataId);
+
     /**
      * 把某条数据行共享给主体（幂等：同一 mode+data+主体 已存在则更新级别）。
      */
-    boolean shareDataRow(Long modeId, Long dataId, Integer objtype, Long objid, Integer shareLevel);
+    boolean shareDataRow(Long modeId, Long dataId, Integer objtype, Long objid, Integer shareLevel,
+                         String conditionField, String matrixValueField);
 
     /** 取消某条数据行对某主体的共享 */
     boolean unshareDataRow(Long modeId, Long dataId, Integer objtype, Long objid);

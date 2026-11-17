@@ -35,7 +35,7 @@ public class ModeRightInfo implements Serializable {
     @Schema(description = "权限类型：1可见 2新建 3编辑 4删除 5详情 6导入 7导出")
     private Integer righttype;
 
-    @Schema(description = "授权对象类型：1角色 2部门 3岗位 4人员")
+    @Schema(description = "授权对象类型：1角色 2部门 3岗位 4人员 5分部")
     private Integer objtype;
 
     @Schema(description = "授权对象ID")

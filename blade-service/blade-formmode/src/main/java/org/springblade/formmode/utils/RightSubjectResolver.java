@@ -81,6 +81,38 @@ public class RightSubjectResolver {
     }
 
     /**
+     * 解析当前用户的分部 ID 集合（blade_dept.subcompany_id，按用户所属部门反查）。
+     *
+     * <p>对标 E9 rolelevel=1（分部级）授权主体；用户无部门 / 部门无分部时返回空集合。</p>
+     */
+    public Set<Long> resolveSubcompanyIds(Long userId) {
+        Set<Long> result = new java.util.LinkedHashSet<>();
+        if (userId == null) {
+            return result;
+        }
+        try {
+            List<String> deptCsvs = jdbcTemplate.queryForList(
+                "SELECT dept_id FROM blade_user WHERE id = ? AND is_deleted = 0", String.class, userId);
+            if (deptCsvs == null) return result;
+            for (String csv : deptCsvs) {
+                for (String d : StringUtil.isBlank(csv) ? new String[0] : csv.split(",")) {
+                    String t = d.trim();
+                    if (t.isEmpty()) continue;
+                    try {
+                        List<Long> subIds = jdbcTemplate.queryForList(
+                            "SELECT subcompany_id FROM blade_dept WHERE id = ? AND is_deleted = 0 AND subcompany_id IS NOT NULL",
+                            Long.class, Long.parseLong(t));
+                        if (subIds != null) result.addAll(subIds);
+                    } catch (NumberFormatException ignored) { }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 解析用户分部失败，按无分部处理. userId={}, err={}", userId, e.getMessage());
+        }
+        return result;
+    }
+
+    /**
      * 部门授权命中判定：精确匹配或（includesub=1 时）展开子孙部门。
      *
      * @param objId        授权的部门 ID

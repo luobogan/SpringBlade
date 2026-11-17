@@ -36,7 +36,7 @@ public class ModeDataShareRule implements Serializable {
     @Schema(description = "权限类型：1查看 2维护")
     private Integer type;
 
-    @Schema(description = "授权对象类型（已统一）：1角色 2部门 3岗位 4人员")
+    @Schema(description = "授权对象类型（已统一）：1角色 2部门 3岗位 4人员 5分部")
     private Integer objtype;
 
     @Schema(description = "授权对象ID（人员/部门/角色/岗位）")
@@ -59,6 +59,9 @@ public class ModeDataShareRule implements Serializable {
 
     /** 是否启用条件化授权：1是 0否（默认否，存量规则行为不变） */
     private Integer conditionEnabled;
+
+    /** 矩阵主体（objtype=7）结果字段名；conditionField 复用为业务条件字段名 */
+    private String matrixValueField;
 
     @Schema(description = "租户ID")
     private String tenantId;

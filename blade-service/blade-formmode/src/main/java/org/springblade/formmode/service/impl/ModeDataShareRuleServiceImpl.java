@@ -10,12 +10,16 @@ import org.springblade.core.tool.utils.Func;
 import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.mapper.ModeDataShareRuleMapper;
 import org.springblade.formmode.service.IDataScopeService;
+import org.springblade.formmode.utils.MatrixSubjectResolver;
 import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.DataScope;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -33,6 +37,8 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
 
     private final ModeDataShareRuleMapper mapper;
     private final RightSubjectResolver subjectResolver;
+    private final MatrixSubjectResolver matrixSubjectResolver;
+    private final JdbcTemplate jdbcTemplate;
 
     /** 查看权限类型（modedatasharerule.type=1） */
     private static final int TYPE_VIEW = 1;
@@ -47,6 +53,10 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
     private static final int OBJ_DEPT = 2;
     private static final int OBJ_JOB = 3;
     private static final int OBJ_PERSON = 4;
+    /** 分部主体（对标 E9 rolelevel=1；SB 扩展值，非 E9 原生编码） */
+    private static final int OBJ_SUBCOMPANY = 5;
+    /** 矩阵主体（SB 扩展值；数据范围层按「当前用户部门」为条件值解析，非行字段） */
+    private static final int OBJ_MATRIX = 7;
 
     /** 当前租户 ID（全局租户插件未生效，显式隔离；取不到回退默认租户） */
     private static String currentTenant() {
@@ -86,8 +96,13 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
         // 入参 deptId 仅作为兜底（Feign/单测无登录态时）。
         Set<Long> deptIdSet = currentDeptIds(deptId);
         Set<Long> jobIdSet = jobIds == null ? Set.of() : Set.copyOf(jobIds);
+        // 规则按 id 升序加载（见 listRules），命中多条时取第一条：与 E9「allow 并集」方向一致
+        // （任一规则命中即可见），但条件化授权只采用首条命中的条件——配置时应避免多条带条件的规则并存，
+        // 否则后续规则的条件不生效。这是刻意简化：多条件 OR/AND 组合语义需业务确认后再扩展。
         for (ModeDataShareRule r : rules) {
-            if (matchRule(r, userId, deptIdSet, roleIds, jobIdSet, subjectResolver)) {
+            boolean matrixHit = Integer.valueOf(OBJ_MATRIX).equals(r.getObjtype())
+                && matrixRuleHit(r, userId, deptIdSet);
+            if (matrixHit || matchRule(r, userId, deptIdSet, roleIds, jobIdSet, subjectResolver)) {
                 // creatorSelf=1：即便命中共享规则也强制「仅本人创建」
                 if (Integer.valueOf(1).equals(r.getCreatorSelf())) {
                     scope.setCanViewAll(false);
@@ -147,6 +162,9 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
                 return roleIds != null && roleIds.contains(objId);
             case OBJ_JOB:
                 return jobIds != null && jobIds.contains(objId);
+            case OBJ_SUBCOMPANY:
+                return resolver != null && userId != null
+                    && resolver.resolveSubcompanyIds(userId).contains(objId);
             default:
                 return false;
         }
@@ -167,6 +185,33 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
             return Set.of(fallbackDeptId);
         }
         return ids;
+    }
+
+    /**
+     * 数据范围层的矩阵主体判定（静态口径）。
+     *
+     * <p>数据范围规则是模块级、无 dataId 行上下文，故用「当前用户所属部门 ID」作为条件值
+     * 构造虚拟行，按 conditionField 作为 key 交给矩阵解析器。真正的「按数据行字段值解析」
+     * 在单条共享（modedatashare_single, objtype=7）中实现。</p>
+     */
+    private boolean matrixRuleHit(ModeDataShareRule r, Long userId, Set<Long> deptIdSet) {
+        if (r.getObjid() == null || r.getConditionField() == null || r.getConditionField().isBlank()
+            || deptIdSet == null || deptIdSet.isEmpty()) {
+            return false;
+        }
+        try {
+            for (Long deptId : deptIdSet) {
+                Map<String, Object> virtualRow = new HashMap<>();
+                virtualRow.put(r.getConditionField().trim().toLowerCase(), deptId);
+                if (matrixSubjectResolver.matches(r.getObjid(), r.getConditionField(),
+                    r.getMatrixValueField(), virtualRow, userId)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 数据范围矩阵判定失败，按无权限. ruleId={}, err={}", r.getId(), e.getMessage());
+        }
+        return false;
     }
 
     @Override
