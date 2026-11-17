@@ -89,9 +89,9 @@ class WfNextNodesPermissionTest {
         try (MockedStatic<WfAuthUtil> auth = mockStatic(WfAuthUtil.class)) {
             NextNodesVO vo = controller.nextNodes(300L).getData();
             assertThat(vo.getFreeFlow()).isTrue();
-            assertThat(vo.getNodes()).hasSize(1);
+            assertThat(vo.getNodes()).hasSize(2);
             assertThat(vo.getNodes()).extracting("nodeKey")
-                .containsExactly("Free_3");
+                .containsExactly("Free_1", "Free_3");
             assertThat(vo.getNodes()).allSatisfy(n -> {
                 assertThat(n.getSelectable()).isTrue();
                 assertThat(n.getAllowedUserIds()).isEmpty();
@@ -101,7 +101,7 @@ class WfNextNodesPermissionTest {
 
     @Test
     void candidatesAreServerGeneratedNotClientSupplied() {
-        // 接口签名只有 taskId，前端无法传入自定义节点 key；候选恒为 Free_2..Free_N（Free_1 永不用于步骤）。
+        // 接口签名只有 taskId，前端无法传入自定义节点 key；候选恒为 Free_1..Free_N。
         when(bizResolver.resolve(300L)).thenReturn(task("Free_1"));
         givenInstance(1);
         when(manager.poolSize(200L)).thenReturn(2);
