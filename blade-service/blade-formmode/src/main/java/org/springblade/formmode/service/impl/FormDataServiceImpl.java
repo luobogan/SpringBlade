@@ -30,6 +30,7 @@ import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
 import org.springblade.formmode.vo.FormDataVO;
 import org.springblade.system.datascope.DataScopeValueResolver;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -67,6 +68,15 @@ public class FormDataServiceImpl implements IFormDataService {
     private final IFormRightService formRightService;
     private final IFormLayoutService formLayoutService;
     private final JdbcTemplate jdbcTemplate;
+
+    /**
+     * 行级「写」权限校验开关（编辑/删除他人创建的数据）。
+     *
+     * <p>对齐 E9：创建人对自己创建的数据有完全控制权；命中共享规则（canViewAll）可改删全部。
+     * 默认开启；若历史流程场景需要「审批人代改他人数据」，可配置为 false 关闭本校验。</p>
+     */
+    @Value("${blade.formmode.row-write-scope.enforce:true}")
+    private boolean rowWriteScopeEnforce;
 
     /**
      * 按表单布局重算公式，返回「目标字段 → 计算结果」。
@@ -137,6 +147,8 @@ public class FormDataServiceImpl implements IFormDataService {
 
         // 删除操作
         if ("del".equals(src) && formDataDTO.getDataid() != null) {
+            // 行级写权限：仅本人创建 / 命中共享规则可删除
+            assertRowWriteScope(mainTableName, formDataDTO.getModeid(), formDataDTO.getDataid());
             Long deletedId = TableNameContextHolder.executeWithTableName(mainTableName, () -> {
                 String deleteSql = "DELETE FROM `" + mainTableName + "` WHERE id = ?";
                 jdbcTemplate.update(deleteSql, formDataDTO.getDataid());
@@ -306,6 +318,8 @@ public class FormDataServiceImpl implements IFormDataService {
                 String insertSql = "INSERT INTO `" + mainTableName + "` (" + columns + ") VALUES (" + placeholders + ")";
                 jdbcTemplate.update(insertSql, values.toArray());
             } else {
+                // 行级写权限：仅本人创建 / 命中共享规则可编辑
+                assertRowWriteScope(mainTableName, formDataDTO.getModeid(), finalDataId);
                 // 构建UPDATE语句（审计列只写目标表存在的，命名兼容同上）
                 StringBuilder updateSql = new StringBuilder("UPDATE `" + mainTableName + "` SET ");
                 List<String> setParts = new ArrayList<>();
@@ -392,6 +406,157 @@ public class FormDataServiceImpl implements IFormDataService {
             return ((Number) v).longValue();
         }
         return null;
+    }
+
+    /**
+     * 行级「写」权限校验（编辑/删除他人创建的数据）。
+     *
+     * <p>对齐 E9：创建人对本人数据有完全控制权；命中共享规则（canViewAll）可改删全部。
+     * 仅当目标表存在创建人列时校验 —— 无 creator 列的历史表无法判定归属，跳过以免阻断。</p>
+     *
+     * @throws ServiceException 当前用户不在该行的数据范围内
+     */
+    private void assertRowWriteScope(String tableName, Long formId, Long dataId) {
+        if (!rowWriteScopeEnforce || dataId == null || formId == null) {
+            return;
+        }
+        try {
+            Map<String, BizValueCoercer.ColumnMeta> colMeta = BizValueCoercer.loadColumnMeta(jdbcTemplate, tableName);
+            String creatorCol = colMeta.containsKey("modedatacreator") ? "modedatacreator"
+                : (colMeta.containsKey("modedatacreater") ? "modedatacreater" : null);
+            if (creatorCol == null) {
+                return; // 无创建人列：无法判定归属，跳过（不阻断历史表）
+            }
+            List<Object> creatorVals = jdbcTemplate.queryForList(
+                "SELECT `" + creatorCol + "` FROM `" + tableName + "` WHERE id = ?", Object.class, dataId);
+            if (creatorVals == null || creatorVals.isEmpty() || creatorVals.get(0) == null) {
+                return; // 空创建人：无法判定，跳过
+            }
+            Object cv = creatorVals.get(0);
+            Long creatorId = (cv instanceof Number) ? ((Number) cv).longValue() : null;
+            if (creatorId == null) {
+                return;
+            }
+            Long realModeId = formRightService.resolveModeIdByFormId(formId);
+            if (realModeId == null) {
+                realModeId = formId;
+            }
+            if (!formRightService.inDataScope(realModeId, creatorId, dataId)) {
+                throw new ServiceException("无权操作他人创建的数据");
+            }
+        } catch (ServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            // 校验链路异常：fail-open 放行（不因权限组件故障阻断写入），但留存告警
+            log.warn("[formmode] 行级写权限校验异常，按放行处理. formId={}, dataId={}, err={}",
+                formId, dataId, e.getMessage());
+        }
+    }
+
+    /**
+     * 条件化授权：把结构化行条件安全拼入 SQL（字段名白名单 + 操作符枚举 + 值参数化）。
+     *
+     * <p>任一校验不通过一律追加 {@code AND 1=0}（fail-closed），绝不拼接未校验的字段/值。</p>
+     *
+     * @return true 表示成功追加条件
+     */
+    private boolean appendRowCondition(DataScope scope, Set<String> tableCols,
+                                       StringBuilder countSql, StringBuilder dataSql, List<Object> params) {
+        DataScope.RowCondition cond = scope == null ? null : scope.getRowCondition();
+        if (cond == null || cond.getField() == null || cond.getOp() == null || cond.getValue() == null) {
+            return false;
+        }
+        String field = cond.getField().trim().toLowerCase();
+        String op = cond.getOp().trim().toLowerCase();
+        String value = cond.getValue();
+        // 字段名白名单：必须匹配安全列名且为目标表真实存在的列
+        if (!SAFE_COLUMN.matcher(field).matches() || !tableCols.contains(field)) {
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
+            log.warn("[formmode] 条件化授权字段名非法，拒绝. field={}", cond.getField());
+            return true;
+        }
+        String col = "`" + field + "`";
+        switch (op) {
+            case "eq": case "ne": case "gt": case "ge": case "lt": case "le": case "like":
+                String sqlOp = switch (op) {
+                    case "eq" -> "="; case "ne" -> "<>"; case "gt" -> ">";
+                    case "ge" -> ">="; case "lt" -> "<"; case "le" -> "<=";
+                    default -> "LIKE";
+                };
+                countSql.append(" AND ").append(col).append(" ").append(sqlOp).append(" ?");
+                dataSql.append(" AND ").append(col).append(" ").append(sqlOp).append(" ?");
+                params.add("like".equals(op) ? "%" + value + "%" : value);
+                return true;
+            case "in":
+                String[] parts = value.split(",");
+                List<String> clean = new ArrayList<>();
+                for (String p : parts) {
+                    String t = p == null ? "" : p.trim();
+                    if (!t.isEmpty()) clean.add(t);
+                }
+                if (clean.isEmpty()) {
+                    countSql.append(" AND 1=0");
+                    dataSql.append(" AND 1=0");
+                    return true;
+                }
+                String marks = String.join(",", java.util.Collections.nCopies(clean.size(), "?"));
+                countSql.append(" AND ").append(col).append(" IN (").append(marks).append(")");
+                dataSql.append(" AND ").append(col).append(" IN (").append(marks).append(")");
+                params.addAll(clean);
+                return true;
+            default:
+                countSql.append(" AND 1=0");
+                dataSql.append(" AND 1=0");
+                log.warn("[formmode] 条件化授权操作符非法，拒绝. op={}", op);
+                return true;
+        }
+    }
+
+    /**
+     * 条件化授权：判断单行是否满足结构化条件（供单条详情读取用，与 SQL 过滤同口径）。
+     *
+     * <p>字段不存在 / 操作符非法 / 值无法转换 → 视为不满足（fail-closed）。</p>
+     */
+    private boolean matchesRowCondition(DataScope scope, Map<String, Object> row) {
+        DataScope.RowCondition cond = scope == null ? null : scope.getRowCondition();
+        if (cond == null || cond.getField() == null || cond.getOp() == null || cond.getValue() == null) {
+            return true; // 无条件 → 放行
+        }
+        String field = cond.getField().trim().toLowerCase();
+        String op = cond.getOp().trim().toLowerCase();
+        Object actual = row.get(field);
+        if (actual == null) {
+            return false;
+        }
+        try {
+            String av = String.valueOf(actual);
+            String cv = cond.getValue();
+            int cmp = compareNumeric(av, cv);
+            return switch (op) {
+                case "eq" -> av.equals(cv) || cmp == 0;
+                case "ne" -> !av.equals(cv) && cmp != 0;
+                case "gt" -> cmp > 0;
+                case "ge" -> cmp >= 0;
+                case "lt" -> cmp < 0;
+                case "le" -> cmp <= 0;
+                case "like" -> av.contains(cv.replace("%", ""));
+                case "in" -> java.util.Arrays.stream(cv.split(","))
+                    .map(String::trim).anyMatch(av::equals);
+                default -> false;
+            };
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 数值比较（两边都能转 double 时返回比较结果，否则返回 Integer.MIN_VALUE 表示不可比） */
+    private static int compareNumeric(String a, String b) {
+        try {
+            return Double.compare(Double.parseDouble(a.trim()), Double.parseDouble(b.trim()));
+        } catch (NumberFormatException e) {
+            return Integer.MIN_VALUE;
+        }
     }
 
     /**
@@ -654,6 +819,10 @@ public class FormDataServiceImpl implements IFormDataService {
                     return null;
                 }
             }
+            // 条件化授权：单行必须满足条件（与列表过滤同口径）
+            if (!matchesRowCondition(scope, row)) {
+                return null;
+            }
             FormDataVO vo = new FormDataVO();
             vo.setId(dataId);
             vo.setModeid(formId);
@@ -719,6 +888,8 @@ public class FormDataServiceImpl implements IFormDataService {
                     dataSql.append(" AND 1=0");
                 }
             }
+            // 条件化授权：命中共享规则时行还需满足结构化条件（与 creator 过滤 AND 叠加）
+            appendRowCondition(scope, tableCols, countSql, dataSql, queryParams);
 
             // 添加查询条件
             if (params != null) {
@@ -814,6 +985,9 @@ public class FormDataServiceImpl implements IFormDataService {
                 }
             }
 
+            // ①-b 条件化授权：命中共享规则时行还需满足结构化条件
+            appendRowCondition(scope, tableCols, countSql, dataSql, queryParams);
+
             // ② 数据权限规则行级过滤（blade_scope_data）
             applyScopeRuleFilter(rule, tableCols, countSql, dataSql);
 
@@ -893,6 +1067,9 @@ public class FormDataServiceImpl implements IFormDataService {
             appendAuditSet(setParts, setValues, tableCols, new String[]{"lastModDate"}, LocalDate.now().toString());
             appendAuditSet(setParts, setValues, tableCols, new String[]{"lastModTime"},
                 LocalTime.now().toString().substring(0, 8));
+
+            // 行级写权限：仅本人创建 / 命中共享规则可编辑
+            assertRowWriteScope(table, formId, dataId);
 
             String sql = "UPDATE `" + table + "` SET " + String.join(",", setParts) + " WHERE id=?";
             setValues.add(dataId);
@@ -1089,6 +1266,8 @@ public class FormDataServiceImpl implements IFormDataService {
         if (cnt == null || cnt == 0) {
             return false;
         }
+        // 行级写权限：仅本人创建 / 命中共享规则可删除
+        assertRowWriteScope(tableName, formId, dataId);
         jdbcTemplate.update("DELETE FROM `" + tableName + "` WHERE id = ?", dataId);
         log.info("[formmode] 业务数据已删除. formId={}, table={}, dataId={}", formId, tableName, dataId);
         return true;
@@ -1304,6 +1483,8 @@ public class FormDataServiceImpl implements IFormDataService {
             jdbcTemplate.update("INSERT INTO `" + tableName + "` (" + colSql + ") VALUES (" + markSql + ")",
                 row.values().toArray());
         } else {
+            // 行级写权限：仅本人创建 / 命中共享规则可编辑（新建分支无需校验）
+            assertRowWriteScope(tableName, dto.getFormId(), dataId);
             String setSql = row.keySet().stream().map(c -> "`" + c + "`=?").collect(Collectors.joining(","));
             List<Object> args = new ArrayList<>(row.values());
             args.add(dataId);

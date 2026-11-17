@@ -78,4 +78,10 @@ public class IFormmodeClientFallback implements IFormmodeClient {
         return R.data(new java.util.ArrayList<>());
     }
 
+    @Override
+    public R<List<FieldPermVO>> listFieldPermByForm(Long formId) {
+        // 降级同 listFieldPerm：建模权限不可用时视为「未配置」，保留流程侧节点权限（fail-open）
+        return R.data(new java.util.ArrayList<>());
+    }
+
 }

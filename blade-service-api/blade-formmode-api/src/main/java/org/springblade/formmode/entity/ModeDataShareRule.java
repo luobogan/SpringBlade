@@ -48,6 +48,18 @@ public class ModeDataShareRule implements Serializable {
     @Schema(description = "附加：仅本人创建的数据可见（与共享叠加）：1是 0否")
     private Integer creatorSelf;
 
+    /** 条件化授权字段（workflow_billfield.fielddbname，运行时按白名单校验，禁止任意 SQL 片段） */
+    private String conditionField;
+
+    /** 条件操作符：eq/ne/gt/ge/lt/le/like/in（小写） */
+    private String conditionOp;
+
+    /** 条件值（in 用英文逗号分隔；运行时参数化拼接，不直接入 SQL） */
+    private String conditionValue;
+
+    /** 是否启用条件化授权：1是 0否（默认否，存量规则行为不变） */
+    private Integer conditionEnabled;
+
     @Schema(description = "租户ID")
     private String tenantId;
 

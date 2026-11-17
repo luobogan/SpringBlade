@@ -107,6 +107,50 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
     @Autowired
     private WfRetirementProperties retirement = new WfRetirementProperties();
 
+    /**
+     * 按「字段权限优先级链」合流建模侧字段权限：wf_node_field_perm（流程侧）> modefieldauthorize（建模侧）。
+     *
+     * <p>流程侧已定义的字段（scope|fieldName）直接采用；流程侧未定义的字段才回退建模侧。
+     * Feign 不可用 / 返回空视为建模侧「未配置」（fail-open），保留流程侧权限原样。
+     * 建模侧 VO 转为 workflow VO，required 恒 null（不覆盖流程侧必填）。</p>
+     *
+     * @param formId 表单ID（workflow_bill.id；与 modeId 不同源，走 by-form 端点）
+     * @param wfPerms 流程侧节点字段权限
+     */
+    private List<FieldPermVO> mergeFieldPermsWithFormmode(Long formId, List<FieldPermVO> wfPerms) {
+        List<FieldPermVO> result = (wfPerms == null) ? new ArrayList<>() : new ArrayList<>(wfPerms);
+        if (formId == null) {
+            return result;
+        }
+        try {
+            R<List<org.springblade.formmode.vo.FieldPermVO>> r = formmodeClient.listFieldPermByForm(formId);
+            if (r == null || !r.isSuccess() || r.getData() == null || r.getData().isEmpty()) {
+                return result;
+            }
+            // key = scope|fieldName，先放建模侧，再用流程侧覆盖（节点级优先）
+            Map<String, FieldPermVO> merged = new LinkedHashMap<>();
+            for (org.springblade.formmode.vo.FieldPermVO fp : r.getData()) {
+                if (fp == null || fp.getFieldName() == null) {
+                    continue;
+                }
+                String key = (fp.getScope() == null ? "main" : fp.getScope()) + "|" + fp.getFieldName();
+                merged.put(key, new FieldPermVO(
+                    fp.getScope(), fp.getFieldName(), fp.getVisible(), fp.getEditable(), null));
+            }
+            for (FieldPermVO w : result) {
+                if (w == null || w.getFieldName() == null) {
+                    continue;
+                }
+                String key = (w.getScope() == null ? "main" : w.getScope()) + "|" + w.getFieldName();
+                merged.put(key, w);
+            }
+            result = new ArrayList<>(merged.values());
+        } catch (Exception e) {
+            log.warn("[workflow] 建模字段权限合流失败，保留流程侧权限. formId={}, err={}", formId, e.getMessage());
+        }
+        return result;
+    }
+
     @Override
     public FormRenderVO render(Long instanceId, Long taskId, String nodeKeyParam, boolean testMode) {
         WfInstance inst = actLogReader.actRead()
@@ -171,7 +215,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
         vo.setFormId(inst.getFormId());
         vo.setDataId(inst.getDataId());
         vo.setInstanceStatus(inst.getStatus());
-        vo.setFieldPerms(permService.getFieldPerm(inst.getDefId(), nodeKey));
+        vo.setFieldPerms(mergeFieldPermsWithFormmode(inst.getFormId(), permService.getFieldPerm(inst.getDefId(), nodeKey)));
         vo.setDetailPerms(permService.getDetailPerm(inst.getDefId(), nodeKey));
         vo.setDetailFilters(permService.getDetailFilter(inst.getDefId(), nodeKey, 1));
         vo.setReadonly(!canOperate(task));
@@ -295,7 +339,7 @@ public class WfFormRenderServiceImpl implements IWfFormRenderService {
             fillSignOpinion(vo, node);
             vo.setPrintSet(WfNodeSettingsUtil.printSet(node));
             vo.setOpinionDisplay(WfNodeSettingsUtil.opinionDisplay(node));
-            vo.setFieldPerms(permService.getFieldPerm(defId, nodeKey));
+            vo.setFieldPerms(mergeFieldPermsWithFormmode(formId, permService.getFieldPerm(defId, nodeKey)));
             vo.setDetailPerms(permService.getDetailPerm(defId, nodeKey));
             vo.setDetailFilters(permService.getDetailFilter(defId, nodeKey, 1));
         }

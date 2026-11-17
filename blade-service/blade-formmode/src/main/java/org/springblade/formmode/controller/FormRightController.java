@@ -7,6 +7,7 @@ import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.formmode.dto.ModeRightBatchDTO;
 import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
 import org.springblade.formmode.entity.ModeRightInfo;
@@ -131,6 +132,48 @@ public class FormRightController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Boolean> saveModeDataScopes(@PathVariable Long modeId, @RequestBody List<ModeDataShareRule> rules) {
         return R.data(dataScopeService.saveRules(modeId, rules), "数据范围保存成功");
+    }
+
+    /**
+     * 一次性保存模块权限 + 字段权限 + 数据范围（三表同一事务）。
+     *
+     * <p>替代前端此前 Promise.all 并发调三个独立接口的做法，避免跨表不一致中间态。</p>
+     */
+    @PostMapping("/all/{modeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> saveAll(@PathVariable Long modeId, @RequestBody ModeRightBatchDTO batch) {
+        return R.data(formRightService.saveAll(modeId, batch), "权限配置已保存");
+    }
+
+    /** 读取权限配置当前版本号（乐观锁；前端加载时取得，保存时带回） */
+    @GetMapping("/version/{modeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> rightVersion(@PathVariable Long modeId) {
+        return R.data(formRightService.getRightVersion(modeId));
+    }
+
+    /** 把某条业务数据行共享给主体（对标 E9 单条分享） */
+    @PostMapping("/share/{modeId}/{dataId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> shareDataRow(@PathVariable Long modeId, @PathVariable Long dataId,
+                                   @RequestParam Integer objtype, @RequestParam Long objid,
+                                   @RequestParam(defaultValue = "1") Integer shareLevel) {
+        return R.data(formRightService.shareDataRow(modeId, dataId, objtype, objid, shareLevel));
+    }
+
+    /** 取消某条数据行的主体共享 */
+    @PostMapping("/unshare/{modeId}/{dataId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> unshareDataRow(@PathVariable Long modeId, @PathVariable Long dataId,
+                                     @RequestParam Integer objtype, @RequestParam Long objid) {
+        return R.data(formRightService.unshareDataRow(modeId, dataId, objtype, objid));
+    }
+
+    /** 查询某条数据行的共享授权列表 */
+    @GetMapping("/share/{modeId}/{dataId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<?> listDataShares(@PathVariable Long modeId, @PathVariable Long dataId) {
+        return R.data(formRightService.listDataShares(modeId, dataId));
     }
 
     /**

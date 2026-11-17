@@ -41,8 +41,14 @@ public class FieldPermVO implements Serializable {
     /** perm 兼容列取值：必填 */
     public static final int PERM_REQUIRED = 3;
 
-    /** 作用域。非流程场景固定 {@code main}（modefieldauthorize 无 scope 概念） */
-    @Schema(description = "作用域：main（非流程场景无明细行级 scope，固定 main）")
+    /**
+     * 作用域：主表字段为 {@code main}，明细表字段为 {@code dt{idx}}（idx 从 1 起算）。
+     *
+     * <p>scope 由 {@code workflow_billfield.ismain/detailtable} 在读取时派生（modefieldauthorize
+     * 表本身无 scope 列），与 workflow 侧同名字段及 ExcelPreviewPage 的回退链
+     * （dt{idx}_r{row} → dt{idx} → main）语义一致。</p>
+     */
+    @Schema(description = "作用域：main | dt{idx}（明细表索引，1 起算）")
     private String scope;
 
     /** 字段名（与 data-excelp-field / formData 的 key 对齐，前端据此定位控件） */

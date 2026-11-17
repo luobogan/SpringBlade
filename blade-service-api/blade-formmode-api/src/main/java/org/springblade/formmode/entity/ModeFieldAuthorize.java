@@ -41,6 +41,9 @@ public class ModeFieldAuthorize implements Serializable {
     @Schema(description = "授权对象ID")
     private Integer objid;
 
+    @Schema(description = "授权部门是否含子部门：1是 0否（默认否）")
+    private Integer includesub;
+
     @Schema(description = "权限：1可见 2可编辑")
     private Integer rightvalue;
 

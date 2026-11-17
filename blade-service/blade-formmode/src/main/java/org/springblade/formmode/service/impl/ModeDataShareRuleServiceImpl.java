@@ -3,18 +3,28 @@ package org.springblade.formmode.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springblade.core.secure.BladeUser;
+import org.springblade.core.secure.utils.AuthUtil;
+import org.springblade.core.secure.utils.SecureUtil;
+import org.springblade.core.tool.utils.Func;
 import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.mapper.ModeDataShareRuleMapper;
 import org.springblade.formmode.service.IDataScopeService;
+import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.DataScope;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 行级数据范围解析实现（对标 ecology modedatasharerule，精简子集）。
+ *
+ * <p>2026-11-17 补齐：① 管理员全量豁免；② 部门 includeSub 子部门展开；
+ * ③ 岗位 objtype=3 解析（此前 jobIds 虽传入但仅在精确匹配分支使用，现完整支持）；
+ * ④ creatorSelf 语义（共享规则命中时仍可强制「仅本人创建」）。</p>
  */
 @Slf4j
 @Service
@@ -22,6 +32,7 @@ import java.util.Objects;
 public class ModeDataShareRuleServiceImpl implements IDataScopeService {
 
     private final ModeDataShareRuleMapper mapper;
+    private final RightSubjectResolver subjectResolver;
 
     /** 查看权限类型（modedatasharerule.type=1） */
     private static final int TYPE_VIEW = 1;
@@ -37,6 +48,11 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
     private static final int OBJ_JOB = 3;
     private static final int OBJ_PERSON = 4;
 
+    /** 当前租户 ID（全局租户插件未生效，显式隔离；取不到回退默认租户） */
+    private static String currentTenant() {
+        return Func.toStr(SecureUtil.getTenantId(), "000000");
+    }
+
     @Override
     public DataScope resolve(Long modeId, Long userId, Long deptId, List<Long> roleIds, List<Long> jobIds) {
         DataScope scope = new DataScope();
@@ -46,19 +62,50 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
             // 防御：无模块/用户 → 仅 creator 自阅（creatorId 可能为 null，则实际全不可见）
             return scope;
         }
+
+        // 管理员豁免：可见全部数据（与 checkRight / DataScopeValueResolver 同源）
+        BladeUser user = AuthUtil.getUser();
+        if (subjectResolver.isAdmin(user)) {
+            scope.setCanViewAll(true);
+            return scope;
+        }
+
         List<ModeDataShareRule> rules;
         try {
+            String tenant = currentTenant();
             rules = mapper.selectList(new LambdaQueryWrapper<ModeDataShareRule>()
                 .eq(ModeDataShareRule::getModeid, modeId)
-                .eq(ModeDataShareRule::getType, TYPE_VIEW));
+                .eq(ModeDataShareRule::getType, TYPE_VIEW)
+                .and(w -> w.eq(ModeDataShareRule::getTenantId, tenant).or().isNull(ModeDataShareRule::getTenantId)));
         } catch (Exception e) {
-            log.warn("[formmode] 数据范围规则加载失败，按 fail-open 仅 creator 自阅. modeId={}, err={}",
+            log.warn("[formmode] 数据范围规则加载失败，按仅 creator 自阅兜底. modeId={}, err={}",
                 modeId, e.getMessage());
             return scope;
         }
+        // 部门集合：优先用当前登录用户的全部部门（支持多人多部门 + includeSub 展开），
+        // 入参 deptId 仅作为兜底（Feign/单测无登录态时）。
+        Set<Long> deptIdSet = currentDeptIds(deptId);
+        Set<Long> jobIdSet = jobIds == null ? Set.of() : Set.copyOf(jobIds);
         for (ModeDataShareRule r : rules) {
-            if (matchRule(r, userId, deptId, roleIds, jobIds)) {
-                scope.setCanViewAll(true);
+            if (matchRule(r, userId, deptIdSet, roleIds, jobIdSet, subjectResolver)) {
+                // creatorSelf=1：即便命中共享规则也强制「仅本人创建」
+                if (Integer.valueOf(1).equals(r.getCreatorSelf())) {
+                    scope.setCanViewAll(false);
+                    scope.setCreatorId(userId);
+                } else {
+                    scope.setCanViewAll(true);
+                }
+                // 条件化授权：命中主体规则后，行还需满足结构化条件（字段/操作/值齐全才生效）
+                if (Integer.valueOf(1).equals(r.getConditionEnabled())
+                    && r.getConditionField() != null && !r.getConditionField().isBlank()
+                    && r.getConditionOp() != null && !r.getConditionOp().isBlank()
+                    && r.getConditionValue() != null) {
+                    DataScope.RowCondition cond = new DataScope.RowCondition();
+                    cond.setField(r.getConditionField());
+                    cond.setOp(r.getConditionOp());
+                    cond.setValue(r.getConditionValue());
+                    scope.setRowCondition(cond);
+                }
                 return scope;
             }
         }
@@ -76,12 +123,14 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
     }
 
     /**
-     * 单条规则是否命中（纯函数，便于单测）。
+     * 单条规则是否命中（纯函数 + 可注入的子部门解析器，便于单测）。
      *
-     * <p>部门/角色的「含子级」展开需部门树/角色层级，本项目暂按精确匹配（include_sub 留作后续增强）。</p>
+     * @param deptIds   当前用户部门集合（单部门场景为单元素集合）
+     * @param jobIds    当前用户岗位集合
+     * @param resolver  子部门解析器；为 null 时 includeSub 不展开（兼容旧调用/单测）
      */
-    public static boolean matchRule(ModeDataShareRule r, Long userId, Long deptId,
-                                    List<Long> roleIds, List<Long> jobIds) {
+    public static boolean matchRule(ModeDataShareRule r, Long userId, Set<Long> deptIds,
+                                    List<Long> roleIds, Set<Long> jobIds, RightSubjectResolver resolver) {
         if (r == null || r.getObjtype() == null || r.getObjid() == null) {
             return false;
         }
@@ -90,52 +139,78 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
             case OBJ_PERSON:
                 return Objects.equals(objId, userId);
             case OBJ_DEPT:
-                return Objects.equals(objId, deptId);
+                if (resolver != null) {
+                    return resolver.matchDept(objId, deptIds, r.getIncludeSub());
+                }
+                return deptIds != null && deptIds.contains(objId);
             case OBJ_ROLE:
                 return roleIds != null && roleIds.contains(objId);
             case OBJ_JOB:
                 return jobIds != null && jobIds.contains(objId);
             default:
                 return false;
-            }
-            }
+        }
+    }
 
-            @Override
-            public List<ModeDataShareRule> listRules(Long modeId) {
-            if (modeId == null) {
-                return new ArrayList<>();
-            }
-            try {
-                return mapper.selectList(new LambdaQueryWrapper<ModeDataShareRule>()
-                    .eq(ModeDataShareRule::getModeid, modeId)
-                    .orderByAsc(ModeDataShareRule::getId));
-            } catch (Exception e) {
-                log.warn("[formmode] 查询数据范围规则失败. modeId={}, err={}", modeId, e.getMessage());
-                return new ArrayList<>();
-            }
-            }
+    /** 兼容旧签名（无子部门展开），供既有单测调用 */
+    public static boolean matchRule(ModeDataShareRule r, Long userId, Long deptId,
+                                    List<Long> roleIds, List<Long> jobIds) {
+        return matchRule(r, userId, deptId == null ? Set.of() : Set.of(deptId),
+            roleIds, jobIds == null ? Set.of() : Set.copyOf(jobIds), null);
+    }
 
-            @Override
-            public boolean saveRules(Long modeId, List<ModeDataShareRule> rules) {
-            if (modeId == null) {
-                return false;
-            }
-            try {
-                mapper.delete(new LambdaQueryWrapper<ModeDataShareRule>().eq(ModeDataShareRule::getModeid, modeId));
-                if (rules != null) {
-                    for (ModeDataShareRule r : rules) {
-                        if (r == null) {
-                            continue;
-                        }
-                        r.setModeid(modeId);
-                        r.setId(null); // 由 @TableId(ASSIGN_ID) 重新生成，避免主键冲突
-                        mapper.insert(r);
+    /** 当前登录用户的全部部门 ID；无登录态时回退到入参 deptId */
+    private Set<Long> currentDeptIds(Long fallbackDeptId) {
+        BladeUser user = AuthUtil.getUser();
+        Set<Long> ids = user == null ? Set.of() : RightSubjectResolver.parseIds(user.getDeptId());
+        if (ids.isEmpty() && fallbackDeptId != null) {
+            return Set.of(fallbackDeptId);
+        }
+        return ids;
+    }
+
+    @Override
+    public List<ModeDataShareRule> listRules(Long modeId) {
+        if (modeId == null) {
+            return new ArrayList<>();
+        }
+        try {
+            String tenant = currentTenant();
+            return mapper.selectList(new LambdaQueryWrapper<ModeDataShareRule>()
+                .eq(ModeDataShareRule::getModeid, modeId)
+                .and(w -> w.eq(ModeDataShareRule::getTenantId, tenant).or().isNull(ModeDataShareRule::getTenantId))
+                .orderByAsc(ModeDataShareRule::getId));
+        } catch (Exception e) {
+            log.warn("[formmode] 查询数据范围规则失败. modeId={}, err={}", modeId, e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    @Override
+    public boolean saveRules(Long modeId, List<ModeDataShareRule> rules) {
+        if (modeId == null) {
+            return false;
+        }
+        try {
+            String tenant = currentTenant();
+            mapper.delete(new LambdaQueryWrapper<ModeDataShareRule>()
+                .eq(ModeDataShareRule::getModeid, modeId)
+                .eq(ModeDataShareRule::getTenantId, tenant));
+            if (rules != null) {
+                for (ModeDataShareRule r : rules) {
+                    if (r == null) {
+                        continue;
                     }
+                    r.setModeid(modeId);
+                    r.setTenantId(tenant); // 服务端强制写入当前租户，忽略前端传入
+                    r.setId(null); // 由 @TableId(ASSIGN_ID) 重新生成，避免主键冲突
+                    mapper.insert(r);
                 }
-                return true;
-            } catch (Exception e) {
-                log.warn("[formmode] 保存数据范围规则失败. modeId={}, err={}", modeId, e.getMessage());
-                return false;
             }
-            }
-            }
+            return true;
+        } catch (Exception e) {
+            log.warn("[formmode] 保存数据范围规则失败. modeId={}, err={}", modeId, e.getMessage());
+            return false;
+        }
+    }
+}

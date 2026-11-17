@@ -1,5 +1,6 @@
 package org.springblade.formmode.service;
 
+import org.springblade.formmode.dto.ModeRightBatchDTO;
 import org.springblade.formmode.entity.ModeRightInfo;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
 import org.springblade.formmode.vo.DataScope;
@@ -92,5 +93,38 @@ public interface IFormRightService {
      * @param creatorIdOfRow 该数据行的创建人ID
      */
     boolean inDataScope(Long modeId, Long creatorIdOfRow);
+
+    /**
+     * 判断某行数据是否在用户数据范围内（含单条共享）。
+     *
+     * @param modeId         模块ID
+     * @param creatorIdOfRow 该数据行的创建人ID
+     * @param dataId         该数据行ID（用于单条共享判定，可 null）
+     */
+    boolean inDataScope(Long modeId, Long creatorIdOfRow, Long dataId);
+
+    /**
+     * 把某条数据行共享给主体（幂等：同一 mode+data+主体 已存在则更新级别）。
+     */
+    boolean shareDataRow(Long modeId, Long dataId, Integer objtype, Long objid, Integer shareLevel);
+
+    /** 取消某条数据行对某主体的共享 */
+    boolean unshareDataRow(Long modeId, Long dataId, Integer objtype, Long objid);
+
+    /** 查询某条数据行的共享授权列表 */
+    java.util.List<org.springblade.formmode.entity.ModeDataShareSingle> listDataShares(Long modeId, Long dataId);
+
+    /**
+     * 一次性保存模块权限 + 字段权限 + 数据范围（三表同一事务，避免跨表不一致）。
+     *
+     * @param modeId 模块ID
+     * @param batch  三表数据
+     */
+    boolean saveAll(Long modeId, ModeRightBatchDTO batch);
+
+    /**
+     * 读取权限配置当前版本号（乐观锁）。前端加载配置时取得，保存时带回 expectedVersion。
+     */
+    long getRightVersion(Long modeId);
 
 }

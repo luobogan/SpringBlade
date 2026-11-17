@@ -133,4 +133,14 @@ public interface IFormmodeClient {
     @GetMapping("/right/field-perm/{modeId}")
     R<List<FieldPermVO>> listFieldPerm(@PathVariable("modeId") Long modeId);
 
+    /**
+     * 按「表单ID」（workflow_bill.id）查询当前用户的字段级权限。
+     *
+     * <p>审批态渲染只有 formId、没有 modeId（二者不同源），故暴露本方法映射到服务端
+     * {@code /right/field-perm/by-form/{formId}}（内部完成 formId→modeId 反查）。
+     * 用于 blade-workflow 按「字段权限优先级链」合流建模侧权限。</p>
+     */
+    @GetMapping("/right/field-perm/by-form/{formId}")
+    R<List<FieldPermVO>> listFieldPermByForm(@PathVariable("formId") Long formId);
+
 }
