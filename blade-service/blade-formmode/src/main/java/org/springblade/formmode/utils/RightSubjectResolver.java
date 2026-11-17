@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springblade.core.secure.BladeUser;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.StringUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -34,8 +35,61 @@ public class RightSubjectResolver {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * 密级轴开关（默认 false）。
+     *
+     * <p>密级需在 blade_user.security_level 初始化后才生效；未初始化时开启会导致
+     * 所有人密级=0，showlevel>0 的规则谁都命不中。业务定义密级标准后再开启。</p>
+     */
+    @Value("${blade.formmode.seclevel.enforce:false}")
+    private boolean seclevelEnforce;
+
     public RightSubjectResolver(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /** 密级轴是否启用 */
+    public boolean isSeclevelEnabled() {
+        return seclevelEnforce;
+    }
+
+    /**
+     * 解析当前用户密级（blade_user.security_level，0~100）。
+     *
+     * <p>运行时查库（BladeUser 外部 jar 无 seclevel claim）。开关关闭或未查到 → 返回 null（不参与过滤）。</p>
+     */
+    public Integer resolveSeclevel(Long userId) {
+        if (!seclevelEnforce || userId == null) {
+            return null;
+        }
+        try {
+            List<Integer> levels = jdbcTemplate.queryForList(
+                "SELECT security_level FROM blade_user WHERE id = ? AND is_deleted = 0", Integer.class, userId);
+            return (levels == null || levels.isEmpty()) ? null : levels.get(0);
+        } catch (Exception e) {
+            log.warn("[formmode] 查询用户密级失败，按不参与过滤处理. userId={}, err={}", userId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 密级区间判定：showlevel ≤ userSeclevel ≤ ISNULL(showlevel2, 9999)。
+     *
+     * @return 开关关闭 / 规则未配密级 / 区间命中 → true；不命中 → false（fail-closed）
+     */
+    public boolean seclevelMatches(Integer showlevel, Integer showlevel2, Integer userSeclevel) {
+        if (!seclevelEnforce) {
+            return true; // 开关关闭：密级轴不参与
+        }
+        if (showlevel == null && showlevel2 == null) {
+            return true; // 规则未配密级：不参与
+        }
+        if (userSeclevel == null) {
+            return false; // 启用了但用户无密级：拒绝（fail-closed）
+        }
+        int lower = showlevel == null ? 0 : showlevel;
+        int upper = showlevel2 == null ? 9999 : showlevel2;
+        return userSeclevel >= lower && userSeclevel <= upper;
     }
 
     /** 当前用户是否为管理员（与 {@code DataScopeValueResolver#resolve} 的判定一致） */

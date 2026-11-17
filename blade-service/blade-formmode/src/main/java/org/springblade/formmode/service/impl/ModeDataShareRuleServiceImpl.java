@@ -103,6 +103,11 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
             boolean matrixHit = Integer.valueOf(OBJ_MATRIX).equals(r.getObjtype())
                 && matrixRuleHit(r, userId, deptIdSet);
             if (matrixHit || matchRule(r, userId, deptIdSet, roleIds, jobIdSet, subjectResolver)) {
+                // 密级轴：showlevel ≤ 用户密级 ≤ showlevel2（开关关闭/未配密级时不参与）
+                if (!subjectResolver.seclevelMatches(r.getShowlevel(), r.getShowlevel2(),
+                    subjectResolver.resolveSeclevel(userId))) {
+                    continue;
+                }
                 // creatorSelf=1：即便命中共享规则也强制「仅本人创建」
                 if (Integer.valueOf(1).equals(r.getCreatorSelf())) {
                     scope.setCanViewAll(false);

@@ -70,6 +70,7 @@ public class FormRightServiceImpl implements IFormRightService {
     private final RightSubjectResolver subjectResolver;
     private final ModeDataShareSingleMapper modeDataShareSingleMapper;
     private final StringRedisTemplate redisTemplate;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     /**
      * 字段权限查询异常时是否 fail-closed（默认 false）。
@@ -97,8 +98,16 @@ public class FormRightServiceImpl implements IFormRightService {
         return Func.toStr(SecureUtil.getTenantId(), "000000");
     }
 
+    /** 密级判定：showlevel ≤ 用户密级 ≤ showlevel2（开关关闭/未配密级时不参与） */
+    private boolean seclevelAllows(Integer showlevel, Integer showlevel2, Long userId) {
+        if (!subjectResolver.isSeclevelEnabled() || (showlevel == null && showlevel2 == null)) {
+            return true;
+        }
+        return subjectResolver.seclevelMatches(showlevel, showlevel2, subjectResolver.resolveSeclevel(userId));
+    }
+
     @Override
-    @Cacheable(cacheNames = "formmode:right-check",
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "formmode:right-check",
         key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + #rightType + ':' + #userId",
         unless = "#result == null")
     public boolean checkRight(Long modeId, Integer rightType, Long userId) {
@@ -134,32 +143,32 @@ public class FormRightServiceImpl implements IFormRightService {
             }
             // 0 约定为「全部」
             if (objId == OBJ_ID_ALL) {
-                return true;
+                return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
             }
             switch (objType) {
                 case 4: // 人员
                     if (uid != null && uid.equals(objId)) {
-                        return true;
+                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
                     }
                     break;
                 case 1: // 角色
                     if (roleIds.contains(objId)) {
-                        return true;
+                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
                     }
                     break;
                 case 2: // 部门：includesub=1 时展开子孙部门
                     if (subjectResolver.matchDept(objId, deptIds, r.getIncludesub())) {
-                        return true;
+                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
                     }
                     break;
                 case 3: // 岗位：由 blade_user.post_id 解析
                     if (postIds.contains(objId)) {
-                        return true;
+                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
                     }
                     break;
                 case 5: // 分部：由用户部门反查 blade_dept.subcompany_id（对标 E9 rolelevel=1）
                     if (subcompanyIds.contains(objId)) {
-                        return true;
+                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
                     }
                     break;
                 default:
@@ -203,7 +212,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
     public boolean saveModeRights(Long modeId, List<ModeRightInfo> rights) {
         String tenant = currentTenant();
         // 删除旧权限（限定当前租户，避免误删异租户配置）
@@ -235,7 +244,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
     public boolean saveFieldAuthorizes(Long modeId, List<ModeFieldAuthorize> authorizes) {
         String tenant = currentTenant();
         modeFieldAuthorizeMapper.delete(
@@ -337,7 +346,7 @@ public class FormRightServiceImpl implements IFormRightService {
     }
 
     @Override
-    @Cacheable(cacheNames = "formmode:field-perm",
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "formmode:field-perm",
         key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + T(org.springblade.core.secure.utils.SecureUtil).getUserId()")
     public List<FieldPermVO> listFieldPerm(Long modeId) {
         if (modeId == null) {
@@ -372,7 +381,6 @@ public class FormRightServiceImpl implements IFormRightService {
         Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
         Set<Long> postIds = subjectResolver.resolvePostIds(uid);
         Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
-
         // 命中用户的授权 → fieldId → rightvalue（多条命中取最宽松：可编辑 > 可见）
         Map<Integer, Integer> fieldRight = new LinkedHashMap<>();
         for (ModeFieldAuthorize a : auths) {
@@ -449,6 +457,10 @@ public class FormRightServiceImpl implements IFormRightService {
                     || (t == 2 && deptIds.contains(o))
                     || (t == 3 && postIds.contains(o))
                     || (t == 5 && subcompanyIds.contains(o));
+                // 密级轴：单条共享命中后仍需过密级区间
+                if (hit && !seclevelAllows(s.getShowlevel(), s.getShowlevel2(), uid)) {
+                    hit = false;
+                }
                 if (hit) {
                     sharedIds.add(s.getDataId());
                     if (s.getShareLevel() != null && s.getShareLevel() >= 2) {
@@ -606,13 +618,24 @@ public class FormRightServiceImpl implements IFormRightService {
             return map;
         }
         try {
-            List<WorkflowBillField> fields = workflowBillFieldMapper.selectBatchIds(fieldIds);
-            if (fields != null) {
-                for (WorkflowBillField f : fields) {
-                    if (f != null && f.getId() != null && f.getFieldname() != null && !f.getFieldname().isEmpty()) {
-                        map.put(f.getId(), f);
-                    }
+            // 用 JdbcTemplate 直查（与模块内其它动态查询一致，绕开 BaseMapper 在此实体上的兼容问题）
+            String in = fieldIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id, fieldname, ismain, detailtable FROM workflow_billfield WHERE id IN (" + in + ")");
+            for (Map<String, Object> row : rows) {
+                Object idObj = row.get("id");
+                Object nameObj = row.get("fieldname");
+                if (!(idObj instanceof Number) || nameObj == null || String.valueOf(nameObj).isEmpty()) {
+                    continue;
                 }
+                WorkflowBillField f = new WorkflowBillField();
+                f.setId(((Number) idObj).intValue());
+                f.setFieldname(String.valueOf(nameObj));
+                Object ismainObj = row.get("ismain");
+                f.setIsmain(ismainObj instanceof Number ? ((Number) ismainObj).intValue() : null);
+                Object dtObj = row.get("detailtable");
+                f.setDetailtable(dtObj instanceof Number ? ((Number) dtObj).intValue() : null);
+                map.put(f.getId(), f);
             }
         } catch (Exception e) {
             log.warn("[formmode] 批量查询字段定义失败. fieldIds={}, err={}", fieldIds, e.getMessage());
@@ -678,7 +701,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
     public boolean saveAll(Long modeId, org.springblade.formmode.dto.ModeRightBatchDTO batch) {
         if (modeId == null || batch == null) {
             return false;

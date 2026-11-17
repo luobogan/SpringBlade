@@ -47,6 +47,12 @@ public class ModeDataShareSingle implements Serializable {
     @Schema(description = "矩阵主体（objtype=7）结果字段名")
     private String matrixValueField;
 
+    @Schema(description = "密级下限（E9 showlevel，0~100；NULL=不限制）")
+    private Integer showlevel;
+
+    @Schema(description = "密级上限（E9 showlevel2，NULL=不封顶）")
+    private Integer showlevel2;
+
     @Schema(description = "租户ID")
     private String tenantId;
 
