@@ -174,14 +174,15 @@ public class FormDataController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Boolean> updateCellByForm(@PathVariable Long formId,
                                        @PathVariable Long dataId,
-                                       @RequestBody Map<String, Object> payload) {
+                                       @RequestBody Map<String, Object> payload,
+                                       @RequestParam(required = false) String resourceCode) {
         assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.EDIT, writeRightEnforce);
         if (payload == null) {
             throw new ServiceException("请求体不能为空");
         }
         Object fieldName = payload.get("fieldName");
         Boolean ok = formDataService.updateFormDataCell(formId, dataId,
-            fieldName == null ? null : String.valueOf(fieldName), payload.get("value"));
+            fieldName == null ? null : String.valueOf(fieldName), payload.get("value"), resourceCode);
         return R.data(ok, ok ? "单元格更新成功" : "未更新到数据");
     }
 

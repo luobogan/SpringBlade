@@ -21,6 +21,13 @@ public interface IFormRightService {
     boolean checkRight(Long modeId, Integer rightType, Long userId);
 
     /**
+     * 查询当前用户拥有的模块操作权限码集合（1可见 2新建 3编辑 4删除 5详情）。
+     *
+     * <p>供通用列表（ScopeGrid）按建模权限驱动操作按钮；admin 返回全部。</p>
+     */
+    java.util.List<Integer> listUserRightTypes(Long modeId, Long userId);
+
+    /**
      * 获取模块的权限配置
      */
     List<ModeRightInfo> getModeRights(Long modeId);

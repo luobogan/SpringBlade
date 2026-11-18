@@ -82,6 +82,15 @@ public class FormDataServiceImpl implements IFormDataService {
     @Value("${blade.formmode.row-write-scope.enforce:true}")
     private boolean rowWriteScopeEnforce;
 
+    /**
+     * 行级写校验严格模式（默认 false 保持兼容）。
+     *
+     * <p>true：无创建人列 / 空创建人 / 校验异常一律拒绝写入（fail-closed）；
+     * false：这些情况跳过校验（历史表兼容）。安全要求高的环境建议开启。</p>
+     */
+    @Value("${blade.formmode.row-write-scope.strict:false}")
+    private boolean rowWriteScopeStrict;
+
     /** 字段级「写」权限裁剪开关（编辑/新建/单元格写入不可编辑字段）；默认开启 */
     @Value("${blade.formmode.field-perm.write-enforce:true}")
     private boolean fieldWritePermEnforce;
@@ -425,6 +434,15 @@ public class FormDataServiceImpl implements IFormDataService {
      * @throws ServiceException 当前用户不在该行的数据范围内
      */
     private void assertRowWriteScope(String tableName, Long formId, Long dataId) {
+        assertRowWriteScope(tableName, formId, dataId, null);
+    }
+
+    /**
+     * 行级写校验（含数据权限行规则，S2.1）。
+     *
+     * @param resourceCode 资源码（来自通用列表请求）；为空则只套建模权限，不套 blade_scope
+     */
+    private void assertRowWriteScope(String tableName, Long formId, Long dataId, String resourceCode) {
         if (!rowWriteScopeEnforce || dataId == null || formId == null) {
             return;
         }
@@ -433,16 +451,25 @@ public class FormDataServiceImpl implements IFormDataService {
             String creatorCol = colMeta.containsKey("modedatacreator") ? "modedatacreator"
                 : (colMeta.containsKey("modedatacreater") ? "modedatacreater" : null);
             if (creatorCol == null) {
-                return; // 无创建人列：无法判定归属，跳过（不阻断历史表）
+                if (rowWriteScopeStrict) {
+                    throw new ServiceException("数据表缺少创建人列，无法判定数据归属，拒绝写入");
+                }
+                return; // 无创建人列：宽松模式跳过（历史表兼容）
             }
             List<Object> creatorVals = jdbcTemplate.queryForList(
                 "SELECT `" + creatorCol + "` FROM `" + tableName + "` WHERE id = ?", Object.class, dataId);
             if (creatorVals == null || creatorVals.isEmpty() || creatorVals.get(0) == null) {
-                return; // 空创建人：无法判定，跳过
+                if (rowWriteScopeStrict) {
+                    throw new ServiceException("数据行创建人为空，无法判定数据归属，拒绝写入");
+                }
+                return; // 空创建人：宽松模式跳过
             }
             Object cv = creatorVals.get(0);
             Long creatorId = (cv instanceof Number) ? ((Number) cv).longValue() : null;
             if (creatorId == null) {
+                if (rowWriteScopeStrict) {
+                    throw new ServiceException("数据行创建人格式非法，拒绝写入");
+                }
                 return;
             }
             Long realModeId = formRightService.resolveModeIdByFormId(formId);
@@ -452,12 +479,64 @@ public class FormDataServiceImpl implements IFormDataService {
             if (!formRightService.canEditDataRow(realModeId, creatorId, dataId)) {
                 throw new ServiceException("无权编辑他人创建的数据（仅查看共享）");
             }
+            // S2.1：建模权限通过后，再套通用数据权限行规则（有 resourceCode 才校验）
+            if (!StringUtil.isBlank(resourceCode)) {
+                assertDataScopeWrite(tableName, resourceCode, dataId);
+            }
         } catch (ServiceException e) {
             throw e;
         } catch (Exception e) {
-            // 校验链路异常：fail-open 放行（不因权限组件故障阻断写入），但留存告警
+            if (rowWriteScopeStrict) {
+                log.error("[formmode] 行级写权限校验异常，严格模式拒绝写入. formId={}, dataId={}, err={}",
+                    formId, dataId, e.getMessage());
+                throw new ServiceException("行级数据权限校验失败，拒绝写入");
+            }
+            // 宽松模式：校验链路异常 fail-open 放行（历史兼容），留存告警
             log.warn("[formmode] 行级写权限校验异常，按放行处理. formId={}, dataId={}, err={}",
                 formId, dataId, e.getMessage());
+        }
+    }
+
+    /**
+     * 写链路数据权限校验（S2.1）：目标行的权限列值必须落在数据权限允许的值域内。
+     *
+     * <p>读侧用 SQL 过滤行，写侧没有 SQL 改写，故显式取目标行的 scopeColumn 值，
+     * 用同一个 DataScopeValueResolver 解析允许集合并做包含判定。无规则 / 规则放行 → 通过；
+     * 规则拒绝 / 列非法 / 行值不在集合 → 拒绝。</p>
+     */
+    private void assertDataScopeWrite(String tableName, String resourceCode, Long dataId) {
+        ScopeRule rule = loadScopeRule(resourceCode,
+            AuthUtil.getUser() == null ? null : AuthUtil.getUser().getRoleId());
+        if (rule == null) {
+            return; // 该资源未配置数据权限
+        }
+        if (rule.isLoadFailed()) {
+            throw new ServiceException("数据权限规则读取失败，拒绝写入");
+        }
+        DataScopeValueResolver.ScopeValue value = DataScopeValueResolver.resolve(
+            rule.getScopeType(), rule.getScopeColumn(), rule.getScopeValue(),
+            AuthUtil.getUser(), this::queryChildDeptIds);
+        if (value.isUnrestricted()) {
+            return;
+        }
+        if (value.isRejected()) {
+            throw new ServiceException("数据权限规则无法应用，拒绝写入");
+        }
+        String col = value.getColumn() == null ? "" : value.getColumn().trim();
+        if (!SAFE_COLUMN.matcher(col).matches()) {
+            throw new ServiceException("数据权限权限列非法，拒绝写入");
+        }
+        // 取目标行的权限列值
+        List<Object> vals = jdbcTemplate.queryForList(
+            "SELECT `" + col + "` FROM `" + tableName + "` WHERE id = ?", Object.class, dataId);
+        if (vals == null || vals.isEmpty() || !(vals.get(0) instanceof Number)) {
+            throw new ServiceException("数据行权限列无有效值，拒绝写入");
+        }
+        long rowVal = ((Number) vals.get(0)).longValue();
+        if (value.getIds() == null || !value.getIds().contains(rowVal)) {
+            log.warn("[formmode][AUDIT] 写链路数据权限拦截. table={}, dataId={}, col={}, rowVal={}, allowed={}",
+                tableName, dataId, col, rowVal, value.getIds());
+            throw new ServiceException("目标数据不在当前用户的数据权限范围内");
         }
     }
 
@@ -961,11 +1040,16 @@ public class FormDataServiceImpl implements IFormDataService {
             vo.setId(dataId);
             vo.setModeid(formId);
 
-            // 过滤系统字段，只保留自定义字段值
+            // 过滤系统字段 + T1.1 脱敏（移除当前用户不可见字段）
+            Set<String> invisibleCols = loadInvisibleColumnNames(realModeId, formId);
+            if (!invisibleCols.isEmpty()) {
+                log.info("[formmode][AUDIT] 详情字段脱敏. modeId={}, userId={}, maskedCols={}",
+                    realModeId, currentUserId(), invisibleCols);
+            }
             Map<String, Object> fieldValues = new HashMap<>();
             for (Map.Entry<String, Object> entry : row.entrySet()) {
                 String key = entry.getKey();
-                if (!isSystemField(key)) {
+                if (!isSystemField(key) && !invisibleCols.contains(key.toLowerCase())) {
                     fieldValues.put(key, entry.getValue());
                 }
             }
@@ -993,10 +1077,8 @@ public class FormDataServiceImpl implements IFormDataService {
         }
 
         // 行级数据范围（P2-2 Step4）：把 formId 反查为 modeId 后解析可见范围
-        Long realModeId = formRightService.resolveModeIdByFormId(modeId);
-        if (realModeId == null) {
-            realModeId = modeId;
-        }
+        Long resolvedModeId = formRightService.resolveModeIdByFormId(modeId);
+        final Long realModeId = (resolvedModeId == null) ? modeId : resolvedModeId;
         final DataScope scope = formRightService.resolveDataScope(realModeId);
         // 矩阵主体（objtype=7）：按行字段值解析的单条共享，合并进 scope.sharedDataIds
         mergeMatrixShared(scope, realModeId, mainTableName);
@@ -1041,6 +1123,9 @@ public class FormDataServiceImpl implements IFormDataService {
 
             List<Map<String, Object>> records = jdbcTemplate.queryForList(dataSql.toString(), pageParams.toArray());
 
+            // T1.1 读路径脱敏：按当前用户字段权限剔除不可见列（防前端隐藏但接口裸奔）
+            maskInvisibleFields(records, loadInvisibleColumnNames(realModeId, modeId), realModeId, currentUserId());
+
             Page<Map<String, Object>> result = new Page<>(page.getCurrent(), page.getSize(), total);
             result.setRecords(records);
             return result;
@@ -1055,12 +1140,11 @@ public class FormDataServiceImpl implements IFormDataService {
             return new Page<>(page.getCurrent(), page.getSize());
         }
         // formmode 自身的行级数据范围（modedatasharerule）：与 pageFormData 同口径，叠加生效
-        Long realModeId = formRightService.resolveModeIdByFormId(formId);
-        if (realModeId == null) {
-            realModeId = formId;
-        }
+        Long resolvedModeId = formRightService.resolveModeIdByFormId(formId);
+        final Long realModeId = (resolvedModeId == null) ? formId : resolvedModeId;
         final DataScope scope = formRightService.resolveDataScope(realModeId);
-        final ScopeRule rule = loadScopeRule(resourceCode);
+        final ScopeRule rule = loadScopeRule(resourceCode,
+            AuthUtil.getUser() == null ? null : AuthUtil.getUser().getRoleId());
         final String table = mainTableName;
         // 矩阵主体（objtype=7）：合并单条共享中按行字段值解析出的可访问行
         mergeMatrixShared(scope, realModeId, table);
@@ -1137,6 +1221,9 @@ public class FormDataServiceImpl implements IFormDataService {
 
             List<Map<String, Object>> records = jdbcTemplate.queryForList(dataSql.toString(), pageParams.toArray());
 
+            // T1.1 读路径脱敏：pageByScope 同样按用户字段权限剔除不可见列
+            maskInvisibleFields(records, loadInvisibleColumnNames(realModeId, formId), realModeId, currentUserId());
+
             Page<Map<String, Object>> result = new Page<>(page.getCurrent(), page.getSize(), total);
             result.setRecords(records);
             return result;
@@ -1151,6 +1238,11 @@ public class FormDataServiceImpl implements IFormDataService {
      */
     @Override
     public Boolean updateFormDataCell(Long formId, Long dataId, String fieldName, Object value) {
+        return updateFormDataCell(formId, dataId, fieldName, value, null);
+    }
+
+    @Override
+    public Boolean updateFormDataCell(Long formId, Long dataId, String fieldName, Object value, String resourceCode) {
         if (formId == null || dataId == null) {
             throw new ServiceException("参数不完整（formId / dataId）");
         }
@@ -1192,8 +1284,8 @@ public class FormDataServiceImpl implements IFormDataService {
             appendAuditSet(setParts, setValues, tableCols, new String[]{"lastModTime"},
                 LocalTime.now().toString().substring(0, 8));
 
-            // 行级写权限：仅本人创建 / 命中共享规则可编辑
-            assertRowWriteScope(table, formId, dataId);
+            // 行级写权限：仅本人创建 / 命中共享规则可编辑 + 通用数据权限行规则
+            assertRowWriteScope(table, formId, dataId, resourceCode);
 
             String sql = "UPDATE `" + table + "` SET " + String.join(",", setParts) + " WHERE id=?";
             setValues.add(dataId);
@@ -1217,6 +1309,13 @@ public class FormDataServiceImpl implements IFormDataService {
     private void applyScopeRuleFilter(ScopeRule rule, Set<String> tableCols,
                                       StringBuilder countSql, StringBuilder dataSql) {
         if (rule == null) {
+            return;
+        }
+        // S2.2 fail-closed：规则读取异常时拒绝全部（而非 fail-open 放行）
+        if (rule.isLoadFailed()) {
+            log.error("[formmode] 数据权限规则读取失败，按无可见数据处理. resourceCode={}", rule.getResourceCode());
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
             return;
         }
         DataScopeValueResolver.ScopeValue value = DataScopeValueResolver.resolve(
@@ -1287,17 +1386,47 @@ public class FormDataServiceImpl implements IFormDataService {
     }
 
     /** 按资源编号读取数据权限规则（blade_scope_data）；无规则返回 null（不套规则） */
-    private ScopeRule loadScopeRule(String resourceCode) {
+    /**
+     * 读取数据权限规则（S2.2）。
+     *
+     * <p>优先按「角色绑定」（blade_role_scope）取，复刻框架 DataScopeClient#getDataScopeByMapper 的口径；
+     * 无角色绑定时回退 resource_code。查询异常返回 loadFailed=true 的规则，由
+     * applyScopeRuleFilter 追加 AND 1=0（fail-closed），不再 fail-open 放行。</p>
+     */
+    private ScopeRule loadScopeRule(String resourceCode, String roleId) {
         if (StringUtil.isBlank(resourceCode)) {
-            return null;
+            return null; // 无资源码 = 该接口不接数据权限，保持放行
         }
         try {
-            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT resource_code, scope_field, scope_column, scope_type, scope_value "
-                    + "FROM blade_scope_data WHERE resource_code = ? AND is_deleted = 0 ORDER BY id LIMIT 1",
-                resourceCode);
+            List<Long> roleIds = new ArrayList<>();
+            if (!StringUtil.isBlank(roleId)) {
+                for (String part : roleId.split(",")) {
+                    try {
+                        long id = Long.parseLong(part.trim());
+                        if (id > 0) roleIds.add(id);
+                    } catch (NumberFormatException ignored) { }
+                }
+            }
+            List<Map<String, Object>> rows = new ArrayList<>();
+            // ① 按角色绑定取（复刻 dataByMapper：role_scope.scope_id = scope_data.id）
+            if (!roleIds.isEmpty()) {
+                String marks = roleIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+                rows = jdbcTemplate.queryForList(
+                    "SELECT d.resource_code, d.scope_field, d.scope_column, d.scope_type, d.scope_value "
+                        + "FROM blade_scope_data d INNER JOIN blade_role_scope r ON r.scope_id = d.id "
+                        + "WHERE d.resource_code = ? AND r.role_id IN (" + marks + ") AND d.is_deleted = 0 "
+                        + "ORDER BY d.id LIMIT 1",
+                    resourceCode);
+            }
+            // ② 回退：按 resourceCode 取（兼容未配角色绑定的存量规则）
             if (rows.isEmpty()) {
-                return null;
+                rows = jdbcTemplate.queryForList(
+                    "SELECT resource_code, scope_field, scope_column, scope_type, scope_value "
+                        + "FROM blade_scope_data WHERE resource_code = ? AND is_deleted = 0 ORDER BY id LIMIT 1",
+                    resourceCode);
+            }
+            if (rows.isEmpty()) {
+                return null; // 无规则 = 该资源未配置数据权限，放行
             }
             Map<String, Object> row = rows.get(0);
             ScopeRule rule = new ScopeRule();
@@ -1309,8 +1438,12 @@ public class FormDataServiceImpl implements IFormDataService {
             rule.setScopeType(scopeType instanceof Number ? ((Number) scopeType).intValue() : null);
             return rule;
         } catch (Exception e) {
-            log.warn("[formmode] 读取数据权限规则失败，按无规则处理. resourceCode={}, err={}", resourceCode, e.getMessage());
-            return null;
+            log.error("[formmode] 读取数据权限规则失败，按无可见数据处理(fail-closed). resourceCode={}, err={}",
+                resourceCode, e.getMessage());
+            ScopeRule failed = new ScopeRule();
+            failed.setResourceCode(resourceCode);
+            failed.setLoadFailed(true);
+            return failed;
         }
     }
 
@@ -1330,6 +1463,8 @@ public class FormDataServiceImpl implements IFormDataService {
         private Integer scopeType;
         /** 自定义值域 */
         private String scopeValue;
+        /** 规则读取失败（fail-closed：查询异常时拒绝全部，而非放行） */
+        private boolean loadFailed;
     }
 
     @Override
@@ -1484,6 +1619,67 @@ public class FormDataServiceImpl implements IFormDataService {
             log.warn("[formmode] 探测明细表关联列失败. detail={}, err={}", detailTable, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 加载当前用户「不可见」的表列名集合（小写），供读路径脱敏（T1.1）。
+     *
+     * <p>权限来源：`listFieldPerm(modeId)` 按当前用户返回的三态；无配置 / 管理员豁免返回空 → 不过滤。
+     * 只要返回了权限列表，就按 visible=false 的字段查出 dbName 并从响应中剔除，
+     * 避免「前端隐藏但接口裸奔」。</p>
+     */
+    private Set<String> loadInvisibleColumnNames(Long modeId, Long billId) {
+        Set<String> invisible = new HashSet<>();
+        if (modeId == null) {
+            return invisible;
+        }
+        try {
+            List<FieldPermVO> perms = formRightService.listFieldPerm(modeId);
+            if (perms == null || perms.isEmpty()) {
+                return invisible; // 未配置 / admin 豁免
+            }
+            // fieldName → visible=false 集合
+            Set<String> deniedNames = new HashSet<>();
+            for (FieldPermVO p : perms) {
+                if (p != null && p.getFieldName() != null && Boolean.FALSE.equals(p.getVisible())) {
+                    deniedNames.add(p.getFieldName().toLowerCase());
+                }
+            }
+            if (deniedNames.isEmpty()) {
+                return invisible;
+            }
+            // fieldname → fielddbname 映射（直查，避开 mapper 兼容问题）
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT fieldname, fielddbname FROM workflow_billfield WHERE billid=? AND is_deleted=0", billId);
+            for (Map<String, Object> row : rows) {
+                Object name = row.get("fieldname");
+                Object db = row.get("fielddbname");
+                if (name == null || db == null) continue;
+                String n = String.valueOf(name).toLowerCase();
+                if (deniedNames.contains(n)) {
+                    invisible.add(String.valueOf(db).toLowerCase());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 加载不可见字段失败，按不脱敏处理. modeId={}, billId={}, err={}", modeId, billId, e.getMessage());
+            return new HashSet<>();
+        }
+        return invisible;
+    }
+
+    /** 对查询结果行做字段脱敏（移除不可见列），原地修改并记录审计 */
+    private void maskInvisibleFields(List<Map<String, Object>> records, Set<String> invisibleCols,
+                                     Long formId, Long userId) {
+        if (records == null || records.isEmpty() || invisibleCols == null || invisibleCols.isEmpty()) {
+            return;
+        }
+        for (Map<String, Object> row : records) {
+            if (row == null) continue;
+            // 用迭代器按实际 key 大小写移除，避免大小写不匹配
+            row.keySet().removeIf(k -> k != null && invisibleCols.contains(k.toLowerCase()));
+        }
+        log.info("[formmode][AUDIT] 读路径字段脱敏. formId={}, userId={}, maskedCols={}, rows={}",
+            formId, userId, invisibleCols, records.size());
     }
 
     /**

@@ -110,10 +110,33 @@ public class FormRightController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_AUTH)
     public R<List<FieldPermVO>> fieldPermByForm(@PathVariable Long formId) {
         Long modeId = formRightService.resolveModeIdByFormId(formId);
+        // 口径对齐：表单未建正式模块时，前端 FormRightDrawer 会以 formId 本身作为 modeId 保存
+        // （resolve-mode 返回 null 的兜底）；读取侧必须同样回退，否则写进去的权限读不出来。
         if (modeId == null) {
-            return R.data(new ArrayList<>());
+            modeId = formId;
         }
         return R.data(formRightService.listFieldPerm(modeId));
+    }
+
+    /**
+     * 查询当前用户对某表单拥有的模块操作权限码（1可见 2新建 3编辑 4删除 5详情）。
+     *
+     * <p>供通用列表（ScopeGrid）按建模权限驱动操作按钮；formId 反查不到模块时回退 formId 本身，
+     * 与字段权限 by-form 端点同口径。失败返回空列表（前端按菜单按钮体系工作）。</p>
+     */
+    @GetMapping("/user-right-types/{formId}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    public R<?> userRightTypes(@PathVariable Long formId) {
+        Long modeId = formRightService.resolveModeIdByFormId(formId);
+        if (modeId == null) {
+            modeId = formId;
+        }
+        Long uid = SecureUtil.getUserId();
+        try {
+            return R.data(formRightService.listUserRightTypes(modeId, uid));
+        } catch (Exception e) {
+            return R.data(new java.util.ArrayList<Integer>());
+        }
     }
 
     /**

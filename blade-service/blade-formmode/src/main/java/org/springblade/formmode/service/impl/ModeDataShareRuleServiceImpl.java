@@ -42,6 +42,8 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
 
     /** 查看权限类型（modedatasharerule.type=1） */
     private static final int TYPE_VIEW = 1;
+    /** 维护权限类型（modedatasharerule.type=2）：命中者可编辑/删除他人数据 */
+    private static final int TYPE_MAINTAIN = 2;
     /**
      * 授权对象类型（2026-10-20 已与 moderightinfo / modefieldauthorize 统一）：
      * <b>1角色 2部门 3岗位 4人员</b>。
@@ -140,6 +142,41 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
             return true;
         }
         return Objects.equals(creatorIdOfRow, scope.getCreatorId());
+    }
+
+    @Override
+    public boolean canMaintainAll(Long modeId, Long userId, Long deptId, List<Long> roleIds, List<Long> jobIds) {
+        if (modeId == null || userId == null) {
+            return false;
+        }
+        // 管理员：可维护全部（与 resolve 同源）
+        if (subjectResolver.isAdmin(AuthUtil.getUser())) {
+            return true;
+        }
+        try {
+            List<ModeDataShareRule> rules = mapper.selectList(new LambdaQueryWrapper<ModeDataShareRule>()
+                .eq(ModeDataShareRule::getModeid, modeId)
+                .eq(ModeDataShareRule::getType, TYPE_MAINTAIN)
+                .and(w -> w.eq(ModeDataShareRule::getTenantId, currentTenant()).or().isNull(ModeDataShareRule::getTenantId)));
+            if (rules == null || rules.isEmpty()) {
+                return false; // 未配维护档 → 只能维护本人
+            }
+            Set<Long> deptIdSet = currentDeptIds(deptId);
+            Set<Long> jobIdSet = jobIds == null ? Set.of() : Set.copyOf(jobIds);
+            for (ModeDataShareRule r : rules) {
+                boolean matrixHit = Integer.valueOf(OBJ_MATRIX).equals(r.getObjtype())
+                    && matrixRuleHit(r, userId, deptIdSet);
+                if ((matrixHit || matchRule(r, userId, deptIdSet, roleIds, jobIdSet, subjectResolver))
+                    && subjectResolver.seclevelMatches(r.getShowlevel(), r.getShowlevel2(),
+                        subjectResolver.resolveSeclevel(userId))) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 维护档规则判定失败，按不可维护他人数据处理. modeId={}, err={}",
+                modeId, e.getMessage());
+        }
+        return false;
     }
 
     /**

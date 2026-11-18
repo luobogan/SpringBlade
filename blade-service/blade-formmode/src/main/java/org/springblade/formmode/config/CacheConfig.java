@@ -35,8 +35,16 @@ public class CacheConfig {
             .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(RedisSerializer.json()))
             .disableCachingNullValues();
 
+        // 主体解析（岗位/分部/密级/子部门）来自 blade-system 的用户/组织数据，
+        // formmode 无法感知其变更，用短 TTL 兜底（调岗最多 5 分钟生效）；
+        // 权限配置类缓存仍用默认 1 小时，且由 saveAll 主动失效。
+        RedisCacheConfiguration shortTtl = config.entryTtl(Duration.ofMinutes(5));
         return RedisCacheManager.builder(factory)
             .cacheDefaults(config)
+            .withCacheConfiguration("subject:post", shortTtl)
+            .withCacheConfiguration("subject:subcompany", shortTtl)
+            .withCacheConfiguration("subject:seclevel", shortTtl)
+            .withCacheConfiguration("subject:dept-descendants", shortTtl)
             .build();
     }
 

@@ -24,9 +24,12 @@ public class MybatisPlusConfig {
         // 动态表名拦截器
         DynamicTableNameInnerInterceptor dynamicTableInterceptor = new DynamicTableNameInnerInterceptor();
         dynamicTableInterceptor.setTableNameHandler((sql, tableName) -> {
-            // 如果表名是动态表占位符，通过 ThreadLocal 获取实际表名
+            // 只替换「业务动态表」（formtable_main* / formtable_detail*），
+            // 绝不能把权限/配置表（moderightinfo / modefieldauthorize / modedatasharerule …）
+            // 也替换成业务表名——那会让动态表上下文内的所有权限查询报 Unknown column。
             String actualTableName = TableNameContextHolder.get();
-            if (actualTableName != null) {
+            if (actualTableName != null && tableName != null
+                && (tableName.startsWith("formtable_main") || tableName.startsWith("formtable_detail"))) {
                 return actualTableName;
             }
             return tableName;

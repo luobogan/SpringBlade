@@ -5,6 +5,7 @@ import org.springblade.core.secure.BladeUser;
 import org.springblade.core.tool.constant.RoleConstant;
 import org.springblade.core.tool.utils.StringUtil;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -58,6 +59,8 @@ public class RightSubjectResolver {
      *
      * <p>运行时查库（BladeUser 外部 jar 无 seclevel claim）。开关关闭或未查到 → 返回 null（不参与过滤）。</p>
      */
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "subject:seclevel", key = "#userId",
+        unless = "#result == null")
     public Integer resolveSeclevel(Long userId) {
         if (!seclevelEnforce || userId == null) {
             return null;
@@ -102,6 +105,7 @@ public class RightSubjectResolver {
      *
      * <p>BladeUser 未承载 postId，故按 userId 直接查库；查不到 / 异常返回空集合。</p>
      */
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "subject:post", key = "#userId")
     public Set<Long> resolvePostIds(Long userId) {
         if (userId == null) {
             return Collections.emptySet();
@@ -139,6 +143,7 @@ public class RightSubjectResolver {
      *
      * <p>对标 E9 rolelevel=1（分部级）授权主体；用户无部门 / 部门无分部时返回空集合。</p>
      */
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "subject:subcompany", key = "#userId")
     public Set<Long> resolveSubcompanyIds(Long userId) {
         Set<Long> result = new java.util.LinkedHashSet<>();
         if (userId == null) {
@@ -213,6 +218,7 @@ public class RightSubjectResolver {
     /**
      * 查询某部门的全部子孙部门 id（两端补逗号匹配 ancestors，避免漏直属子部门 / 误判前缀相同的部门）。
      */
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "subject:dept-descendants", key = "#deptId")
     public List<Long> descendantDeptIds(Long deptId) {
         if (deptId == null) {
             return Collections.emptyList();

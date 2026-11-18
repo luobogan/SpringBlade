@@ -78,6 +78,9 @@ public interface IFormDataService {
      */
     Boolean updateFormDataCell(Long formId, Long dataId, String fieldName, Object value);
 
+    /** 单元格更新（带资源码，写链路套通用数据权限行规则） */
+    Boolean updateFormDataCell(Long formId, Long dataId, String fieldName, Object value, String resourceCode);
+
     /**
      * 删除数据
      */

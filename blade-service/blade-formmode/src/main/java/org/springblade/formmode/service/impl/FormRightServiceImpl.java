@@ -81,6 +81,15 @@ public class FormRightServiceImpl implements IFormRightService {
     @Value("${blade.formmode.field-perm.fail-closed:false}")
     private boolean fieldPermFailClosed;
 
+    /**
+     * 维护档严格模式（默认 false，保持兼容）。
+     *
+     * <p>false：查看全量即可编辑全量（既有语义）；
+     * true：查看全量后还需命中「维护」档(type=2)规则才可编辑他人数据（E9 语义）。</p>
+     */
+    @Value("${blade.formmode.maintain-scope.strict:false}")
+    private boolean maintainScopeStrict;
+
     /** 权限配置版本号 Redis key 前缀（按 modeId 隔离） */
     private static final String RIGHT_VERSION_KEY = "formmode:right:version:";
 
@@ -96,6 +105,73 @@ public class FormRightServiceImpl implements IFormRightService {
      */
     public static String currentTenant() {
         return Func.toStr(SecureUtil.getTenantId(), "000000");
+    }
+
+    @Override
+    @Cacheable(cacheManager = "formmodeCacheManager", cacheNames = "formmode:user-right-types",
+        key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + #userId")
+    public List<Integer> listUserRightTypes(Long modeId, Long userId) {
+        List<Integer> result = new ArrayList<>();
+        if (modeId == null) {
+            return result;
+        }
+        BladeUser user = AuthUtil.getUser();
+        // 管理员：拥有全部操作（与 checkRight 豁免口径一致）
+        if (subjectResolver.isAdmin(user)) {
+            result.addAll(java.util.Arrays.asList(1, 2, 3, 4, 5));
+            return result;
+        }
+        try {
+            // 只取「明确配置且当前用户命中」的权限码；未配置的 righttype 不返回
+            // （与 checkRight 的 fail-open 语义不同：按钮驱动需要"显式授权"口径，否则收窄失效）
+            List<ModeRightInfo> rights = modeRightInfoMapper.selectList(
+                new LambdaQueryWrapper<ModeRightInfo>()
+                    .eq(ModeRightInfo::getModeid, modeId)
+                    .in(ModeRightInfo::getRighttype, java.util.Arrays.asList(1, 2, 3, 4, 5))
+                    .and(w -> w.eq(ModeRightInfo::getTenantId, currentTenant()).or().isNull(ModeRightInfo::getTenantId))
+            );
+            if (rights == null || rights.isEmpty()) {
+                return result; // 未配置 → 空，前端 fail-open
+            }
+            Long uid = (userId != null) ? userId : (user != null ? user.getUserId() : null);
+            Set<Long> roleIds = parseIds(user != null ? user.getRoleId() : null);
+            Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
+            Set<Long> postIds = subjectResolver.resolvePostIds(uid);
+            Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
+            Set<Integer> hit = new java.util.LinkedHashSet<>();
+            for (ModeRightInfo r : rights) {
+                Integer rt = r.getRighttype();
+                if (rt == null || hit.contains(rt)) continue;
+                if (matchModeRightSubject(r, uid, roleIds, deptIds, postIds, subcompanyIds)) {
+                    hit.add(rt);
+                }
+            }
+            result.addAll(hit);
+            java.util.Collections.sort(result);
+        } catch (Exception e) {
+            log.warn("[formmode] 查询用户模块权限码失败. modeId={}, err={}", modeId, e.getMessage());
+            return new ArrayList<>(); // 失败空 → 前端 fail-open
+        }
+        return result;
+    }
+
+    /** 主体匹配（供 listUserRightTypes 使用；口径与 checkRight 的 switch 一致） */
+    private boolean matchModeRightSubject(ModeRightInfo r, Long uid, Set<Long> roleIds,
+                                          Set<Long> deptIds, Set<Long> postIds, Set<Long> subcompanyIds) {
+        Integer objType = r.getObjtype();
+        Integer objId = r.getObjid();
+        if (objType == null || objId == null) return false;
+        long oid = objId.longValue();
+        if (oid == OBJ_ID_ALL) return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
+        boolean hit = switch (objType) {
+            case 4 -> uid != null && uid == oid;
+            case 1 -> roleIds.contains(oid);
+            case 2 -> subjectResolver.matchDept(oid, deptIds, r.getIncludesub());
+            case 3 -> postIds.contains(oid);
+            case 5 -> subcompanyIds.contains(oid);
+            default -> false;
+        };
+        return hit && seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
     }
 
     /** 密级判定：showlevel ≤ 用户密级 ≤ showlevel2（开关关闭/未配密级时不参与） */
@@ -212,7 +288,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public boolean saveModeRights(Long modeId, List<ModeRightInfo> rights) {
         String tenant = currentTenant();
         // 删除旧权限（限定当前租户，避免误删异租户配置）
@@ -244,7 +320,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public boolean saveFieldAuthorizes(Long modeId, List<ModeFieldAuthorize> authorizes) {
         String tenant = currentTenant();
         modeFieldAuthorizeMapper.delete(
@@ -500,15 +576,33 @@ public class FormRightServiceImpl implements IFormRightService {
     @Override
     public boolean canEditDataRow(Long modeId, Long creatorIdOfRow, Long dataId) {
         DataScope scope = resolveDataScope(modeId);
-        if (scope.isCanViewAll()) {
+        // 创建人天然完全控制；单条共享仅 level>=2（可编辑）允许写
+        if (Objects.equals(creatorIdOfRow, scope.getCreatorId())) {
             return true;
         }
-        if (Objects.equals(creatorIdOfRow, scope.getCreatorId())) {
-            return true; // 创建人天然完全控制
+        if (dataId != null && scope.getEditableSharedDataIds() != null
+            && scope.getEditableSharedDataIds().contains(dataId)) {
+            return true;
         }
-        // 单条共享仅 level>=2（可编辑）允许写
-        return dataId != null && scope.getEditableSharedDataIds() != null
-            && scope.getEditableSharedDataIds().contains(dataId);
+        if (!scope.isCanViewAll()) {
+            return false;
+        }
+        // 兼容模式（默认）：查看全量即可编辑全量（既有语义）
+        if (!maintainScopeStrict) {
+            return true;
+        }
+        // 严格模式：查看全量 ≠ 可维护全量，还需命中「维护」档(type=2)规则，
+        // 对齐 E9「查看全量但只能维护本人」语义；未配维护档时只能改本人数据。
+        BladeUser user = AuthUtil.getUser();
+        if (subjectResolver.isAdmin(user)) {
+            return true;
+        }
+        Long uid = user != null ? user.getUserId() : null;
+        List<Long> roleIds = new ArrayList<>(parseIds(user != null ? user.getRoleId() : null));
+        List<Long> jobIds = new ArrayList<>(subjectResolver.resolvePostIds(uid));
+        Set<Long> deptSet = parseIds(user != null ? user.getDeptId() : null);
+        Long deptId = deptSet.isEmpty() ? null : deptSet.iterator().next();
+        return dataScopeService.canMaintainAll(modeId, uid, deptId, roleIds, jobIds);
     }
 
     @Override
@@ -701,7 +795,7 @@ public class FormRightServiceImpl implements IFormRightService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm"}, allEntries = true)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public boolean saveAll(Long modeId, org.springblade.formmode.dto.ModeRightBatchDTO batch) {
         if (modeId == null || batch == null) {
             return false;

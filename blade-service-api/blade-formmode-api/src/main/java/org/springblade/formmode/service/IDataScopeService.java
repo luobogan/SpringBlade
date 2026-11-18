@@ -36,6 +36,14 @@ public interface IDataScopeService {
                     Long creatorIdOfRow);
 
     /**
+     * 判断用户是否命中「维护」档（modedatasharerule.type=2）共享规则。
+     *
+     * <p>未配置 type=2 规则时返回 false（即只能编辑本人数据）；命中则允许编辑他人数据。
+     * 供行级写校验使用，与查看档（type=1）解耦，对齐 E9「查看全量但只能维护本人」语义。</p>
+     */
+    boolean canMaintainAll(Long modeId, Long userId, Long deptId, List<Long> roleIds, List<Long> jobIds);
+
+    /**
      * 查询模块的数据范围规则（管理端配置查看，对应 modedatasharerule）。
      *
      * @param modeId 模块ID
