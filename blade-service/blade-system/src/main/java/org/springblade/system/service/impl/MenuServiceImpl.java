@@ -67,6 +67,7 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 	private final ITopMenuSettingService topMenuSettingService;
 	private final IPackageMenuService packageMenuService;
 	private final ITenantService tenantService;
+	private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 	private final static String PARENT_ID = "parentId";
 
 	@Override
@@ -139,8 +140,62 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 			log.info("[Menu#routes] ⑥产品包过滤: {} → {}", beforePackage, roleMenus.size());
 		}
 
+		// 角色级菜单显示名：按当前角色覆盖 name（未配置的角色沿用 blade_menu.name）
+		applyRoleMenuNames(roleMenus, roleId, currentTenantId);
+
 		log.info("[Menu#routes] 最终结果: tenantId={}, roleId={}, 菜单数={}", currentTenantId, roleId, roleMenus.size());
 		return buildRoutes(filteredAllMenus, roleMenus);
+	}
+
+	/**
+	 * 角色级菜单显示名覆盖：查 blade_role_menu_name，按当前角色覆盖菜单 name。
+	 *
+	 * <p>多角色时按 roleId 在 token 中的顺序取第一个命中别名的角色；未配置别名的菜单保持原名。
+	 * 表不存在/查询异常时静默跳过（不影响菜单主流程）。</p>
+	 */
+	private void applyRoleMenuNames(List<Menu> roleMenus, String roleId, String tenantId) {
+		if (roleMenus == null || roleMenus.isEmpty() || StringUtil.isBlank(roleId)) return;
+		try {
+			List<Long> roleIds = Func.toLongList(roleId);
+			if (roleIds.isEmpty()) return;
+			String menuMarks = roleMenus.stream().map(Menu::getId).filter(Objects::nonNull)
+				.distinct().map(String::valueOf).collect(Collectors.joining(","));
+			if (menuMarks.isEmpty()) return;
+			// 查当前租户下这些角色+菜单的别名配置（按 roleIds 顺序，Java 侧取第一个命中）
+			// 参数化 IN，避免超长拼接导致 SQL 语法/长度问题
+			String roleQ = String.join(",", java.util.Collections.nCopies(roleIds.size(), "?"));
+			String[] menuIds = menuMarks.split(",");
+			String menuQ = String.join(",", java.util.Collections.nCopies(menuIds.length, "?"));
+			List<Object> args = new java.util.ArrayList<>();
+			args.add(tenantId);
+			args.addAll(roleIds);
+			for (String mid : menuIds) args.add(Long.valueOf(mid));
+			List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+				"SELECT role_id, menu_id, name_override FROM blade_role_menu_name "
+					+ "WHERE tenant_id=? AND role_id IN (" + roleQ + ") AND menu_id IN (" + menuQ + ")",
+				args.toArray());
+			if (rows == null || rows.isEmpty()) return;
+			Map<Long, Map<Long, String>> byRole = new HashMap<>();
+			for (Map<String, Object> row : rows) {
+				Object r = row.get("role_id"), m = row.get("menu_id"), n = row.get("name_override");
+				if (!(r instanceof Number) || !(m instanceof Number) || n == null) continue;
+				byRole.computeIfAbsent(((Number) r).longValue(), k -> new HashMap<>())
+					.put(((Number) m).longValue(), String.valueOf(n));
+			}
+			for (Menu menu : roleMenus) {
+				if (menu == null || menu.getId() == null) continue;
+				for (Long rid : roleIds) {
+					Map<Long, String> names = byRole.get(rid);
+					String override = names == null ? null : names.get(menu.getId().longValue());
+					if (StringUtil.isNotBlank(override)) {
+						menu.setName(override);
+						break;
+					}
+				}
+			}
+		} catch (Exception e) {
+			log.warn("[Menu#routes] 角色菜单名覆盖失败，沿用原名. roleId={}, err={}", roleId, e.getMessage());
+		}
 	}
 
 	/**

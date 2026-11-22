@@ -39,7 +39,7 @@ public class ModeRightInfo implements Serializable {
     private Integer objtype;
 
     @Schema(description = "授权对象ID")
-    private Integer objid;
+    private Long objid;
 
     @Schema(description = "授权对象名称")
     private String objname;

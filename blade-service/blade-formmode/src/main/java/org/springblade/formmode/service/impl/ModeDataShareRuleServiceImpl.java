@@ -274,6 +274,20 @@ public class ModeDataShareRuleServiceImpl implements IDataScopeService {
     }
 
     @Override
+    public Long countRules(Long modeId) {
+        if (modeId == null) return 0L;
+        try {
+            String tenant = currentTenant();
+            return mapper.selectCount(new LambdaQueryWrapper<ModeDataShareRule>()
+                .eq(ModeDataShareRule::getModeid, modeId)
+                .and(w -> w.eq(ModeDataShareRule::getTenantId, tenant).or().isNull(ModeDataShareRule::getTenantId)));
+        } catch (Exception e) {
+            log.warn("[formmode] 统计数据范围规则失败. modeId={}, err={}", modeId, e.getMessage());
+            return 0L;
+        }
+    }
+
+    @Override
     public boolean saveRules(Long modeId, List<ModeDataShareRule> rules) {
         if (modeId == null) {
             return false;

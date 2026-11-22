@@ -54,6 +54,9 @@ public class FormDataController extends BladeController {
     /** 读操作（详情/分页）是否强制模块权限校验；默认 false（先 warn 观察，灰度后再开） */
     @Value("${blade.formmode.right-check.enforce-read:false}")
     private boolean readRightEnforce;
+    /** 安全档位：strict 时模块权限校验异常 fail-closed（拒绝写操作） */
+    @Value("${blade.formmode.security.profile:compat}")
+    private String securityProfile;
 
     /**
      * 模块操作权限校验（非流程场景）。
@@ -76,6 +79,10 @@ public class FormDataController extends BladeController {
         try {
             ok = formRightService.checkRight(modeId, type.getCode(), SecureUtil.getUserId());
         } catch (Exception e) {
+            if ("strict".equalsIgnoreCase(securityProfile)) {
+                log.error("[formmode] 模块权限校验异常，strict 档位拒绝. modeId={}, type={}, err={}", modeId, type, e.getMessage());
+                throw new org.springblade.core.log.exception.ServiceException("模块权限校验失败，拒绝操作");
+            }
             log.warn("[formmode] 模块权限校验异常，按放行处理. modeId={}, type={}, err={}", modeId, type, e.getMessage());
             return;
         }

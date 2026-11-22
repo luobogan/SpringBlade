@@ -7,6 +7,7 @@ import org.springblade.core.secure.annotation.PreAuth;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
+import org.springblade.formmode.dto.FieldSubjectSaveDTO;
 import org.springblade.formmode.dto.ModeRightBatchDTO;
 import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
@@ -67,6 +68,31 @@ public class FormRightController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Boolean> saveFieldAuthorizes(@PathVariable Long modeId, @RequestBody List<ModeFieldAuthorize> authorizes) {
         return R.data(formRightService.saveFieldAuthorizes(modeId, authorizes), "字段权限保存成功");
+    }
+
+    /** 按授权主体查询跨模块字段权限（对象优先配置视图） */
+    @GetMapping("/field/subject")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<List<ModeFieldAuthorize>> getFieldAuthorizesBySubject(@RequestParam Integer objtype,
+                                                                   @RequestParam String objid) {
+        long id;
+        try { id = Long.parseLong(String.valueOf(objid).trim()); }
+        catch (Exception e) { return R.fail("授权对象ID非法"); }
+        return R.data(formRightService.getFieldAuthorizesBySubject(objtype, id));
+    }
+
+    /** 按授权主体批量保存字段权限（只影响该主体提交的模块/字段） */
+    @PutMapping("/field/subject/batch")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> saveFieldAuthorizesBySubject(@RequestBody FieldSubjectSaveDTO batch) {
+        return R.data(formRightService.saveFieldAuthorizesBySubject(batch), "字段权限按主体保存成功");
+    }
+
+    /** 查询字段权限授权对象组（管理端） */
+    @GetMapping("/field/groups/{modeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<?> getFieldAuthGroups(@PathVariable Long modeId) {
+        return R.data(formRightService.getFieldAuthGroups(modeId));
     }
 
     /**
@@ -211,7 +237,11 @@ public class FormRightController extends BladeController {
     @GetMapping("/resolve-mode/{formId}")
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Long> resolveModeId(@PathVariable Long formId) {
-        return R.data(formRightService.resolveModeIdByFormId(formId));
+        Long modeId = formRightService.resolveModeIdByFormId(formId);
+        // 口径统一：运行期各端点（field-perm/by-form、user-right-types、pageFormDataByScope）
+        // 在反查不到 modeinfo 时均以 formId 兜底；管理端抽屉也必须同口径，
+        // 否则「表单没建模块 → 无法配置权限 → 运行期却按 formId 读权限」造成死锁。
+        return R.data(modeId == null ? formId : modeId);
     }
 
 }

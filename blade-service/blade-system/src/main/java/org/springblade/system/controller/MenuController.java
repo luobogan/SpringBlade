@@ -62,6 +62,8 @@ public class MenuController extends BladeController {
 
 	private final ITopMenuService topMenuService;
 
+	private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
 	/**
 	 * 详情
 	 */
@@ -250,6 +252,55 @@ public class MenuController extends BladeController {
 		menuKeys.setCheckedKeys(menuService.topTreeKeys(topMenuIds));
 		vo.setMenu(menuKeys);
 		return R.data(vo);
+	}
+
+	/**
+	 * 查询角色级菜单显示名配置（管理员）
+	 */
+	@GetMapping("/role-name/list")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	@Operation(summary = "角色菜单显示名列表", description = "按角色+菜单查询自定义显示名")
+	public R<List<Map<String, Object>>> roleNameList(@RequestParam(required = false) Long roleId,
+	                                                 @RequestParam(required = false) Long menuId) {
+		StringBuilder sql = new StringBuilder("SELECT id, role_id, menu_id, name_override, tenant_id FROM blade_role_menu_name WHERE 1=1");
+		List<Object> args = new java.util.ArrayList<>();
+		if (roleId != null) { sql.append(" AND role_id=?"); args.add(roleId); }
+		if (menuId != null) { sql.append(" AND menu_id=?"); args.add(menuId); }
+		return R.data(jdbcTemplate.queryForList(sql.toString(), args.toArray()));
+	}
+
+	/**
+	 * 保存角色级菜单显示名（管理员）：同角色+菜单幂等覆盖，name 为空则删除配置。
+	 */
+	@PostMapping("/role-name/save")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	@Operation(summary = "保存角色菜单显示名", description = "roleId+menuId+name，name 为空则删除")
+	public R<Boolean> roleNameSave(@RequestBody Map<String, Object> body) {
+		Object roleId = body.get("roleId"), menuId = body.get("menuId"), name = body.get("name");
+		// 雪花ID 19 位，JS Number 会丢精度，前端一律传字符串；这里兼容字符串/数值两种形态
+		long r, m;
+		try {
+			r = Long.parseLong(String.valueOf(roleId));
+			m = Long.parseLong(String.valueOf(menuId));
+		} catch (Exception ex) {
+			return R.fail("roleId / menuId 必填且必须为数字");
+		}
+		String tenantId = org.springblade.core.tenant.TenantUtil.getTenantId();
+		String n = name == null ? null : String.valueOf(name).trim();
+		if (Func.isBlank(n)) {
+			jdbcTemplate.update("DELETE FROM blade_role_menu_name WHERE role_id=? AND menu_id=? AND tenant_id=?", r, m, tenantId);
+			return R.data(true);
+		}
+		Long exists = jdbcTemplate.queryForObject(
+			"SELECT COUNT(*) FROM blade_role_menu_name WHERE role_id=? AND menu_id=? AND tenant_id=?", Long.class, r, m, tenantId);
+		if (exists != null && exists > 0) {
+			jdbcTemplate.update("UPDATE blade_role_menu_name SET name_override=? WHERE role_id=? AND menu_id=? AND tenant_id=?", n, r, m, tenantId);
+		} else {
+			Long max = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_role_menu_name", Long.class);
+			jdbcTemplate.update("INSERT INTO blade_role_menu_name (id,role_id,menu_id,name_override,tenant_id,create_time) VALUES (?,?,?,?,?,NOW())",
+				(max == null ? 0L : max) + 1, r, m, n, tenantId);
+		}
+		return R.data(true);
 	}
 
 }

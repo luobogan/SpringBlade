@@ -50,6 +50,9 @@ public interface IDataScopeService {
      */
     List<ModeDataShareRule> listRules(Long modeId);
 
+    /** 统计模块的数据范围规则数（供权限优先级判定） */
+    Long countRules(Long modeId);
+
     /**
      * 保存模块的数据范围规则（全量替换：先按 modeid 删除，再逐条插入）。
      *

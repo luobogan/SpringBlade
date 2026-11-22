@@ -1,5 +1,6 @@
 package org.springblade.formmode.service;
 
+import org.springblade.formmode.dto.FieldSubjectSaveDTO;
 import org.springblade.formmode.dto.ModeRightBatchDTO;
 import org.springblade.formmode.entity.ModeRightInfo;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
@@ -7,6 +8,7 @@ import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 表单权限服务接口
@@ -28,6 +30,14 @@ public interface IFormRightService {
     java.util.List<Integer> listUserRightTypes(Long modeId, Long userId);
 
     /**
+     * 模块是否配置了建模权限（moderightinfo/modefieldauthorize/modedatasharerule 任一有记录）。
+     *
+     * <p>供统一菜单列表决定权限优先级：配了建模权限 → 建模权限优先，不叠加 blade_scope 数据权限；
+     * 没配 → 回退到 blade_scope 数据权限。</p>
+     */
+    boolean hasModelRightConfig(Long modeId);
+
+    /**
      * 获取模块的权限配置
      */
     List<ModeRightInfo> getModeRights(Long modeId);
@@ -46,6 +56,19 @@ public interface IFormRightService {
      * 保存字段权限
      */
     boolean saveFieldAuthorizes(Long modeId, List<ModeFieldAuthorize> authorizes);
+
+    /** 查询字段权限授权对象组（一组对象共享一份字段权限） */
+    List<Map<String, Object>> getFieldAuthGroups(Long modeId);
+
+    /**
+     * 按授权主体查询字段权限（跨模块）。
+     */
+    List<ModeFieldAuthorize> getFieldAuthorizesBySubject(Integer objtype, Long objid);
+
+    /**
+     * 按授权主体差异保存字段权限（只影响指定主体，不触碰其它主体/模块权限）。
+     */
+    boolean saveFieldAuthorizesBySubject(FieldSubjectSaveDTO batch);
 
     /**
      * 获取用户有权限的模块ID列表

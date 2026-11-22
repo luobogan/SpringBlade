@@ -32,6 +32,10 @@ public class ModeFieldAuthorize implements Serializable {
     @Schema(description = "模块ID（modeinfo.id，bigint）")
     private Long modeid;
 
+    /** 授权对象组ID；null 表示老的单主体授权 */
+    @Schema(description = "授权对象组ID")
+    private Long groupId;
+
     @Schema(description = "字段ID（workflow_billfield.id）")
     private Integer fieldid;
 
@@ -39,7 +43,7 @@ public class ModeFieldAuthorize implements Serializable {
     private Integer objtype;
 
     @Schema(description = "授权对象ID")
-    private Integer objid;
+    private Long objid;
 
     @Schema(description = "授权部门是否含子部门：1是 0否（默认否）")
     private Integer includesub;

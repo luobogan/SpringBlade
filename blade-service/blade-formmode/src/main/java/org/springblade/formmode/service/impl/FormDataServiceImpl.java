@@ -96,6 +96,22 @@ public class FormDataServiceImpl implements IFormDataService {
     private boolean fieldWritePermEnforce;
 
     /**
+     * 安全档位：strict 时强制所有 fail-closed 开关为 true（除非单独显式关闭）。
+     * 用于通用化/高安全环境一键收紧；compat（默认）保持既有兼容行为。
+     */
+    @Value("${blade.formmode.security.profile:compat}")
+    private String securityProfile;
+
+    @jakarta.annotation.PostConstruct
+    public void applySecurityProfile() {
+        if ("strict".equalsIgnoreCase(securityProfile)) {
+            rowWriteScopeEnforce = true;
+            rowWriteScopeStrict = true;
+            fieldWritePermEnforce = true;
+        }
+    }
+
+    /**
      * 按表单布局重算公式，返回「目标字段 → 计算结果」。
      *
      * <p>布局读取失败 / 无公式时返回空 Map（调用方按「无公式字段」处理，行为不变）。</p>
@@ -218,6 +234,10 @@ public class FormDataServiceImpl implements IFormDataService {
                     }
                 }
             } catch (Exception e) {
+                if ("strict".equalsIgnoreCase(securityProfile)) {
+                    log.error("[formmode] 字段权限拉取失败，strict 档位拒绝写入. modeId={}, err={}", permModeId, e.getMessage());
+                    throw new ServiceException("字段权限校验失败，拒绝写入");
+                }
                 log.warn("[formmode] 字段权限拉取失败，按 fail-open 跳过裁剪. modeId={}, err={}",
                     permModeId, e.getMessage());
                 permMap.clear();
@@ -479,8 +499,9 @@ public class FormDataServiceImpl implements IFormDataService {
             if (!formRightService.canEditDataRow(realModeId, creatorId, dataId)) {
                 throw new ServiceException("无权编辑他人创建的数据（仅查看共享）");
             }
-            // S2.1：建模权限通过后，再套通用数据权限行规则（有 resourceCode 才校验）
-            if (!StringUtil.isBlank(resourceCode)) {
+            // 数据权限优先级：仅「未配建模权限」时回退套 blade_scope 行规则；
+            // 配了建模权限则已由 canEditDataRow 校验，不再叠加（与读侧 pageFormDataByScope 同口径）。
+            if (!StringUtil.isBlank(resourceCode) && !formRightService.hasModelRightConfig(realModeId)) {
                 assertDataScopeWrite(tableName, resourceCode, dataId);
             }
         } catch (ServiceException e) {
@@ -1100,14 +1121,19 @@ public class FormDataServiceImpl implements IFormDataService {
             // 条件化授权：命中共享规则时行还需满足结构化条件（与范围过滤 AND 叠加）
             appendRowCondition(scope, tableCols, countSql, dataSql, queryParams);
 
-            // 添加查询条件
+            // 添加查询条件（白名单校验：防止列名逃逸注入，与 pageFormDataByScope 同口径）
             if (params != null) {
                 for (Map.Entry<String, Object> entry : params.entrySet()) {
-                    if (!isSystemField(entry.getKey()) && entry.getValue() != null) {
-                        countSql.append(" AND `").append(entry.getKey()).append("` LIKE ?");
-                        dataSql.append(" AND `").append(entry.getKey()).append("` LIKE ?");
-                        queryParams.add("%" + entry.getValue() + "%");
+                    String key = entry.getKey();
+                    if (key == null || entry.getValue() == null || isSystemField(key)) {
+                        continue;
                     }
+                    if (!SAFE_COLUMN.matcher(key).matches() || !tableCols.contains(key.toLowerCase())) {
+                        continue;
+                    }
+                    countSql.append(" AND `").append(key).append("` LIKE ?");
+                    dataSql.append(" AND `").append(key).append("` LIKE ?");
+                    queryParams.add("%" + entry.getValue() + "%");
                 }
             }
 
@@ -1145,6 +1171,9 @@ public class FormDataServiceImpl implements IFormDataService {
         final DataScope scope = formRightService.resolveDataScope(realModeId);
         final ScopeRule rule = loadScopeRule(resourceCode,
             AuthUtil.getUser() == null ? null : AuthUtil.getUser().getRoleId());
+        // 权限优先级：配了建模权限（三表任一有记录）→ 建模权限优先，不叠加 blade_scope；
+        // 没配建模权限 → 回退数据权限（blade_scope 五档 + scope_field 列裁剪）。
+        final boolean useScopeRule = !formRightService.hasModelRightConfig(realModeId);
         final String table = mainTableName;
         // 矩阵主体（objtype=7）：合并单条共享中按行字段值解析出的可访问行
         mergeMatrixShared(scope, realModeId, table);
@@ -1154,9 +1183,10 @@ public class FormDataServiceImpl implements IFormDataService {
                 BizValueCoercer.loadColumnMeta(jdbcTemplate, table);
             Set<String> tableCols = new HashSet<>(colMeta.keySet());
 
-            // 列清单：优先规则的 scope_field（可见字段），非法/不存在的列剔除后回落 SELECT *
+            // 列清单：建模权限优先时不按 blade_scope.scope_field 裁剪（前端按建模字段权限控制）；
+            // 仅回退数据权限时才用 scope_field 裁剪，非法/不存在的列剔除后回落 SELECT *
             String selectCols = "*";
-            if (rule != null && StringUtil.isNotBlank(rule.getScopeField())) {
+            if (useScopeRule && rule != null && StringUtil.isNotBlank(rule.getScopeField())) {
                 String sf = rule.getScopeField().trim();
                 if (!"*".equals(sf)) {
                     List<String> cols = Arrays.stream(sf.split(","))
@@ -1192,8 +1222,11 @@ public class FormDataServiceImpl implements IFormDataService {
             // ①-b 条件化授权：命中共享规则时行还需满足结构化条件
             appendRowCondition(scope, tableCols, countSql, dataSql, queryParams);
 
-            // ② 数据权限规则行级过滤（blade_scope_data）
-            applyScopeRuleFilter(rule, tableCols, countSql, dataSql);
+            // ② 数据权限规则行级过滤（blade_scope_data）——仅「未配建模权限」时回退使用；
+            //    配了建模权限则已由 ① 过滤，不再叠加，避免两套规则互相收窄导致配置难懂。
+            if (useScopeRule) {
+                applyScopeRuleFilter(rule, tableCols, countSql, dataSql);
+            }
 
             // ③ 查询条件（与 pageFormData 同口径：LIKE 模糊）
             if (params != null) {
@@ -1202,7 +1235,7 @@ public class FormDataServiceImpl implements IFormDataService {
                     if (key == null || entry.getValue() == null || isSystemField(key)) {
                         continue;
                     }
-                    if (!SAFE_COLUMN.matcher(key).matches() || !tableCols.contains(key)) {
+                    if (!SAFE_COLUMN.matcher(key).matches() || !tableCols.contains(key.toLowerCase())) {
                         continue;
                     }
                     countSql.append(" AND `").append(key).append("` LIKE ?");

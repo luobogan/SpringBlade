@@ -35,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -89,6 +90,18 @@ public class FormRightServiceImpl implements IFormRightService {
      */
     @Value("${blade.formmode.maintain-scope.strict:false}")
     private boolean maintainScopeStrict;
+
+    /** 安全档位：strict 时强制 fail-closed 开关为 true；compat（默认）保持兼容 */
+    @Value("${blade.formmode.security.profile:compat}")
+    private String securityProfile;
+
+    @jakarta.annotation.PostConstruct
+    public void applySecurityProfile() {
+        if ("strict".equalsIgnoreCase(securityProfile)) {
+            fieldPermFailClosed = true;
+            maintainScopeStrict = true;
+        }
+    }
 
     /** 权限配置版本号 Redis key 前缀（按 modeId 隔离） */
     private static final String RIGHT_VERSION_KEY = "formmode:right:version:";
@@ -155,13 +168,31 @@ public class FormRightServiceImpl implements IFormRightService {
         return result;
     }
 
+    @Override
+    public boolean hasModelRightConfig(Long modeId) {
+        if (modeId == null) return false;
+        try {
+            Long r = modeRightInfoMapper.selectCount(new LambdaQueryWrapper<ModeRightInfo>()
+                .eq(ModeRightInfo::getModeid, modeId));
+            if (r != null && r > 0) return true;
+            Long f = modeFieldAuthorizeMapper.selectCount(new LambdaQueryWrapper<ModeFieldAuthorize>()
+                .eq(ModeFieldAuthorize::getModeid, modeId));
+            if (f != null && f > 0) return true;
+            Long s = dataScopeService.countRules(modeId);
+            return s != null && s > 0;
+        } catch (Exception e) {
+            log.warn("[formmode] 判定建模权限配置失败，按「未配置」处理(回退数据权限). modeId={}, err={}", modeId, e.getMessage());
+            return false; // 异常回退数据权限（数据权限侧 fail-closed 兜底）
+        }
+    }
+
     /** 主体匹配（供 listUserRightTypes 使用；口径与 checkRight 的 switch 一致） */
     private boolean matchModeRightSubject(ModeRightInfo r, Long uid, Set<Long> roleIds,
                                           Set<Long> deptIds, Set<Long> postIds, Set<Long> subcompanyIds) {
         Integer objType = r.getObjtype();
-        Integer objId = r.getObjid();
+        Long objId = r.getObjid();
         if (objType == null || objId == null) return false;
-        long oid = objId.longValue();
+        long oid = objId;
         if (oid == OBJ_ID_ALL) return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
         boolean hit = switch (objType) {
             case 4 -> uid != null && uid == oid;
@@ -194,9 +225,23 @@ public class FormRightServiceImpl implements IFormRightService {
                 .eq(ModeRightInfo::getRighttype, rightType)
                 .and(w -> w.eq(ModeRightInfo::getTenantId, tenant).or().isNull(ModeRightInfo::getTenantId))
         );
-        // 未配置任何权限 → 默认放行（保持既有语义）
+        // 该 righttype 未配置：
+        // - 整个模块都没配任何操作权限 → 默认放行（兼容语义）
+        // - 模块已配其它操作权限但该操作未配 → strict 档位拒绝（与 listUserRightTypes 显式授权口径一致，
+        //   避免"前端隐藏编辑按钮但直连 update 接口可编辑"）；compat 档位仍放行
         if (rights == null || rights.isEmpty()) {
-            return true;
+            if (!fieldPermFailClosed && !maintainScopeStrict) {
+                return true; // compat：保持既有语义
+            }
+            try {
+                Long any = modeRightInfoMapper.selectCount(new LambdaQueryWrapper<ModeRightInfo>()
+                    .eq(ModeRightInfo::getModeid, modeId)
+                    .and(w -> w.eq(ModeRightInfo::getTenantId, tenant).or().isNull(ModeRightInfo::getTenantId)));
+                return any == null || any == 0; // 模块有其它权限配置 → 拒绝
+            } catch (Exception e) {
+                log.warn("[formmode] 模块权限存在性判定失败. modeId={}, err={}", modeId, e.getMessage());
+                return false; // strict 语义下异常拒绝
+            }
         }
 
         // 解析当前用户授权维度（角色/部门来自登录态 BladeUser；岗位另查 blade_user.post_id）
@@ -339,6 +384,224 @@ public class FormRightServiceImpl implements IFormRightService {
     }
 
     @Override
+    public List<ModeFieldAuthorize> getFieldAuthorizesBySubject(Integer objtype, Long objid) {
+        if (objtype == null || objid == null) return new ArrayList<>();
+        String tenant = currentTenant();
+        try {
+            return modeFieldAuthorizeMapper.selectList(new LambdaQueryWrapper<ModeFieldAuthorize>()
+                .eq(ModeFieldAuthorize::getObjtype, objtype)
+                .eq(ModeFieldAuthorize::getObjid, objid)
+                .and(w -> w.eq(ModeFieldAuthorize::getTenantId, tenant).or().isNull(ModeFieldAuthorize::getTenantId))
+                .orderByAsc(ModeFieldAuthorize::getModeid, ModeFieldAuthorize::getFieldid));
+        } catch (Exception e) {
+            log.warn("[formmode] 按主体查询字段权限失败. objtype={}, objid={}, err={}", objtype, objid, e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
+    public boolean saveFieldAuthorizesBySubject(org.springblade.formmode.dto.FieldSubjectSaveDTO batch) {
+        if (batch == null || batch.getObjtype() == null || org.springblade.core.tool.utils.Func.isBlank(batch.getObjid())
+            || batch.getModes() == null || batch.getModes().isEmpty()) {
+            throw new ServiceException("按主体保存字段权限参数不完整");
+        }
+        long objId;
+        try {
+            objId = Long.parseLong(String.valueOf(batch.getObjid()).trim());
+        } catch (Exception e) {
+            throw new ServiceException("授权对象ID非法");
+        }
+        String tenant = currentTenant();
+        // 1) 解析 modeId 与版本校验
+        java.util.List<Long> modeIds = new ArrayList<>();
+        java.util.Set<String> modeIdSet = new java.util.LinkedHashSet<>();
+        for (org.springblade.formmode.dto.FieldSubjectModeDTO m : batch.getModes()) {
+            if (m == null || org.springblade.core.tool.utils.Func.isBlank(m.getModeId())) continue;
+            long modeId;
+            try { modeId = Long.parseLong(String.valueOf(m.getModeId()).trim()); } catch (Exception e) { continue; }
+            if (modeIdSet.add(String.valueOf(modeId))) modeIds.add(modeId);
+            Long expected = batch.getModeVersions() == null ? null : batch.getModeVersions().get(String.valueOf(modeId));
+            if (expected != null) {
+                long current = getRightVersion(modeId);
+                if (current != expected) {
+                    throw new ServiceException("权限配置已被他人修改，请刷新后重试（modeId=" + modeId + "）");
+                }
+            }
+        }
+        if (modeIds.isEmpty()) throw new ServiceException("未提交任何有效模块");
+        // 2) 查旧记录（只限当前主体 + 本次模块）
+        List<ModeFieldAuthorize> olds = modeFieldAuthorizeMapper.selectList(new LambdaQueryWrapper<ModeFieldAuthorize>()
+            .eq(ModeFieldAuthorize::getObjtype, batch.getObjtype())
+            .eq(ModeFieldAuthorize::getObjid, objId)
+            .in(ModeFieldAuthorize::getModeid, modeIds)
+            .eq(ModeFieldAuthorize::getTenantId, tenant));
+        java.util.Map<String, ModeFieldAuthorize> oldMap = new java.util.HashMap<>();
+        for (ModeFieldAuthorize old : olds) {
+            oldMap.put(old.getModeid() + "_" + old.getFieldid(), old);
+        }
+        java.util.Set<String> keep = new java.util.HashSet<>();
+        int changed = 0;
+        // 3) upsert 提交项
+        for (org.springblade.formmode.dto.FieldSubjectModeDTO m : batch.getModes()) {
+            if (m == null || org.springblade.core.tool.utils.Func.isBlank(m.getModeId())) continue;
+            long modeId;
+            try { modeId = Long.parseLong(String.valueOf(m.getModeId()).trim()); } catch (Exception e) { continue; }
+            if (m.getFields() == null) continue;
+            for (org.springblade.formmode.dto.FieldSubjectItemDTO f : m.getFields()) {
+                if (f == null || f.getFieldId() == null || f.getRightvalue() == null) continue;
+                int rv = f.getRightvalue();
+                if (rv < 0 || rv > 2) continue;
+                String key = modeId + "_" + f.getFieldId();
+                keep.add(key);
+                ModeFieldAuthorize exist = oldMap.get(key);
+                if (exist != null) {
+                    if (!Integer.valueOf(rv).equals(exist.getRightvalue())) {
+                        exist.setRightvalue(rv);
+                        modeFieldAuthorizeMapper.updateById(exist);
+                        changed++;
+                    }
+                } else {
+                    ModeFieldAuthorize add = new ModeFieldAuthorize();
+                    add.setModeid(modeId);
+                    add.setFieldid(f.getFieldId().intValue());
+                    add.setObjtype(batch.getObjtype());
+                    add.setObjid(objId);
+                    add.setIncludesub(0);
+                    add.setRightvalue(rv);
+                    add.setTenantId(tenant);
+                    modeFieldAuthorizeMapper.insert(add);
+                    changed++;
+                }
+            }
+        }
+        // 4) 删除该主体在这些模块下未提交字段
+        for (ModeFieldAuthorize old : olds) {
+            String key = old.getModeid() + "_" + old.getFieldid();
+            if (!keep.contains(key)) {
+                modeFieldAuthorizeMapper.deleteById(old.getId());
+                changed++;
+            }
+        }
+        // 5) 版本推进 + 审计
+        for (Long modeId : modeIds) bumpRightVersion(modeId);
+        BladeUser auditUser = AuthUtil.getUser();
+        log.info("[formmode][AUDIT] 按主体字段权限保存. objtype={}, objid={}, modes={}, changed={}, operator={}({})",
+            batch.getObjtype(), objId, modeIds, changed,
+            auditUser == null ? "anonymous" : auditUser.getUserName(),
+            auditUser == null ? null : auditUser.getUserId());
+        return true;
+    }
+
+    /**
+     * 保存字段权限授权对象组：一个组绑定多个对象，字段权限只存一份。
+     */
+    private void saveFieldAuthGroups(Long modeId, List<org.springblade.formmode.dto.FieldAuthGroupDTO> groups) {
+        String tenant = currentTenant();
+        List<Long> oldGroups = jdbcTemplate.queryForList(
+            "SELECT id FROM mode_field_auth_group WHERE modeid=? AND tenant_id=?", Long.class, modeId, tenant);
+        if (oldGroups != null && !oldGroups.isEmpty()) {
+            String marks = oldGroups.stream().map(String::valueOf).collect(Collectors.joining(","));
+            jdbcTemplate.update("DELETE FROM modefieldauthorize WHERE group_id IN (" + marks + ")");
+            jdbcTemplate.update("DELETE FROM mode_field_auth_subject WHERE group_id IN (" + marks + ")");
+            jdbcTemplate.update("DELETE FROM mode_field_auth_group WHERE id IN (" + marks + ")");
+        }
+        if (groups == null || groups.isEmpty()) return;
+        Long maxGroup = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM mode_field_auth_group", Long.class);
+        long nextGroup = (maxGroup == null ? 0L : maxGroup) + 1;
+        Long maxSubject = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM mode_field_auth_subject", Long.class);
+        long nextSubject = (maxSubject == null ? 0L : maxSubject) + 1;
+        Long maxField = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM modefieldauthorize", Long.class);
+        long nextField = (maxField == null ? 0L : maxField) + 1;
+
+        for (org.springblade.formmode.dto.FieldAuthGroupDTO group : groups) {
+            if (group == null) continue;
+            long groupId = nextGroup++;
+            String name = org.springblade.core.tool.utils.Func.isBlank(group.getGroupName()) ? "授权对象组" : group.getGroupName().trim();
+            jdbcTemplate.update("INSERT INTO mode_field_auth_group (id,tenant_id,modeid,group_name,create_time,update_time) VALUES (?,?,?,?,NOW(),NOW())",
+                groupId, tenant, modeId, name);
+            if (group.getSubjects() != null) {
+                for (org.springblade.formmode.dto.FieldAuthSubjectDTO s : group.getSubjects()) {
+                    if (s == null || s.getObjtype() == null || org.springblade.core.tool.utils.Func.isBlank(s.getObjid())) continue;
+                    long objId;
+                    try { objId = Long.parseLong(String.valueOf(s.getObjid()).trim()); } catch (Exception e) { continue; }
+                    jdbcTemplate.update("INSERT INTO mode_field_auth_subject (id,tenant_id,group_id,objtype,objid,includesub) VALUES (?,?,?,?,?,?)",
+                        nextSubject++, tenant, groupId, s.getObjtype(), objId, s.getIncludesub() == null ? 0 : s.getIncludesub());
+                }
+            }
+            if (group.getFields() != null) {
+                for (org.springblade.formmode.dto.FieldSubjectItemDTO f : group.getFields()) {
+                    if (f == null || f.getFieldId() == null || f.getRightvalue() == null) continue;
+                    jdbcTemplate.update("INSERT INTO modefieldauthorize (id,modeid,group_id,fieldid,rightvalue,tenant_id) VALUES (?,?,?,?,?,?)",
+                        nextField++, modeId, groupId, f.getFieldId().intValue(), f.getRightvalue(), tenant);
+                }
+            }
+        }
+    }
+
+    @Override
+    public List<Map<String, Object>> getFieldAuthGroups(Long modeId) {
+        if (modeId == null) return new ArrayList<>();
+        String tenant = currentTenant();
+        try {
+            List<Map<String, Object>> groups = jdbcTemplate.queryForList(
+                "SELECT id, modeid, group_name FROM mode_field_auth_group WHERE modeid=? AND tenant_id=? ORDER BY id",
+                modeId, tenant);
+            if (groups == null || groups.isEmpty()) return new ArrayList<>();
+            for (Map<String, Object> g : groups) {
+                long gid = ((Number) g.get("id")).longValue();
+                g.put("subjects", jdbcTemplate.queryForList(
+                    "SELECT objtype,objid,includesub FROM mode_field_auth_subject WHERE group_id=? AND tenant_id=? ORDER BY objtype,objid",
+                    gid, tenant));
+                g.put("fields", jdbcTemplate.queryForList(
+                    "SELECT fieldid,rightvalue FROM modefieldauthorize WHERE group_id=? AND tenant_id=? ORDER BY fieldid",
+                    gid, tenant));
+            }
+            return groups;
+        } catch (Exception e) {
+            log.warn("[formmode] 查询字段权限组失败. modeId={}, err={}", modeId, e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /** 当前用户命中的字段权限组ID */
+    private Set<Long> resolveMatchedFieldGroupIds(Long modeId, String tenant, Long uid,
+                                                   Set<Long> roleIds, Set<Long> deptIds,
+                                                   Set<Long> postIds, Set<Long> subcompanyIds) {
+        Set<Long> result = new LinkedHashSet<>();
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT s.group_id,s.objtype,s.objid,s.includesub FROM mode_field_auth_subject s "
+                    + "JOIN mode_field_auth_group g ON g.id=s.group_id "
+                    + "WHERE g.modeid=? AND g.tenant_id=? AND s.tenant_id=?",
+                modeId, tenant, tenant);
+            if (rows == null) return result;
+            for (Map<String, Object> row : rows) {
+                Object ot = row.get("objtype"), oi = row.get("objid");
+                if (!(ot instanceof Number) || !(oi instanceof Number)) continue;
+                int objtype = ((Number) ot).intValue();
+                long objid = ((Number) oi).longValue();
+                int includeSub = row.get("includesub") instanceof Number ? ((Number) row.get("includesub")).intValue() : 0;
+                boolean hit = switch (objtype) {
+                    case 4 -> uid != null && uid == objid;
+                    case 1 -> objid == OBJ_ID_ALL || roleIds.contains(objid);
+                    case 2 -> objid == OBJ_ID_ALL || subjectResolver.matchDept(objid, deptIds, includeSub);
+                    case 3 -> objid == OBJ_ID_ALL || postIds.contains(objid);
+                    case 5 -> objid == OBJ_ID_ALL || subcompanyIds.contains(objid);
+                    default -> false;
+                };
+                if (hit && row.get("group_id") instanceof Number) {
+                    result.add(((Number) row.get("group_id")).longValue());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 查询用户字段权限组失败. modeId={}, err={}", modeId, e.getMessage());
+        }
+        return result;
+    }
+
+    @Override
     public Long resolveModeIdByFormId(Long formId) {
         if (formId == null) {
             return null;
@@ -429,8 +692,8 @@ public class FormRightServiceImpl implements IFormRightService {
             return new ArrayList<>();
         }
         List<ModeFieldAuthorize> auths;
+        String tenant = currentTenant();
         try {
-            String tenant = currentTenant();
             auths = modeFieldAuthorizeMapper.selectList(new LambdaQueryWrapper<ModeFieldAuthorize>()
                 .eq(ModeFieldAuthorize::getModeid, modeId)
                 .and(w -> w.eq(ModeFieldAuthorize::getTenantId, tenant).or().isNull(ModeFieldAuthorize::getTenantId)));
@@ -457,32 +720,42 @@ public class FormRightServiceImpl implements IFormRightService {
         Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
         Set<Long> postIds = subjectResolver.resolvePostIds(uid);
         Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
+        Set<Long> matchedGroupIds = resolveMatchedFieldGroupIds(modeId, tenant, uid, roleIds, deptIds, postIds, subcompanyIds);
         // 命中用户的授权 → fieldId → rightvalue（多条命中取最宽松：可编辑 > 可见）
         Map<Integer, Integer> fieldRight = new LinkedHashMap<>();
         for (ModeFieldAuthorize a : auths) {
             if (a == null || a.getFieldid() == null || a.getRightvalue() == null) {
                 continue;
             }
-            if (!matchAuthorizeObject(a, uid, roleIds, deptIds, postIds, subcompanyIds)) {
-                continue;
+            boolean hit;
+            if (a.getGroupId() != null) {
+                hit = matchedGroupIds.contains(a.getGroupId());
+            } else {
+                hit = matchAuthorizeObject(a, uid, roleIds, deptIds, postIds, subcompanyIds);
             }
+            if (!hit) continue;
             fieldRight.merge(a.getFieldid(), a.getRightvalue(), Math::max);
         }
-        if (fieldRight.isEmpty()) {
+        // 兼容档位（默认）：保持既有语义——只返回命中字段，无命中则返回空（调用方按默认渲染）。
+        if (fieldRight.isEmpty() && !fieldPermFailClosed && !maintainScopeStrict) {
             return new ArrayList<>();
         }
-
-        // fieldId → 字段定义（modefieldauthorize 存的是 workflow_billfield.id，VO 需要字段名 + scope）
-        Map<Integer, WorkflowBillField> fieldDefs = loadFieldDefs(fieldRight.keySet());
+        // 严格档位：模块配置了字段授权但当前用户未命中 → 必须返回全部字段 + hidden，
+        // 不能返回空让前端按「未配置」全放行（否则字段授权形同虚设）。
+        // 注意：上面 auths.isEmpty()（模块完全没配）与 admin 豁免仍返回空 = 不收窄。
+        Set<Integer> allFieldIds = new LinkedHashSet<>(fieldRight.keySet());
+        allFieldIds.addAll(loadAllFieldIds(modeId));
+        Map<Integer, WorkflowBillField> fieldDefs = loadFieldDefs(allFieldIds);
 
         List<FieldPermVO> result = new ArrayList<>();
-        fieldRight.forEach((fid, rv) -> {
-            WorkflowBillField def = fieldDefs.get(fid);
+        fieldDefs.forEach((fid, def) -> {
             if (def == null || def.getFieldname() == null || def.getFieldname().isEmpty()) {
                 return; // 字段已删/查不到 → 跳过（与「幽灵字段」处理一致）
             }
-            boolean visible = rv >= 1;
-            boolean editable = rv >= 2;
+            // 未命中授权的字段 → visible=false（拒绝）。命中授权的按 rightvalue 派生三态。
+            Integer rv = fieldRight.get(fid);
+            boolean visible = rv != null && rv >= 1;
+            boolean editable = rv != null && rv >= 2;
             // 按字段归属派生作用域：主表 main / 明细表 dt{idx}，与审批态 scope 回退链对齐
             result.add(new FieldPermVO(scopeOfField(def), def.getFieldname(), visible, editable, null));
         });
@@ -677,7 +950,7 @@ public class FormRightServiceImpl implements IFormRightService {
     private boolean matchAuthorizeObject(ModeFieldAuthorize a, Long uid, Set<Long> roleIds,
                                          Set<Long> deptIds, Set<Long> postIds, Set<Long> subcompanyIds) {
         Integer objType = a.getObjtype();
-        Integer objId = a.getObjid();
+        Long objId = a.getObjid();
         if (objType == null || objId == null) {
             return false;
         }
@@ -686,15 +959,15 @@ public class FormRightServiceImpl implements IFormRightService {
         }
         switch (objType) {
             case 4: // 人员
-                return uid != null && uid.equals(objId.longValue());
+                return uid != null && uid.equals(objId);
             case 1: // 角色
-                return roleIds.contains(objId.longValue());
+                return roleIds.contains(objId);
             case 2: // 部门：includesub=1 时展开子孙部门（与模块权限同口径）
-                return subjectResolver.matchDept(objId.longValue(), deptIds, a.getIncludesub());
+                return subjectResolver.matchDept(objId, deptIds, a.getIncludesub());
             case 3: // 岗位
-                return postIds.contains(objId.longValue());
+                return postIds.contains(objId);
             case 5: // 分部
-                return subcompanyIds.contains(objId.longValue());
+                return subcompanyIds.contains(objId);
             default:
                 return false;
         }
@@ -706,6 +979,27 @@ public class FormRightServiceImpl implements IFormRightService {
      * <p>返回实体而非仅字段名，供调用方按 ismain/detailtable 派生字段权限 scope
      * （main / dt{idx}），与 workflow 侧 FieldPermVO 的作用域语义对齐。</p>
      */
+    /**
+     * 加载某模块对应表单的全部字段 ID（用于「已配置字段授权但未命中」时补全 hidden VO）。
+     * 反查失败返回空集合（此时仅按 fieldRight 已命中的字段返回，不放大也不制造幽灵字段）。
+     */
+    private Set<Integer> loadAllFieldIds(Long modeId) {
+        Set<Integer> ids = new LinkedHashSet<>();
+        if (modeId == null) return ids;
+        try {
+            ModeInfo mi = modeInfoMapper.selectById(modeId);
+            Long billId = mi == null ? null : mi.getBillid();
+            // 兜底：modeinfo 无记录时（迁移表单/前端以 formId 当 modeId），用 modeId 本身当 billid
+            if (billId == null) billId = modeId;
+            List<Integer> found = jdbcTemplate.queryForList(
+                "SELECT id FROM workflow_billfield WHERE billid=? AND is_deleted=0", Integer.class, billId);
+            if (found != null) ids.addAll(found);
+        } catch (Exception e) {
+            log.warn("[formmode] 加载全部字段ID失败，按仅已命中字段处理. modeId={}, err={}", modeId, e.getMessage());
+        }
+        return ids;
+    }
+
     private Map<Integer, WorkflowBillField> loadFieldDefs(Set<Integer> fieldIds) {
         Map<Integer, WorkflowBillField> map = new LinkedHashMap<>();
         if (fieldIds == null || fieldIds.isEmpty()) {
@@ -812,7 +1106,13 @@ public class FormRightServiceImpl implements IFormRightService {
             // 三表在同一事务内全量替换：任一失败整体回滚
             saveModeRights(modeId, batch.getRights());
             saveFieldAuthorizes(modeId, batch.getFieldAuthorizes());
+            saveFieldAuthGroups(modeId, batch.getFieldGroups());
             dataScopeService.saveRules(modeId, batch.getDataScopes());
+            // 方案C：一表单一菜单。按 formId 创建/更新表单数据菜单，授权给配置角色并写入角色级显示名。
+            int menuGranted = 0;
+            if (batch.getGrantMenuAccess() == null || batch.getGrantMenuAccess()) {
+                menuGranted = ensureFormMenuAndGrant(modeId, batch);
+            }
             // 版本递增：Redis 版本号与三表提交同向推进（写入成功后 INCR）
             bumpRightVersion(modeId);
             // 结构化审计日志：权限配置变更可追溯（操作人 / 模块 / 三表条数 / 版本）
@@ -820,15 +1120,162 @@ public class FormRightServiceImpl implements IFormRightService {
             int rightCnt = batch.getRights() == null ? 0 : batch.getRights().size();
             int fieldCnt = batch.getFieldAuthorizes() == null ? 0 : batch.getFieldAuthorizes().size();
             int scopeCnt = batch.getDataScopes() == null ? 0 : batch.getDataScopes().size();
-            log.info("[formmode][AUDIT] 权限配置变更. modeId={}, operator={}({}), rights={}, fields={}, scopes={}, version={}",
+            log.info("[formmode][AUDIT] 权限配置变更. modeId={}, operator={}({}), rights={}, fields={}, scopes={}, menuGranted={}, version={}",
                 modeId,
                 auditUser == null ? "anonymous" : auditUser.getUserName(),
                 auditUser == null ? null : auditUser.getUserId(),
-                rightCnt, fieldCnt, scopeCnt, getRightVersion(modeId));
+                rightCnt, fieldCnt, scopeCnt, menuGranted, getRightVersion(modeId));
             return true;
         } catch (Exception e) {
             log.error("[formmode] 权限三表聚合保存失败，事务回滚. modeId={}, err={}", modeId, e.getMessage(), e);
             throw e;
+        }
+    }
+
+    /**
+     * 方案C：一表单一菜单。
+     *
+     * <p>按 formId 创建/更新 blade_menu（path=/formmode/formview/{formId}），
+     * 重置该菜单的角色授权（来自模块权限 objtype=1），并写入角色级菜单显示名。</p>
+     *
+     * @return 本次授权的角色数
+     */
+    private int ensureFormMenuAndGrant(Long modeId, org.springblade.formmode.dto.ModeRightBatchDTO batch) {
+        if (batch == null || org.springblade.core.tool.utils.Func.isBlank(batch.getFormId())) {
+            log.warn("[formmode][MENU] 方案C菜单维护跳过：formId为空. modeId={}", modeId);
+            return 0;
+        }
+        try {
+            String formId = String.valueOf(batch.getFormId()).trim();
+            if (!formId.matches("\\d+")) {
+                log.warn("[formmode][MENU] 方案C菜单维护跳过：formId非法. modeId={}, formId={}", modeId, formId);
+                return 0;
+            }
+            String code = "formdata_view_" + formId;
+            String path = "/formmode/formview/" + formId;
+            String tenantId = currentTenant();
+            // 默认菜单名：优先前端传入，其次 workflow_bill.form_name，最后兜底
+            String menuName = org.springblade.core.tool.utils.Func.isBlank(batch.getFormMenuName()) ? "" : batch.getFormMenuName().trim();
+            if (org.springblade.core.tool.utils.Func.isBlank(menuName)) {
+                List<String> names = jdbcTemplate.queryForList(
+                    "SELECT form_name FROM workflow_bill WHERE id=?", String.class, Long.valueOf(formId));
+                menuName = (names == null || names.isEmpty() || org.springblade.core.tool.utils.Func.isBlank(names.get(0)))
+                    ? "表单数据" : names.get(0) + "数据";
+            }
+            // 1) 父菜单
+            List<Long> parents = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_menu WHERE code='mode' AND path='/formmode' AND is_deleted=0 LIMIT 1", Long.class);
+            long parentId = (parents == null || parents.isEmpty()) ? 0L : parents.get(0);
+            // 2) 找/建菜单
+            List<Long> menuIds = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_menu WHERE code=? AND is_deleted=0", Long.class, code);
+            long menuId;
+            if (menuIds == null || menuIds.isEmpty()) {
+                Long max = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_menu", Long.class);
+                menuId = (max == null ? 0L : max) + 1;
+                jdbcTemplate.update(
+                    "INSERT INTO blade_menu (id,parent_id,code,name,alias,path,source,sort,category,action,is_open,is_component,component_type,is_deleted,tenant_id) "
+                        + "VALUES (?,?,?,?,?,?,'api',5,1,0,1,0,'bundled',0,?)",
+                    menuId, parentId, code, menuName, "formdata_" + formId, path, tenantId);
+            } else {
+                menuId = menuIds.get(0);
+                jdbcTemplate.update("UPDATE blade_menu SET name=?, path=?, parent_id=? WHERE id=?",
+                    menuName, path, parentId, menuId);
+            }
+            // 3) 目标角色（objtype=1）
+            java.util.Set<Long> roleIds = new java.util.LinkedHashSet<>();
+            if (batch.getRights() != null) {
+                for (ModeRightInfo r : batch.getRights()) {
+                    if (r == null || r.getObjtype() == null || r.getObjid() == null || r.getObjtype() != 1) continue;
+                    long rid = r.getObjid();
+                    if (rid == 0L) {
+                        // objid=0 = 全部角色
+                        List<Long> allRoles = jdbcTemplate.queryForList(
+                            "SELECT id FROM blade_role WHERE is_deleted=0", Long.class);
+                        if (allRoles != null) roleIds.addAll(allRoles);
+                    } else if (rid > 0) {
+                        roleIds.add(rid);
+                    }
+                }
+            }
+            // 4) 重置该菜单的角色授权（建模权限为该菜单的唯一授权源）
+            jdbcTemplate.update("DELETE FROM blade_role_menu WHERE menu_id=?", menuId);
+            Long maxRm = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_role_menu", Long.class);
+            long nextRm = (maxRm == null ? 0L : maxRm) + 1;
+            for (Long rid : roleIds) {
+                jdbcTemplate.update("INSERT INTO blade_role_menu (id,role_id,menu_id) VALUES (?,?,?)", nextRm++, rid, menuId);
+            }
+            // 5) 重置角色级显示名（只保留本次提交且非空的值）
+            jdbcTemplate.update("DELETE FROM blade_role_menu_name WHERE menu_id=?", menuId);
+            Map<String, String> roleNames = batch.getRoleMenuNames();
+            if (roleNames != null && !roleNames.isEmpty()) {
+                Long maxRn = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_role_menu_name", Long.class);
+                long nextRn = (maxRn == null ? 0L : maxRn) + 1;
+                for (Map.Entry<String, String> e : roleNames.entrySet()) {
+                    if (org.springblade.core.tool.utils.Func.isBlank(e.getValue())) continue;
+                    long rid;
+                    try { rid = Long.parseLong(e.getKey()); } catch (Exception ex) { continue; }
+                    if (!roleIds.contains(rid)) continue; // 只给已授权角色写别名
+                    jdbcTemplate.update(
+                        "INSERT INTO blade_role_menu_name (id,role_id,menu_id,name_override,tenant_id,create_time) VALUES (?,?,?,?,?,NOW())",
+                        nextRn++, rid, menuId, e.getValue().trim(), tenantId);
+                }
+            }
+            log.info("[formmode][AUDIT] 方案C表单菜单维护. modeId={}, formId={}, menuId={}, name={}, path={}, roles={}",
+                modeId, formId, menuId, menuName, path, roleIds);
+            return roleIds.size();
+        } catch (Exception e) {
+            log.warn("[formmode][MENU] 方案C表单菜单维护失败（不影响权限三表保存）. modeId={}, err={}", modeId, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * 把「表单数据」菜单（formdata_view）授权给模块权限中配置的角色（objtype=1）。
+     *
+     * <p>用 JdbcTemplate 幂等写 blade_role_menu（formmode 无 blade-system 依赖，不跨服务）。
+     * 菜单不存在（目标环境未执行迁移脚本）时返回 0 并告警，不阻断权限保存。</p>
+     *
+     * @return 本次新授予的角色数
+     */
+    private int grantFormDataMenuToRoles(Long modeId, java.util.List<ModeRightInfo> rights) {
+        if (rights == null || rights.isEmpty()) return 0;
+        try {
+            // 1) 找菜单
+            List<Long> menus = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_menu WHERE code='formdata_view' AND is_deleted=0", Long.class);
+            if (menus == null || menus.isEmpty()) {
+                log.warn("[formmode] 表单数据菜单不存在，跳过菜单授权. modeId={}（请先执行 V2026.11.19_001 迁移）", modeId);
+                return 0;
+            }
+            long menuId = menus.get(0);
+            // 2) 提取角色 ID（objtype=1 且 objid>0，排除 0=所有人）
+            java.util.Set<Long> roleIds = new java.util.LinkedHashSet<>();
+            for (ModeRightInfo r : rights) {
+                if (r == null || r.getObjtype() == null || r.getObjid() == null) continue;
+                if (r.getObjtype() == 1 && r.getObjid() > 0) roleIds.add(r.getObjid().longValue());
+            }
+            if (roleIds.isEmpty()) return 0;
+            // 3) 当前最大 id（幂等插入起点）
+            Long maxId = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_role_menu", Long.class);
+            long nextId = (maxId == null ? 0L : maxId) + 1;
+            int granted = 0;
+            for (Long roleId : roleIds) {
+                Integer exists = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM blade_role_menu WHERE role_id=? AND menu_id=?", Integer.class, roleId, menuId);
+                if (exists != null && exists > 0) continue;
+                jdbcTemplate.update("INSERT INTO blade_role_menu (id, role_id, menu_id) VALUES (?,?,?)",
+                    nextId++, roleId, menuId);
+                granted++;
+            }
+            if (granted > 0) {
+                log.info("[formmode][AUDIT] 表单数据菜单授权. modeId={}, menuId={}, roles={}, granted={}",
+                    modeId, menuId, roleIds, granted);
+            }
+            return granted;
+        } catch (Exception e) {
+            log.warn("[formmode] 表单数据菜单授权失败（不影响权限配置保存）. modeId={}, err={}", modeId, e.getMessage());
+            return 0;
         }
     }
 
