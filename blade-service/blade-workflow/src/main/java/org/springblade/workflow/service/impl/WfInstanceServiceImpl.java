@@ -1467,9 +1467,11 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
                     }
                 }
             }
-        } else if (definitionFromBpmn) {
+        } else if (node != null && definitionFromBpmn) {
             // T-10 B4 #4：BPMN 源 node.id 恒为 null，旧逻辑 node.getId()!=null 分支永远不进
             // → 操作组级会签/依次被静默丢失。改为按 nodeKey 从 BPMN 扩展读取操作者签序（修复 bug）
+            // 2026-11-22 补 node!=null：定义已删的历史实例在 act 读源下仍能加载，但节点表已空，
+            // nodeMap.get() 返回 null；此前直接 node.getDefId() 触发 NPE 使 /instance/{id}/logs 500。
             try {
                 List<BpmnExtensionUtil.WfOperatorExt> ops = bpmnReader.operators(node.getDefId(), node.getNodeKey());
                 if (ops != null) {
