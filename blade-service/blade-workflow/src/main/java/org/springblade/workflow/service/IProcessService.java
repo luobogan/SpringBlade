@@ -358,4 +358,52 @@ public interface IProcessService {
      */
     long pendingJobCount();
 
+    /**
+     * S5 前置兜底：列出引擎死信作业（{@code ACT_RU_DEADLETTER_JOB}）摘要。
+     *
+     * <p>死信非空 = 作业执行失败且重试耗尽 = 台账可能已漏更新，需人工介入（方案C §3.4）。</p>
+     *
+     * @return 死信作业摘要列表（id / 流程实例ID / 作业类型 / 异常消息），空列表表示无死信
+     */
+    List<org.springblade.workflow.vo.DeadLetterJobVO> listDeadLetterJobs();
+
+    /**
+     * 重投死信作业：把死信迁回可执行作业队列并重置重试次数。
+     *
+     * @param jobId   死信作业ID
+     * @param retries 重投后的重试次数（&gt;=0；通常用 3）
+     * @return 重投后可执行作业ID
+     */
+    String retryDeadLetterJob(String jobId, int retries);
+
+    /**
+     * 删除死信作业（确认无需重投、或已人工修复台账后清理）。
+     *
+     * @param jobId 死信作业ID
+     */
+    void deleteDeadLetterJob(String jobId);
+
+    /**
+     * 引擎流程实例是否「已结束」（只读）。
+     *
+     * <p>用于归档判定双轨（{@code blade.workflow.compat.archive-signal}）：
+     * 与「ACT_RU_TASK 为空」不同，ReceiveTask/Timer 等待态下无 UserTask 但实例仍 active，
+     * 此时本方法返回 false，避免被误判归档。</p>
+     *
+     * @param engineInstId 引擎实例ID
+     * @return true=引擎中已无 active 实例（真正结束）；false=实例仍 active 或入参为空
+     */
+    boolean isProcessInstanceEnded(String engineInstId);
+
+    /**
+     * 取引擎实例当前「等待态活动ID」（只读，可能多个取第一个）。
+     *
+     * <p>当 {@link #currentTasks(String)} 为空但实例仍 active 时（ReceiveTask / 中间捕获事件等），
+     * 用本方法定位 token 停留的活动，供归档新轨写回 {@code current_node_key}。</p>
+     *
+     * @param engineInstId 引擎实例ID
+     * @return 等待态活动ID；无活动或入参为空时返回 null
+     */
+    String activeWaitActivityId(String engineInstId);
+
 }

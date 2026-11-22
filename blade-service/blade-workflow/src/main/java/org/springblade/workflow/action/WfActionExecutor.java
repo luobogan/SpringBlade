@@ -7,6 +7,7 @@ import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.jackson.JsonUtil;
 import org.springblade.core.tool.utils.SpringUtil;
 import org.springblade.workflow.config.WfActionProperties;
+import org.springblade.workflow.config.WfFlowtableCompatProperties;
 import org.springblade.workflow.entity.WfCustomAction;
 import org.springblade.workflow.entity.WfFormSnapshot;
 import org.springblade.workflow.entity.WfInstance;
@@ -72,13 +73,46 @@ public class WfActionExecutor {
     private final WfFormSnapshotMapper snapshotMapper;
     /** 自定义接口动作注册表（action: 命令按标识取注册记录） */
     private final IWfCustomActionService customActionService;
+    /** flowtable 扩展双轨开关（动作闸门；默认关=旧行为） */
+    private final WfFlowtableCompatProperties compat;
 
     /** 执行一个附加操作脚本（前缀分派） */
     public void execute(WfInstance inst, WfProcessNode node, String phase, String script, Long operator) {
+        execute(inst, node, phase, script, operator, null);
+    }
+
+    /**
+     * 执行一个附加操作脚本（可携带引擎变量）。
+     *
+     * <p>{@code engineVars} 仅用于自定义接口动作：自动节点（ServiceTask）场景把流程变量透传给动作，
+     * 人工节点场景为 null（保持既有行为不变）。</p>
+     */
+    public void execute(WfInstance inst, WfProcessNode node, String phase, String script, Long operator,
+                        Map<String, Object> engineVars) {
         if (script == null || script.isBlank()) {
             return;
         }
         String s = script.trim();
+
+        // ── 双轨开关 action-gate（2026-11-17，flowtable 扩展安全垫）──
+        // 旧轨(false)：完全沿用下方前缀分派，调用方 is_test 守卫决定是否调用，本类不拦。
+        // 新轨(true) ：执行器层统一拦「测试态外部动作」与「租户不匹配」，写可审计日志后短路；
+        //             仅拦 http/https/sql/dml/action 外部动作，field/set 内部快照放行。
+        // 注意：本类无审批日志写入能力，短路用 log.warn 作可审计日志（零依赖、零构造副作用）。
+        if (compat.isActionGate() && isExternalAction(s)) {
+            if (isTestInst(inst)) {
+                log.warn("[compat-action-gate] 测试态跳过外部动作. instId={}, nodeKey={}, phase={}, action={}",
+                    inst == null ? null : inst.getId(), node == null ? null : node.getNodeKey(), phase, actionSummary(s));
+                return;
+            }
+            if (!tenantMatches(inst)) {
+                log.warn("[compat-action-gate] 租户不匹配，拒绝外部动作. instId={}, instTenant={}, currentTenant={}, action={}",
+                    inst == null ? null : inst.getId(), inst == null ? null : inst.getTenantId(),
+                    org.springblade.workflow.utils.WfAuthUtil.tenantId(), actionSummary(s));
+                throw new ServiceException("外部动作租户不匹配，已拒绝执行");
+            }
+        }
+
         String lower = s.toLowerCase();
         if (lower.startsWith(PREFIX_HTTP) || lower.startsWith(PREFIX_HTTPS)) {
             doHttp(inst, node, phase, s);
@@ -87,11 +121,75 @@ public class WfActionExecutor {
         } else if (lower.startsWith(PREFIX_FIELD) || lower.startsWith(PREFIX_SET)) {
             doField(inst, node, phase, s, operator);
         } else if (lower.startsWith(PREFIX_ACTION)) {
-            doCustomAction(inst, node, phase, s, operator);
+            doCustomAction(inst, node, phase, s, operator, engineVars);
         } else {
             log.info("[blade-workflow] 附加操作未识别前缀，仅记录. instId={}, nodeKey={}, phase={}, script={}",
                 inst == null ? null : inst.getId(), node == null ? null : node.getNodeKey(), phase, s);
         }
+    }
+
+    /**
+     * E1 ServiceTask 自动执行的统一入口（2026-11-18）。
+     *
+     * <p>ServiceTask 的运行时 delegate 不直接调 {@link #doCustomAction}（会绕过 action-gate），
+     * 而是拼成 {@code action:&lt;key&gt;[|&lt;json&gt;]} 后走 {@link #execute} 的完整前缀分派与闸门逻辑，
+     * 保证测试态外部动作拦截 / 租户校验对自动节点同样生效。</p>
+     *
+     * @param inst         业务实例（由 engineInstId 反查得到，gate 的 is_test 判据依赖它）
+     * @param node         节点上下文（nodeKey/defId 供日志与请求对象使用，可为 null）
+     * @param phase        阶段，自动节点固定传 {@code serviceTask}
+     * @param actionKey    注册的自定义接口动作标识
+     * @param overrideJson 节点级参数覆盖 JSON（可为 null）
+     * @param engineVars   引擎变量快照（可为 null；自动节点场景透传给动作，人工节点场景为空）
+     */
+    public void executeCustomAction(WfInstance inst, WfProcessNode node, String phase,
+                                    String actionKey, String overrideJson, Map<String, Object> engineVars) {
+        if (actionKey == null || actionKey.isBlank()) {
+            log.warn("[e1-service-task] actionKey 为空，跳过. instId={}, nodeKey={}",
+                inst == null ? null : inst.getId(), node == null ? null : node.getNodeKey());
+            return;
+        }
+        String script = PREFIX_ACTION + actionKey
+            + (overrideJson == null || overrideJson.isBlank() ? "" : "|" + overrideJson);
+        execute(inst, node, phase, script, inst == null ? null : inst.getStarter(), engineVars);
+    }
+
+    /** 是否外部动作（需受闸门约束）：http/https/sql/dml/action；field/set 属内部快照，不受闸门。 */
+    private boolean isExternalAction(String script) {
+        String lower = script.toLowerCase();
+        return lower.startsWith(PREFIX_HTTP) || lower.startsWith(PREFIX_HTTPS)
+            || lower.startsWith(PREFIX_SQL) || lower.startsWith(PREFIX_DML)
+            || lower.startsWith(PREFIX_ACTION);
+    }
+
+    /** 测试态实例判据（与 WfTaskServiceImpl#isTestInst 同口径，闸门内自包含避免跨类依赖）。 */
+    private boolean isTestInst(WfInstance inst) {
+        return inst != null && inst.getIsTest() != null && inst.getIsTest() == 1;
+    }
+
+    /** 租户匹配：实例租户为空（存量数据）时放行，避免旧数据被闸门误伤。 */
+    private boolean tenantMatches(WfInstance inst) {
+        if (inst == null || inst.getTenantId() == null || inst.getTenantId().isEmpty()) {
+            return true;
+        }
+        String current = org.springblade.workflow.utils.WfAuthUtil.tenantId();
+        return current == null || current.isEmpty() || current.equals(inst.getTenantId());
+    }
+
+    /** 审计日志里的动作摘要：只取前缀与动作标识，不打印 URL/SQL/参数等业务敏感内容。 */
+    private String actionSummary(String script) {
+        String lower = script.toLowerCase();
+        for (String p : new String[]{PREFIX_HTTP, PREFIX_HTTPS, PREFIX_SQL, PREFIX_DML, PREFIX_ACTION}) {
+            if (lower.startsWith(p)) {
+                String rest = script.substring(p.length()).trim();
+                if (PREFIX_ACTION.equals(p)) {
+                    int bar = rest.indexOf('|');
+                    return p + (bar >= 0 ? rest.substring(0, bar) : rest);
+                }
+                return p + "<endpoint>";
+            }
+        }
+        return "<other>";
     }
 
     /**
@@ -101,7 +199,8 @@ public class WfActionExecutor {
      * 按标识取注册记录 → 反射实例化 {@code 接口动作类文件} → 调用
      * {@link IWfCustomAction#execute(WfActionRequest)}。</p>
      */
-    private void doCustomAction(WfInstance inst, WfProcessNode node, String phase, String script, Long operator) {
+    private void doCustomAction(WfInstance inst, WfProcessNode node, String phase, String script, Long operator,
+                                Map<String, Object> engineVars) {
         String body = script.substring(PREFIX_ACTION.length()).trim();
         String actionKey = body;
         String overrideJson = null;
@@ -153,6 +252,8 @@ public class WfActionExecutor {
         req.setActionName(def.getActionName());
         req.setFormData(formData);
         req.setParams(mergeParams(def.getParamsJson(), overrideJson, formData));
+        // 引擎变量：仅自动节点场景非空（人工节点保持 null，既有动作不受影响）
+        req.setEngineVariables(engineVars);
 
         try {
             String result = bean.execute(req);

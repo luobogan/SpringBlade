@@ -81,6 +81,20 @@
             <version>${flowable.version}</version>
         </dependency>
 
+        <!-- ============ S6 ScriptTask：Groovy 脚本引擎 + 沙箱（2026-11-18） ============ -->
+        <!-- groovy-jsr223 提供 JSR-223 引擎；groovy 核心提供 SecureASTCustomizer/CompilerConfiguration。
+             版本 4.0.28 与本地离线仓库一致；通过 compat 开关 s6-script-task-enabled 控制，默认关零行为变化。 -->
+        <dependency>
+            <groupId>org.apache.groovy</groupId>
+            <artifactId>groovy-jsr223</artifactId>
+            <version>4.0.28</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.groovy</groupId>
+            <artifactId>groovy</artifactId>
+            <version>4.0.28</version>
+        </dependency>
+
         <!-- 公文版式/签章厂商实现（可选库模块）：optional，未部署时 blade-workflow 停留 L1；
              部署后其 @ConditionalOnProperty bean 被本服务组件扫描（包在 org.springblade.workflow 下） -->
         <dependency>

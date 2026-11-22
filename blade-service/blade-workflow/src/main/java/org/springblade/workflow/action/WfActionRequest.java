@@ -43,4 +43,13 @@ public class WfActionRequest {
 
     /** 当前实例的表单数据快照（可能为空 map） */
     private Map<String, Object> formData = new LinkedHashMap<>();
+
+    /**
+     * 引擎变量快照（自动节点场景透传；人工节点为 null）。
+     *
+     * <p>2026-11-18 E1 补充：ServiceTask 自动执行时，delegate 会把 {@code DelegateExecution.getVariables()}
+     * 的快照放进来，供动作读取流程变量（如发起时写入的 approver 等）。与 {@link #formData} 分开：
+     * formData 是<b>表单</b>数据（按字段名取），engineVariables 是<b>流程变量</b>（按变量名取），两者不混用。</p>
+     */
+    private Map<String, Object> engineVariables;
 }

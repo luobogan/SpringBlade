@@ -19,6 +19,7 @@ import org.flowable.bpmn.model.Task;
 import org.flowable.bpmn.model.IntermediateCatchEvent;
 import org.flowable.bpmn.model.ThrowEvent;
 import org.flowable.bpmn.model.ServiceTask;
+import org.flowable.bpmn.model.ImplementationType;
 import org.flowable.bpmn.model.UserTask;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
 import org.flowable.bpmn.model.EventDefinition;
@@ -64,6 +65,7 @@ import org.springblade.workflow.vo.VersionDiffVO;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springblade.workflow.config.WfRetirementProperties;
+import org.springblade.workflow.config.WfFlowtableCompatProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.ByteArrayInputStream;
@@ -154,6 +156,9 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     private final IFormmodeClient formmodeClient;
     /** 流程实例（删除前保护校验：参考 Weaver「有实例禁止删」） */
     private final WfInstanceMapper instanceMapper;
+
+    /** flowtable 扩展双轨开关（E1 ServiceTask 自动执行注入；默认关，零行为变化） */
+    private final WfFlowtableCompatProperties compat;
 
     /** 自定义操作（按钮 + 动作 + 权限矩阵）服务：复用其覆盖式删插，保证 op→action/right 外键一致 */
     private final IWfCustomOperationService customOperationService;
@@ -494,6 +499,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             deployXml = neutralizeForDeploy(deployXml);
             // 会签/或签/依次下沉多实例（开关默认关闭，见 multiInstanceEnabled）
             deployXml = applyMultiInstanceIfEnabled(deployXml, defId);
+            // E1 ServiceTask 自动执行：把挂了 customAction 的 ServiceTask 注入统一 delegate（开关默认关）
+            deployXml = injectServiceTaskDelegate(deployXml, defId);
             // 落库 deployment_id：此前 deployProcess 的返回值被丢弃，导致无法精确比对
             // 「引擎 latest == 正式部署」（只能靠部署时间与消毒标记间接判读，见巡检 ⑥）。
             // 落库后：① 巡检可直接 JOIN 比对；② 发起自检可给出 engineDeploymentMatched 标志。
@@ -549,6 +556,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         String deployXml = neutralizeForTest(injectLinkConditions(def.getBpmnXml(), links(defId)), testKey);
         // 会签/或签/依次下沉多实例（开关默认关闭，与正式部署同口径）
         deployXml = applyMultiInstanceIfEnabled(deployXml, defId);
+        // E1 ServiceTask 自动执行：测试部署与正式部署同口径注入（开关默认关）
+        deployXml = injectServiceTaskDelegate(deployXml, defId);
         String deploymentId = processService.deployProcessForTest(testKey, def.getTenantId(), deployXml);
         // 记录本次测试部署的 procDefId：让「配置面板」在测试态读到测试实际会跑的那份 BPMN。
         // 否则用户在设计器配好操作菜单/表单内容后「保存 → 测 试」，面板仍按 proc_def_id 读
@@ -2354,6 +2363,73 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
     }
 
     /**
+     * E1 ServiceTask 自动执行（2026-11-18）：部署期把「挂了 customAction 的 ServiceTask」实现注入为
+     * 统一 delegateExpression {@code ${wfServiceTaskDelegate}}，由运行时 delegate 读 actionKey 执行。
+     *
+     * <p>仅处理 {@code wf:node/customAction} 里带非空 actionKey 的 ServiceTask；无自定义动作的
+     * ServiceTask 保持原生实现不动（避免误伤导入流程已有的 class/expression 实现）。</p>
+     *
+     * <p>仅在开关 {@code blade.workflow.compat.service-task-exec} 开启时生效，默认关闭零行为变化。</p>
+     *
+     * <p><b>失败策略</b>：BPMN 声明了 customAction 却注入失败时<b>抛异常中止发布</b>（fail-fast），
+     * 避免「部署成功但运行期 token 卡在无实现的 ServiceTask」；无 customAction 声明的原生 ServiceTask
+     * 注入失败则 warn 回退原 XML（零影响）。</p>
+     *
+     * <p><b>灰度</b>：受 {@code blade.workflow.compat.service-task-exec-gray-def-ids} 约束——
+     * 名单为空=对所有定义生效；非空=仅名单内 defId 注入，名单外保持引擎原生 ServiceTask 语义。</p>
+     */
+    private String injectServiceTaskDelegate(String bpmnXml, Long defId) {
+        if (!compat.isServiceTaskExec() || bpmnXml == null || bpmnXml.isBlank()) {
+            return bpmnXml;
+        }
+        // 灰度判定：名单非空时，名单外的定义不注入（保持原生语义，零影响）
+        List<Long> gray = compat.getServiceTaskExecGrayDefIds();
+        if (gray != null && !gray.isEmpty() && (defId == null || !gray.contains(defId))) {
+            return bpmnXml;
+        }
+        try {
+            BpmnXMLConverter converter = new BpmnXMLConverter();
+            BpmnModel model = converter.convertToBpmnModel(
+                () -> new ByteArrayInputStream(bpmnXml.getBytes(StandardCharsets.UTF_8)), false, false);
+            Process process = model.getMainProcess();
+            int injected = 0;
+            for (ServiceTask serviceTask : process.findFlowElementsOfType(ServiceTask.class, true)) {
+                BpmnExtensionUtil.WfNodeExt nodeExt = BpmnExtensionUtil.readNode(serviceTask);
+                if (nodeExt == null || nodeExt.customActions == null) {
+                    continue;
+                }
+                boolean hasAction = nodeExt.customActions.stream()
+                    .anyMatch(c -> c != null && c.actionKey != null && !c.actionKey.isBlank());
+                if (!hasAction) {
+                    continue;
+                }
+                serviceTask.setImplementationType(ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION);
+                serviceTask.setImplementation("${wfServiceTaskDelegate}");
+                injected++;
+            }
+            if (injected == 0) {
+                return bpmnXml;
+            }
+            byte[] out = converter.convertToXML(model);
+            log.info("[e1-service-task] ServiceTask delegateExpression 注入完成. defId={}, count={}", defId, injected);
+            return new String(out, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            // fail-fast（灰度内）：BPMN 声明了 ServiceTask 自定义动作却注入失败时，若静默回退原 XML，
+            // 部署会「显示成功」但运行期 token 卡在无实现的 ServiceTask——正是 validateForDeploy 要杜绝的
+            //「测试绿灯、正式跑不了」。此处抛异常让发布事务回滚，迫使修复 BPMN 后再发布。
+            // 无 customAction 声明时（导入流程的原生 ServiceTask）保持 warn 回退，零影响。
+            boolean declaresAction = bpmnXml.contains("customAction")
+                && (bpmnXml.contains("serviceTask") || bpmnXml.contains("ServiceTask"));
+            if (declaresAction) {
+                throw new ServiceException("E1 注入失败：BPMN 声明了 ServiceTask 自定义动作但无法注入 delegate，"
+                    + "发布已中止以避免运行期卡单. defId=" + defId + ", err=" + e.getMessage());
+            }
+            log.warn("[e1-service-task] ServiceTask delegate 注入失败，使用原 BPMN 部署: {}", e.getMessage());
+            return bpmnXml;
+        }
+    }
+
+    /**
      * 会签/或签/依次下沉为 Flowable 多实例（下沉迁移方案 §1.1 A 档 + E9 对比 §4.1）。
      * 仅在开关 {@link #multiInstanceEnabled} 开启时生效；默认关闭，不影响既有流程。
      *
@@ -2465,24 +2541,43 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
         List<String> hardBlock = new ArrayList<>();
         List<String> warn = new ArrayList<>();
         List<String> bpmnNodeKeys = new ArrayList<>();
-        for (FlowElement fe : process.getFlowElements()) {
+        // S0 防呆（2026-11-18）：遍历全部元素（含子流程内），对「画了也跑不通」的未实现元素硬拦，
+        // 杜绝「测试态静默降级→测试绿灯→正式发布后卡单/空跑」。
+        for (FlowElement fe : process.findFlowElementsOfType(FlowElement.class, true)) {
             String label = (fe.getName() == null || fe.getName().isBlank())
                 ? fe.getId() : (fe.getName() + "(" + fe.getId() + ")");
             if (fe instanceof BusinessRuleTask) {
-                // 与测试态降级清单一致：正式环境无 Drools，部署期即失败
-                hardBlock.add(label);
+                // 正式环境无 Drools（既有硬拦）
+                hardBlock.add(label + " 业务规则任务：正式环境无 Drools 依赖");
+            } else if (fe instanceof ScriptTask && !compat.isS6ScriptTaskEnabled()) {
+                // S6 开关打开后放行：由 FlowableConfig 注册的沙箱 Groovy 引擎执行（scriptFormat=groovy）
+                hardBlock.add(label + " 脚本任务：S6 脚本执行未开启"
+                    + "（blade.workflow.compat.s6-script-task-enabled=false）");
+            } else if (fe instanceof CallActivity) {
+                hardBlock.add(label + " 调用活动：BPMN 子流程语义未归一（S3，请用平台业务层子流程）");
+            } else if (fe instanceof org.flowable.bpmn.model.SubProcess) {
+                hardBlock.add(label + " 子流程：本平台未实现 BPMN 子流程运行（S3）");
+            } else if (fe instanceof ReceiveTask && !compat.isS4WakeupEnabled()) {
+                // S4 条件硬拦：唤醒开关未开时 ReceiveTask 发起后永久停留；开关打开后由 WfWakeupService 驱动
+                hardBlock.add(label + " 接收任务：S4 唤醒能力未开启（blade.workflow.compat.s4-wakeup-enabled=false）");
             } else if (fe instanceof SendTask) {
-                // 发送任务（画布「发送通知」）：本平台未实现发送，部署前会被 neutralizeForDeploy 降级为「自动通过」
-                warn.add(label + " 发送任务：本平台未实现发送，部署时自动降级为「自动通过」");
+                // 原为 warn + 静默降级为自动通过 —— 属「画了不执行」，升级为硬拦
+                hardBlock.add(label + " 发送任务：本平台未实现发送（原静默降级为自动通过，语义欺骗）");
+            } else if (fe instanceof ServiceTask && !compat.isServiceTaskExec()) {
+                // ServiceTask 条件硬拦：E1 开关未开时无执行能力（画了空跑）；开关打开后由 E1 注入 delegate，放行。
+                hardBlock.add(label + " 服务任务：E1 自动执行未开启（blade.workflow.compat.service-task-exec=false）");
             } else if (fe instanceof ThrowEvent) {
+                // 部分支持（非完全未实现），保留 warn：正式环境未配置则运行期失败
                 warn.add(label + " 抛出事件：正式环境未配置则运行期失败");
             } else if (fe instanceof IntermediateCatchEvent ice) {
                 if (hasTimer(ice.getEventDefinitions())) {
-                    warn.add(label + " 定时捕获事件：正式环境将真等待");
+                    warn.add(label + " 定时捕获事件：正式环境需开启 S3 timer 轮询"
+                        + "（blade.workflow.compat.s3-timer-enabled=true），否则 timer 到期无人消费将真等待");
                 }
             } else if (fe instanceof BoundaryEvent be) {
                 if (hasTimer(be.getEventDefinitions())) {
-                    warn.add(label + " 定时边界事件：正式环境将真等待");
+                    warn.add(label + " 定时边界事件：正式环境需开启 S3 timer 轮询"
+                        + "（blade.workflow.compat.s3-timer-enabled=true），否则 timer 到期无人消费将真等待");
                 }
             }
             if (nodeTypeOf(fe) != null) {
@@ -2490,9 +2585,8 @@ public class WfDefinitionServiceImpl implements IWfDefinitionService {
             }
         }
         if (!hardBlock.isEmpty()) {
-            throw new ServiceException("发布被拒绝：以下节点使用了正式环境不支持的元素（业务规则任务需 Drools 依赖，"
-                + "测试态被自动降级才「通过」）→ 请改为「自动处理/脚本任务」等类型并在画布重新保存："
-                + String.join("、", hardBlock));
+            throw new ServiceException("发布被拒绝：以下节点使用了正式环境不支持的元素 → 请改为受支持的"
+                + "「用户任务/网关」类型，或开启对应能力开关后在画布重新保存：" + String.join("；", hardBlock));
         }
         if (!warn.isEmpty()) {
             log.warn("[blade-workflow] 发布提示：正式环境可能存在运行期失败/等待的节点（不阻断发布）：{}",

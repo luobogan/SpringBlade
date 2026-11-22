@@ -45,6 +45,10 @@
 blade:
   flowable:
     database-schema-update: true
+    # AsyncExecutor（默认 false，保持既有行为）：与 blade.workflow.compat.s3-timer-enabled 互斥。
+    # 启动时若两者同时 true，FlowableConfig 会 log.error 强提示（避免重复消费 timer job）。
+    # 开启前须满足方案C三项兜底：strict-event-fail=false + drift-reconcile-enabled=true + deadletter-alarm-enabled=true。
+    async-executor-enabled: false
   workflow:
     # 待办/已办读源（注意：是【直接值】，不是 .enabled —— WfTaskActReader 读 ${blade.workflow.task-read-source}）：
     #   wf  = wf_task（默认，零行为变化）
@@ -164,8 +168,11 @@ blade:
       # 方案C 总开关（《工作流双写漂移治理-方案C-事件驱动落地设计.md》§6/§7，进度见 §10）。
       # 当前阶段：阶段 3「切单写」已完成并回归通过（见文档 §10.6）。
       #
-      # true  = 注册 WfEngineEventListener，台账状态由【引擎事件反写】驱动（C1 强一致，isFailOnException=true）；
+      # true  = 注册 WfEngineEventListener，台账状态由【引擎事件反写】驱动（事件投影），
       #         业务侧 WfWriteHelper 不再显式写 wf_instance.status / 关闭 wf_task，只写 intent 并由事件落地。
+      #         失败策略：批次1 起台账投影已切 ACT 业务列直写、写失败 catch→warn 兜底，
+      #         isFailOnException=false（最终一致 C2），不再是早期设计的 C1 强一致；
+      #         如需 C1（投影写失败回滚引擎），置 blade.workflow.compat.strict-event-fail=true。
       # false = 完全回到方案A 显式双写：业务侧 eventDriven() 返回 false，恢复 setStatus+updateById
       #         与关闭待办循环。无需改代码、无需修数据 —— 这是方案C 的【回退路径】。
       #
@@ -173,6 +180,70 @@ blade:
       # 回退路径验证已通过（2026-09-27）：enabled=false 时 WfWriteHelper 兜底显式写可独立撑住状态。
       # 现恢复 true，处于阶段 3「切单写」生效状态。
       enabled: true
+    compat:
+      # === flowtable 全功能扩展前的共享收口双轨开关（2026-11-17）===
+      # 设计依据：doc/md/四处共享收口双轨改造订正方案.md；总入口：工作流分析文档总索引.md
+      # 四项【默认全部 false = 改造前旧行为逐字节保留】，需逐项灰度翻转；
+      # ⚠️ 新轨只对新发起流程生效（在途实例钉 procDefId 版本）；Nacos 若配了以 Nacos 为准。
+      archive-signal: false
+      # 归档判定：false=ACT_RU_TASK 空即归档（旧轨）；true=按引擎实例是否 ended 判定，
+      #   引擎仍 active 但无 UserTask（ReceiveTask/Timer 等待态）保持运行中、不写终态。
+      # 翻转前置：务必先跑 log/e2e_freeflow_full.py（26/26 两轨一致）+ 等待态用例；否则禁止开启。
+      strict-event-fail: false
+      # 台账投影 listener 失败策略：false=catch→warn 最终一致（旧轨，默认）；true=C1 强一致回滚引擎。
+      # ⚠️ 仅作用于 WfEngineEventListener；通知/回调 listener 恒 false、MI 空集合守卫恒 true，不受此键影响。
+      action-gate: false
+      # 动作统一闸门：false=沿用调用方 is_test 守卫（旧轨）；true=执行器层拦测试态外部动作/租户不匹配。
+      # 仅拦 http/https/sql/dml/action 外部动作，field/set 内部快照放行；短路写可审计日志。
+      # 翻转前置：必须在启用任何自动节点（ServiceTask）之前开启，否则测试态外部动作会绕过守卫。
+      engine-mi-gray-def-ids: []
+      # 会签引擎多实例灰度定义ID白名单：空=完全等同现状（由 blade.workflow.engine-multi-instance.enabled 决定）；
+      # 非空=仅名单内 defId 走引擎 MI，其余走自研计数。翻转前置：SIGN_ALL/OR/SEQUENCE 三形态两轨比对一致。
+      engine-auto-todo-bridge: false
+      # E7 引擎→业务状态桥（2026-11-18）：false=旧行为（自动节点跑完后不建待办，仍由业务层 advance 驱动）；
+      # true=独立 listener 在自动节点完成/新任务创建时同步 ACT 待办与实例状态。默认 false，零行为变化。
+      # 前置：action-gate 必须已开（自动动作受闸门），AsyncExecutor 未开前 Timer 不生效；
+      # 建议先填 engine-auto-todo-gray-def-ids 灰度，验证无事件循环/待办重复后再清空转全量。
+      engine-auto-todo-gray-def-ids: []
+      # E7 灰度定义ID白名单：空=开关打开时对全部流程生效；非空=仅名单内 defId 启用桥。
+      service-task-exec: false
+      # E1 ServiceTask 自动执行（2026-11-18）：false=不注入 delegate，ServiceTask 保持引擎原生语义（默认，零行为变化）；
+      # true=部署期对「挂了 customAction 的 ServiceTask」注入 ${wfServiceTaskDelegate}，运行时统一 delegate
+      #   读 actionKey 并走 WfActionExecutor.execute()（保留 action-gate）。前置：action-gate 必须已开。
+      # 注意：E1 只执行动作、不推进；ServiceTask 完成后的建待办/实例同步由 E7 桥负责。
+      # 翻转后必须对含 ServiceTask 的流程重新「发布」才会注入（注入发生在 deploy/deployForTest 时）。
+      service-task-exec-gray-def-ids: []
+      # E1 灰度定义ID白名单：空=开关打开时对全部流程生效；非空=仅名单内 defId 注入并执行 E1。
+      # 意义：E1 是部署期注入的全局开关，若无灰度则一开即影响所有含 ServiceTask 的流程，无法按流程灰度。
+      # 与 E7 的 engine-auto-todo-gray-def-ids 对称，建议先填 1~2 个测试 defId，验证后再清空转全量。
+      s3-timer-enabled: false
+      # S3 timer 业务侧轮询（2026-11-18）：false=不扫描引擎 timer job（默认，零行为变化）；
+      # true=WfTimerJobScanner 定期扫描 ACT_RU_TIMER_JOB 中到期的 job 并手动执行，绕开 AsyncExecutor。
+      # 互斥：blade.flowable.async-executor-enabled 必须保持 false，否则两侧重复消费同一 job；
+      # 启动时若两者同时为 true，FlowableConfig 会打 [启动自检][互斥冲突] ERROR 日志。
+      s4-wakeup-enabled: false
+      # S4 等待唤醒（2026-11-18）：false=拒绝所有唤醒调用（默认）；true=允许 ReceiveTask.trigger 与 messageEventReceived。
+      # 这是「推进流程」的写操作，内部入口走 HAS_ROLE_WORKFLOW；外部 permitAll 入口须另行验签+网关白名单。
+      deadletter-alarm-enabled: false
+      # S5 前置兜底（方案C §3.4 三项之一）：false=不扫描死信（默认）；true=定时扫描 ACT_RU_DEADLETTER_JOB，
+      # 非空即 log.error + 经 INoticeClient 告警管理员。死信=台账可能漏更新，需人工介入，扫描器只告警不自动重投。
+      # 开启 AsyncExecutor 前必须为 true（三项兜底缺一不可）。
+      drift-reconcile-enabled: false
+      # S5 前置兜底（方案C §3.4 三项之一）：false=不做常驻对账（默认）；true=定时扫描最近30分钟进入终态
+      # 但引擎仍活跃的实例并修复（增量，非全量）。与 HistoricalDriftFixer 一次性脚本互补。
+      # 三项兜底齐备（C1最终一致=strict-event-fail=false + 本项 + deadletter告警）前禁止开 AsyncExecutor。
+      s6-script-task-enabled: false
+      # S6 ScriptTask（2026-11-18）：false=发布期硬拦 ScriptTask（默认，零行为变化）；
+      # true=放开 ScriptTask，用带 SecureASTCustomizer 白名单的 Groovy 引擎执行（scriptFormat="groovy"）。
+      # 沙箱在编译期拦截危险代码：禁方法定义/闭包/包声明/System.exit/文件网络反射，限导入类与接收者类。
+      # 死信告警接收人（blade_user.id，逗号分隔）；为空则只记 log.error 不投递通知（零外部依赖）。
+      deadletter-alarm-user-ids: ''
+    # S4 外部唤醒入口（blade.workflow.wakeup，默认关）：启用后 /blade-workflow/wakeup/external 走 permitAll + HMAC-SHA256 验签。
+    # ⚠️ 启用前必须：① 配置 secret；② 网关 blade.secure.skip-url 与 blade.xss.skip-url 同时放行
+    #   /blade-workflow/wakeup/external；否则验签请求会被网关拦截。
+    wakeup:
+      external-enabled: false
+      secret: ''
     definition-from-bpmn:
       # 定义读源总开关（去 wf_ 表 P3-5：一个 key 管四处消费方：definition/task/③reject/WfInstanceServiceImpl）。
       # 本文件置 true；若 Nacos blade-workflow-dev.yaml 也配了该键，以 Nacos 为准（届时需在 Nacos 侧同步）。

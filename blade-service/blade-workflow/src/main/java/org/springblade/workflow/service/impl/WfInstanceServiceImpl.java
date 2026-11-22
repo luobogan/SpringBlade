@@ -154,6 +154,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     private final WfFormSnapshotMapper snapshotMapper;
     private final WfProcessDefinitionMapper defMapper;
     private final WfProcessNodeMapper nodeMapper;
+    /** flowtable 扩展双轨开关（归档判定等；默认全关=旧行为） */
+    private final org.springblade.workflow.config.WfFlowtableCompatProperties compatProperties;
     /** 灰度规则（方案 §4.3：新版本按白名单/比例先行生效，出问题置停用即秒级回退） */
     private final WfDefinitionGrayMapper grayMapper;
     private final IProcessService processService;
@@ -162,6 +164,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
     /** 灰度是否对「单据自动触发」生效（默认 false：单据触发不走灰度，避免生产单据被静默切到灰度版） */
     @Value("${blade.workflow.gray.apply-to-bill-initiated:false}")
     private boolean grayApplyToBillInitiated;
+    /** 会签引擎多实例统一灰度门（待办生成/兄弟对账/变量注入与 WfTaskServiceImpl 共用口径） */
+    private final org.springblade.workflow.service.helper.WfEngineMiGate engineMiGate;
     /**
      * 双写收口器：生命周期类操作（终结 / 暂停 / 恢复）的「台账 + 引擎」同写入口。
      *
@@ -3121,6 +3125,21 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
 
         // 引擎无活动任务 → 流程结束
         if (engineTasks.isEmpty()) {
+            // ── 双轨开关 archive-signal（2026-11-17，flowtable 扩展安全垫）──
+            // 旧轨(false)：沿用下方「ACT_RU_TASK 空即归档」全部原逻辑，逐字节保留。
+            // 新轨(true)：ReceiveTask/Timer 等「引擎仍 active 但无 UserTask」的等待态不得归档，
+            //            否则误置终态且 actWriter.writeLifecycle 双写不可逆。
+            if (compatProperties.isArchiveSignal()
+                && !processService.isProcessInstanceEnded(inst.getEngineInstId())) {
+                String waitNode = processService.activeWaitActivityId(inst.getEngineInstId());
+                String shownNode = waitNode == null ? inst.getCurrentNodeKey() : waitNode;
+                inst.setCurrentNodeKey(shownNode);
+                instanceMapper.updateById(inst);
+                actWriter.writeCurrentNodeKey(inst.getEngineInstId(), shownNode);
+                log.info("[compat-archive] 引擎等待态不归档（archive-signal=true）. instId={}, waitNode={}",
+                    instId, shownNode);
+                return;
+            }
             String lastNodeKey = inst.getCurrentNodeKey();
             // 子流程：全部归档才能提交 —— 主流程若仍有未归档子流程，暂缓归档（保持进行中）
             if (subflowService.holdForSubflow(instId)) {
@@ -3269,7 +3288,7 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
         // direct 模式无需这段对账：ACT_RU_TASK 本身即唯一事实源，不存在「台账有行、引擎已删」的幽灵待办；
         // 被引擎删除的 MI 子任务由 WfStateProjector.onTaskDeleted 直接把 ACT_HI_TASKINST
         // 的 BUSINESS_STATUS_ 收口为 FINISHED（见批次 2 D2）。读空表只会白跑一次无意义查询。
-        if (multiInstanceEnabled && !ledgerMode.isDirect()) {
+        if (engineMiGate.useEngineMiForInstance(inst) && !ledgerMode.isDirect()) {
             java.util.Map<String, java.util.Set<String>> activeByNode = engineTasks.stream()
                 .filter(t -> isEngineMultiInstance(inst, t.getTaskDefinitionKey()))
                 .collect(java.util.stream.Collectors.groupingBy(
@@ -3349,15 +3368,13 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * 开关关闭 → 永不；开关开启 → 仅审批/提交类节点（nodeType ∈ {1,2}）走引擎多实例。
      */
     private boolean isEngineMultiInstance(WfInstance inst, String nodeKey) {
-        if (!multiInstanceEnabled || inst == null || inst.getDefId() == null || nodeKey == null) {
+        // 统一灰度门：全局开关 + 定义ID白名单 + 节点类型，一处判定。
+        if (inst == null || inst.getDefId() == null || nodeKey == null) {
             return false;
         }
         // T-10 B4：经 gated loadNodeReadOnly（definitionFromBpmn 走 BPMN、retirement 关时回退 wf_process_node）
         WfProcessNode node = loadNodeReadOnly(inst.getDefId(), nodeKey);
-        if (node == null || node.getNodeType() == null) {
-            return false;
-        }
-        return Integer.valueOf(1).equals(node.getNodeType()) || Integer.valueOf(2).equals(node.getNodeType());
+        return engineMiGate.useEngineMi(inst, node, nodeKey);
     }
 
     /**
@@ -3365,7 +3382,8 @@ public class WfInstanceServiceImpl implements IWfInstanceService {
      * 保证进入任一多实例节点前集合已就绪（引擎据此逐人展开）。幂等、持久。
      */
     private void injectMiCollectionVars(Long defId, WfInstance inst, Map<String, Object> vars, Long currentOperator) {
-        if (!multiInstanceEnabled || vars == null || defId == null) {
+        // 与推进门禁共用灰度门（实例级），避免「待办按灰度生成、MI 变量按全局注入」错配。
+        if (!engineMiGate.useEngineMiForInstance(inst) || vars == null || defId == null) {
             return;
         }
         try {

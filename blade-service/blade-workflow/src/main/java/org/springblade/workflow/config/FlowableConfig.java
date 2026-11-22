@@ -20,6 +20,7 @@ import org.springblade.workflow.listener.WfEngineEventListener;
 import org.springblade.workflow.listener.WfBizCallbackListener;
 import org.springblade.workflow.listener.WfMiEmptyGuardListener;
 import org.springblade.workflow.listener.WfProcessNoticeListener;
+import org.springblade.workflow.listener.WfEngineAutoTodoBridgeListener;
 
 import javax.sql.DataSource;
 import java.io.File;
@@ -61,6 +62,21 @@ public class FlowableConfig {
     @Value("${blade.flowable.database-schema-update:true}")
     private String databaseSchemaUpdate;
 
+    /**
+     * AsyncExecutor 开关（默认 false，保持既有行为）。原为硬编码 false；为 S5 与互斥自检显式化。
+     * ⚠️ 与 {@code blade.workflow.compat.s3-timer-enabled} 互斥：两者同时 true 会重复消费 timer job。
+     */
+    @Value("${blade.flowable.async-executor-enabled:false}")
+    private boolean asyncExecutorEnabled;
+
+    /** S3 timer 业务侧轮询开关（仅用于启动互斥自检；真正注册扫描器由 @ConditionalOnProperty 控制） */
+    @Value("${blade.workflow.compat.s3-timer-enabled:false}")
+    private boolean s3TimerEnabled;
+
+    /** S6 ScriptTask 沙箱脚本开关：true=向引擎注册带 SecureASTCustomizer 白名单的 Groovy 引擎 */
+    @Value("${blade.workflow.compat.s6-script-task-enabled:false}")
+    private boolean s6ScriptTaskEnabled;
+
     private final DataSource dataSource;
     private final PlatformTransactionManager transactionManager;
     private final ResourcePatternResolver resourcePatternResolver;
@@ -68,6 +84,8 @@ public class FlowableConfig {
     private final ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider;
     private final ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider;
     private final ObjectProvider<WfProcessNoticeListener> wfProcessNoticeListenerProvider;
+    /** E7 引擎→业务状态桥 listener（engine-auto-todo-bridge=true 时才存在） */
+    private final ObjectProvider<WfEngineAutoTodoBridgeListener> wfEngineAutoTodoBridgeListenerProvider;
 
     /** 诊断用：装配阶段解析出的实际库名 / 库内 schema 版本 / history，统一打印自检结论 */
     private String resolvedCatalog;
@@ -80,7 +98,8 @@ public class FlowableConfig {
                           ObjectProvider<WfEngineEventListener> wfEngineEventListenerProvider,
                           ObjectProvider<WfBizCallbackListener> wfBizCallbackListenerProvider,
                           ObjectProvider<WfMiEmptyGuardListener> wfMiEmptyGuardListenerProvider,
-                          ObjectProvider<WfProcessNoticeListener> wfProcessNoticeListenerProvider) {
+                          ObjectProvider<WfProcessNoticeListener> wfProcessNoticeListenerProvider,
+                          ObjectProvider<WfEngineAutoTodoBridgeListener> wfEngineAutoTodoBridgeListenerProvider) {
         this.dataSource = dataSource;
         this.transactionManager = transactionManager;
         this.resourcePatternResolver = resourcePatternResolver;
@@ -88,6 +107,12 @@ public class FlowableConfig {
         this.wfBizCallbackListenerProvider = wfBizCallbackListenerProvider;
         this.wfMiEmptyGuardListenerProvider = wfMiEmptyGuardListenerProvider;
         this.wfProcessNoticeListenerProvider = wfProcessNoticeListenerProvider;
+        this.wfEngineAutoTodoBridgeListenerProvider = wfEngineAutoTodoBridgeListenerProvider;
+    }
+
+    /** 启动互斥判据（纯函数，便于单测）：AsyncExecutor 与 S3 timer 轮询同时开启即冲突 */
+    public boolean isTimerConflict() {
+        return asyncExecutorEnabled && s3TimerEnabled;
     }
 
     @Bean
@@ -124,8 +149,33 @@ public class FlowableConfig {
         configuration.setDatabaseSchemaUpdate(databaseSchemaUpdate);
         // 诊断自检：一次性聚合 databaseCatalog + databaseSchemaUpdate + 引擎期望版本 vs 库实际版本，打印一行对比结论。
         logFlowableSummary();
-        // 关闭异步作业执行器（方案 C §3.4 前提：本模块未使用定时器边界事件 / 异步节点，故保持关闭；一旦要支持定时器须开启，并配套 §3.4 的「C1 降级为最终一致 + 常驻对账修复 + deadletter 告警」三项兜底）
-        configuration.setAsyncExecutorActivate(false);
+        // 启动互斥自检：AsyncExecutor 与 S3 timer 业务侧轮询只能开一个，否则两侧会重复消费同一 timer job。
+        // 用 log.error 强提示（而非抛异常阻断启动），避免运维误配后「静默重复执行」难以排查。
+        if (isTimerConflict()) {
+            log.error("[启动自检][互斥冲突] blade.flowable.async-executor-enabled=true 与 "
+                + "blade.workflow.compat.s3-timer-enabled=true 不可同时开启 —— 两者都会消费 ACT_RU_TIMER_JOB，"
+                + "将导致 timer 节点被重复触发。请关闭其中一个（S3 推荐：保持 AsyncExecutor=false，"
+                + "仅用 s3-timer-enabled=true 轮询）。");
+        }
+        // 异步作业执行器：默认 false（既有行为）。开启前必须满足方案 C §3.4 三项兜底
+        // （strict-event-fail=false + drift-reconcile-enabled=true + deadletter-alarm-enabled=true）。
+        configuration.setAsyncExecutorActivate(asyncExecutorEnabled);
+        // S6 ScriptTask（2026-11-18）：开关打开时，用带白名单沙箱的 Groovy 引擎替换 Flowable 默认 JSR-223 引擎。
+        // 必须同时注册 "groovy"（小写，Flowable ScriptingEngines 常量）与 "Groovy"（原生工厂名），
+        // 确保 scriptFormat 大小写两种写法都命中沙箱引擎，不会退化到无沙箱的原生引擎。
+        if (s6ScriptTaskEnabled) {
+            org.flowable.common.engine.impl.scripting.JSR223FlowableScriptEngine scriptEngine =
+                new org.flowable.common.engine.impl.scripting.JSR223FlowableScriptEngine();
+            org.springblade.workflow.script.S6SandboxedGroovyEngineFactory sandboxFactory =
+                new org.springblade.workflow.script.S6SandboxedGroovyEngineFactory();
+            // 用底层 ScriptEngineManager 按两个名字注册（Flowable 的 addScriptEngineFactory 只按
+            // factory.getEngineName()="Groovy" 注册，无法覆盖小写 "groovy"）
+            for (String name : sandboxFactory.getEngineNames()) {
+                scriptEngine.getScriptEngineManager().registerEngineName(name, sandboxFactory);
+            }
+            configuration.setScriptEngine(scriptEngine);
+            log.info("[FlowableConfig] 已注册 S6 沙箱 Groovy 脚本引擎（s6-script-task-enabled=true）");
+        }
         // 显式固化历史级别为 audit：保证 ACT_HI_COMMENT 可落库（审批轨迹迁移 ACT_HI_COMMENT 的硬门槛）。
         // Flowable 默认即为 audit，此处显式声明以消除歧义；表单快照所需的 full 级别不开启（见下沉迁移方案 §0）。
         // 注：手动装配未使用 flowable-spring-boot-starter，yml 的 flowable.history-level 不会生效，必须此处声明。
@@ -172,6 +222,13 @@ public class FlowableConfig {
         if (noticeListener != null) {
             globalListeners.add(noticeListener);
             log.info("[FlowableConfig] 已注册流程消息通知监听 WfProcessNoticeListener（notice.enabled=true）");
+        }
+        // E7 引擎→业务状态桥（2026-11-18）：自动节点完成后同步 ACT 待办与实例状态，
+        // 独立开关 blade.workflow.compat.engine-auto-todo-bridge（默认 false，关闭时 listener bean 不存在）。
+        WfEngineAutoTodoBridgeListener e7Listener = wfEngineAutoTodoBridgeListenerProvider.getIfAvailable();
+        if (e7Listener != null) {
+            globalListeners.add(e7Listener);
+            log.info("[FlowableConfig] 已注册 E7 引擎→业务状态桥监听 WfEngineAutoTodoBridgeListener（engine-auto-todo-bridge=true）");
         }
         if (!globalListeners.isEmpty()) {
             configuration.setEventListeners(globalListeners);

@@ -172,6 +172,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
     private final WfBpmnExtensionReader bpmnReader;
     /** 流转日志唯一写入口（含 ACT_HI_COMMENT 审批意见双写） */
     private final WfWriteHelper writeHelper;
+    /** 会签引擎多实例统一灰度门（推进门禁与变量注入共用，避免口径分叉） */
+    private final org.springblade.workflow.service.helper.WfEngineMiGate engineMiGate;
     /** 自由流程推进器（特性开关默认关闭；非自由实例零行为变化） */
     private final org.springblade.workflow.freeflow.IWfFreeFlowDriver freeFlowDriver;
     /** 自由流程影子节点装饰（把静态池节点包装成本实例该步骤的节点） */
@@ -1871,14 +1873,13 @@ public class WfTaskServiceImpl implements IWfTaskService {
      * 开关关闭 → 永不；开关开启 → 仅审批/提交类节点（nodeType ∈ {1,2}）走引擎多实例。
      */
     private boolean isEngineMultiInstance(WfInstance inst, String nodeKey) {
-        if (!multiInstanceEnabled || inst == null || inst.getDefId() == null || nodeKey == null) {
+        // 统一灰度门：全局开关 + 定义ID白名单 + 节点类型，一处判定。
+        // false 分支（白名单空 + 全局开）与改造前逐字节等价；白名单非空时才按 defId 灰度。
+        if (inst == null || inst.getDefId() == null || nodeKey == null) {
             return false;
         }
         WfProcessNode node = loadNode(inst.getDefId(), nodeKey);
-        if (node == null || node.getNodeType() == null) {
-            return false;
-        }
-        return Integer.valueOf(1).equals(node.getNodeType()) || Integer.valueOf(2).equals(node.getNodeType());
+        return engineMiGate.useEngineMi(inst, node, nodeKey);
     }
 
     /**
@@ -1890,7 +1891,8 @@ public class WfTaskServiceImpl implements IWfTaskService {
      * 此时按静态节点配置解析（多数场景足够）；动态（依赖表单/实例）首节点多实例为边界情况，需回归验证。</p>
      */
     private void injectMiCollectionVars(Long defId, WfInstance inst, Map<String, Object> vars, Long currentOperator) {
-        if (!multiInstanceEnabled || vars == null || defId == null) {
+        // 与推进门禁共用灰度门（实例级），避免「待办按灰度生成、MI 变量按全局注入」错配。
+        if (!engineMiGate.useEngineMiForInstance(inst) || vars == null || defId == null) {
             return;
         }
         try {

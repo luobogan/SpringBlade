@@ -12,6 +12,7 @@ import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.repository.Deployment;
 import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.repository.ProcessDefinitionQuery;
+import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springblade.workflow.service.IProcessService;
@@ -514,6 +515,75 @@ public class ProcessServiceImpl implements IProcessService {
     public long pendingJobCount() {
         return managementService.createJobQuery().count()
             + managementService.createTimerJobQuery().count();
+    }
+
+    @Override
+    public List<org.springblade.workflow.vo.DeadLetterJobVO> listDeadLetterJobs() {
+        List<org.flowable.job.api.Job> jobs = managementService.createDeadLetterJobQuery().list();
+        List<org.springblade.workflow.vo.DeadLetterJobVO> out = new ArrayList<>();
+        for (org.flowable.job.api.Job j : jobs) {
+            org.springblade.workflow.vo.DeadLetterJobVO vo = new org.springblade.workflow.vo.DeadLetterJobVO();
+            vo.setJobId(j.getId());
+            vo.setProcessInstanceId(j.getProcessInstanceId());
+            vo.setProcessDefinitionId(j.getProcessDefinitionId());
+            vo.setElementId(j.getElementId());
+            vo.setRetries(j.getRetries());
+            vo.setExceptionMessage(j.getExceptionMessage());
+            out.add(vo);
+        }
+        return out;
+    }
+
+    @Override
+    public String retryDeadLetterJob(String jobId, int retries) {
+        org.flowable.job.api.Job job = managementService.moveDeadLetterJobToExecutableJob(jobId, retries);
+        return job.getId();
+    }
+
+    @Override
+    public void deleteDeadLetterJob(String jobId) {
+        managementService.deleteDeadLetterJob(jobId);
+    }
+
+    @Override
+    public boolean isProcessInstanceEnded(String engineInstId) {
+        if (engineInstId == null || engineInstId.isEmpty()) {
+            return false;
+        }
+        try {
+            return runtimeService.createProcessInstanceQuery()
+                .processInstanceId(engineInstId).active().count() == 0;
+        } catch (org.flowable.common.engine.api.FlowableException e) {
+            // 实例不存在/已清理：按「已结束」处理（归档新轨不因此卡住）
+            log.warn("[blade-workflow] 查询引擎实例 active 失败，按已结束处理. engineInstId={}, err={}",
+                engineInstId, e.getMessage());
+            return true;
+        }
+    }
+
+    @Override
+    public String activeWaitActivityId(String engineInstId) {
+        if (engineInstId == null || engineInstId.isEmpty()) {
+            return null;
+        }
+        try {
+            List<Execution> executions = runtimeService.createExecutionQuery()
+                .processInstanceId(engineInstId).list();
+            if (executions == null || executions.isEmpty()) {
+                return null;
+            }
+            for (Execution e : executions) {
+                String activityId = e.getActivityId();
+                if (activityId != null && !activityId.isEmpty()) {
+                    return activityId;
+                }
+            }
+            return null;
+        } catch (org.flowable.common.engine.api.FlowableException e) {
+            log.warn("[blade-workflow] 查询引擎等待活动失败. engineInstId={}, err={}",
+                engineInstId, e.getMessage());
+            return null;
+        }
     }
 
 }

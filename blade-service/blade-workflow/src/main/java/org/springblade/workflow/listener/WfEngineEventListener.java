@@ -7,6 +7,7 @@ import org.flowable.common.engine.api.delegate.event.FlowableEntityEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.flowable.task.api.Task;
+import org.springblade.workflow.config.WfFlowtableCompatProperties;
 import org.springblade.workflow.service.helper.WfStateProjector;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -31,18 +32,24 @@ import org.springframework.stereotype.Component;
 public class WfEngineEventListener implements FlowableEventListener {
 
     private final WfStateProjector projector;
+    /** flowtable 扩展双轨开关：strict-event-fail 仅作用于本台账投影 listener（默认 false=旧行为） */
+    private final WfFlowtableCompatProperties compat;
 
-    public WfEngineEventListener(WfStateProjector projector) {
+    public WfEngineEventListener(WfStateProjector projector, WfFlowtableCompatProperties compat) {
         this.projector = projector;
+        this.compat = compat;
     }
 
     /**
-     * 事件派发。<b>阶段2 起不再吞异常</b>：写台账失败必须向上传播，
-     * 配合 {@link #isFailOnException()} = true 让引擎操作整体回滚（C1 强一致），
-     * 避免出现「引擎动了、台账没动」的漂移（C2 弱一致会重新引入该问题，治理文档 §4.3 明确不采用）。
+     * 事件派发。批次1 后台账投影已切「直写 ACT 业务列」：写失败由写入器 catch→warn 兜住，
+     * 故 {@link #isFailOnException()} 默认 false（最终一致 C2），不因投影失败回滚引擎操作。
      *
-     * <p>注意：投影器内部对「查不到 wf_instance / wf_task 行」等数据性情况只记 warn 并返回，
-     * 不抛异常 —— 那属于数据问题，不应阻断用户操作；只有真正的写失败才会回滚。</p>
+     * <p>如需 C1 强一致（投影写失败回滚引擎），置 {@code blade.workflow.compat.strict-event-fail=true}；
+     * 该开关<b>仅作用于本台账投影 listener</b>，不影响通知/回调 listener（恒 false）与
+     * MI 空集合守卫（恒 true）。</p>
+     *
+     * <p>投影器对「查不到 wf_instance / wf_task 行」等数据性情况只记 warn 并返回，不抛异常——
+     * 那属于数据问题，不应阻断用户操作。</p>
      */
     @Override
     public void onEvent(FlowableEvent event) {
@@ -93,10 +100,11 @@ public class WfEngineEventListener implements FlowableEventListener {
 
     @Override
     public boolean isFailOnException() {
-        // 批次 1（2026-11-10）：任务级补偿已改为「直写 ACT 业务列」，不再写 wf_task 台账。
-        // ACT 写失败由 WfTaskActDirectWriter 的 catch → warn 兜住，不应连带回滚整个引擎操作
-        // （旧 true 是「台账写失败即回滚引擎」的 C1 强一致语义，台账零写入后不再适用）。
-        return false;
+        // 双轨开关 strict-event-fail（默认 false=旧行为）：
+        // false=批次1 起的 ACT 直写最终一致（写失败 catch→warn，不回滚引擎）；
+        // true =C1 强一致（投影写失败回滚引擎）。
+        // ⚠️ 本开关只作用于台账投影 listener；通知/回调恒 false、MI 空集合守卫恒 true。
+        return compat.isStrictEventFail();
     }
 
     @Override

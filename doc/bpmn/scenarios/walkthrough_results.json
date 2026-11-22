@@ -1,0 +1,218 @@
+[
+  {
+    "file": "01_basic_approval.bpmn20.xml",
+    "defId": "2124335106488397825",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 3,
+    "nodeTotal": 3,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 3 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "02_escalation_chain.bpmn20.xml",
+    "defId": "2124335106555506695",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 5,
+    "nodeTotal": 5,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 5 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "03_countersign_all.bpmn20.xml",
+    "defId": "2124335106685530113",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 3,
+    "nodeTotal": 3,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 3 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "04_any_one_approve.bpmn20.xml",
+    "defId": "2124335106752638982",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 3,
+    "nodeTotal": 3,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 3 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "05_sequential_approval.bpmn20.xml",
+    "defId": "2124335106882662402",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 3,
+    "nodeTotal": 3,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 3 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "06_cc_circulate.bpmn20.xml",
+    "defId": "2124335106949771265",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "07_exclusive_gateway_amount.bpmn20.xml",
+    "defId": "2124335107079794689",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 5,
+    "nodeTotal": 5,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 5 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "08_parallel_gateway.bpmn20.xml",
+    "defId": "2124335107142709253",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 6,
+    "nodeTotal": 6,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 6 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "09_inclusive_gateway.bpmn20.xml",
+    "defId": "2124335107272732673",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 6,
+    "nodeTotal": 6,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 6 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "10_operator_types.bpmn20.xml",
+    "defId": "2124335107469864962",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 8,
+    "nodeTotal": 8,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 8 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "11_matrix_operator.bpmn20.xml",
+    "defId": "2124335107599888385",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 3,
+    "nodeTotal": 3,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 3 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "12_dept_leader.bpmn20.xml",
+    "defId": "2124335107662802946",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 3,
+    "nodeTotal": 3,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 3 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "13_reject_whitelist.bpmn20.xml",
+    "defId": "2124335107729911809",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "14_forward_transfer.bpmn20.xml",
+    "defId": "2124335107859935234",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "15_timeout_rules.bpmn20.xml",
+    "defId": "2124335108052873217",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 6,
+    "nodeTotal": 6,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 6 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "16_field_permissions.bpmn20.xml",
+    "defId": "2124335108182896645",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "17_service_task_e1.bpmn20.xml",
+    "defId": "2124335108380028929",
+    "deploy": false,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "18_script_task_s6.bpmn20.xml",
+    "defId": "2124335108447137795",
+    "deploy": false,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  },
+  {
+    "file": "19_receive_task_s4.bpmn20.xml",
+    "defId": "2124335108572966913",
+    "deploy": false,
+    "testStatus": 0,
+    "nodePassed": 2,
+    "nodeTotal": 4,
+    "skipped": [
+      "Task_AfterWake",
+      "EndEvent_1"
+    ],
+    "summary": "测试未通过：2 个节点未走到（连通性或网关条件未命中）；详见测试日志。"
+  },
+  {
+    "file": "20_timer_boundary_s3.bpmn20.xml",
+    "defId": "2124335108640075778",
+    "deploy": true,
+    "testStatus": 0,
+    "nodePassed": 3,
+    "nodeTotal": 5,
+    "skipped": [
+      "Task_Timeout",
+      "EndEvent_Timeout"
+    ],
+    "summary": "测试未通过：2 个节点未走到（连通性或网关条件未命中）；详见测试日志。"
+  },
+  {
+    "file": "21_business_subflow.bpmn20.xml",
+    "defId": "2124335108707184641",
+    "deploy": true,
+    "testStatus": 1,
+    "nodePassed": 4,
+    "nodeTotal": 4,
+    "skipped": [],
+    "summary": "测试通过：流程从创建节点真实走到归档节点，共 4 个节点全部经过，各节点操作者可正常解析。"
+  }
+]
