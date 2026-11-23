@@ -37,6 +37,33 @@ CREATE TABLE IF NOT EXISTS `mode_field_auth_subject` (
   KEY `idx_mfas_subject` (`tenant_id`, `objtype`, `objid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='字段权限授权对象组成员';
 
+-- 稳定布局标识：用于按组隔离 Univer Excel 设计布局（nodeKey）
+SET @group_key_exists = (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA='blade' AND TABLE_NAME='mode_field_auth_group' AND COLUMN_NAME='group_key'
+);
+SET @sql = IF(@group_key_exists = 0,
+  'ALTER TABLE mode_field_auth_group ADD COLUMN group_key varchar(64) NULL COMMENT "稳定组标识（Univer布局nodeKey）"',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(@group_key_exists = 0,
+  'UPDATE mode_field_auth_group SET group_key = CONCAT(''group-'', id) WHERE group_key IS NULL OR group_key=''''',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @group_key_idx = (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA='blade' AND TABLE_NAME='mode_field_auth_group' AND INDEX_NAME='uk_mfag_group_key'
+);
+SET @sql = IF(@group_key_idx = 0,
+  'CREATE UNIQUE INDEX uk_mfag_group_key ON mode_field_auth_group (tenant_id, group_key)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 SET @col_exists = (
   SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA='blade' AND TABLE_NAME='modefieldauthorize' AND COLUMN_NAME='group_id'

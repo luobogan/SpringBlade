@@ -519,8 +519,10 @@ public class FormRightServiceImpl implements IFormRightService {
             if (group == null) continue;
             long groupId = nextGroup++;
             String name = org.springblade.core.tool.utils.Func.isBlank(group.getGroupName()) ? "授权对象组" : group.getGroupName().trim();
-            jdbcTemplate.update("INSERT INTO mode_field_auth_group (id,tenant_id,modeid,group_name,create_time,update_time) VALUES (?,?,?,?,NOW(),NOW())",
-                groupId, tenant, modeId, name);
+            String groupKey = org.springblade.core.tool.utils.Func.isBlank(group.getGroupKey())
+                ? "group-" + groupId : group.getGroupKey().trim();
+            jdbcTemplate.update("INSERT INTO mode_field_auth_group (id,tenant_id,modeid,group_name,group_key,create_time,update_time) VALUES (?,?,?,?,?,NOW(),NOW())",
+                groupId, tenant, modeId, name, groupKey);
             if (group.getSubjects() != null) {
                 for (org.springblade.formmode.dto.FieldAuthSubjectDTO s : group.getSubjects()) {
                     if (s == null || s.getObjtype() == null || org.springblade.core.tool.utils.Func.isBlank(s.getObjid())) continue;
@@ -546,7 +548,7 @@ public class FormRightServiceImpl implements IFormRightService {
         String tenant = currentTenant();
         try {
             List<Map<String, Object>> groups = jdbcTemplate.queryForList(
-                "SELECT id, modeid, group_name FROM mode_field_auth_group WHERE modeid=? AND tenant_id=? ORDER BY id",
+                "SELECT id, modeid, group_name, group_key FROM mode_field_auth_group WHERE modeid=? AND tenant_id=? ORDER BY id",
                 modeId, tenant);
             if (groups == null || groups.isEmpty()) return new ArrayList<>();
             for (Map<String, Object> g : groups) {
