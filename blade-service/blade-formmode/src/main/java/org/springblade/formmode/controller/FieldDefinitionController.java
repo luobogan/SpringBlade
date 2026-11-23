@@ -153,6 +153,22 @@ public class FieldDefinitionController {
     }
 
     /**
+     * 判断字段配置是否完成：至少存在一个可用字段。
+     *
+     * <p>数据编辑界面的操作按钮显示、新增/编辑/单元格更新写接口均以此口径为准。</p>
+     */
+    @GetMapping("/configured/{formId}")
+    @Operation(summary = "判断字段配置是否完成", description = "至少存在一个可用字段定义")
+    public R<Boolean> configured(@PathVariable String formId) {
+        try {
+            return R.data(fieldDefinitionService.isConfigured(formId));
+        } catch (Exception e) {
+            log.error("判断字段配置失败: formId={}", formId, e);
+            return R.data(false);
+        }
+    }
+
+    /**
      * 根据表单ID和是否主表字段获取字段列表
      */
     @GetMapping("/by-form/{formId}/is-main/{isMain}")

@@ -55,6 +55,18 @@ public class FieldDefinitionServiceImpl extends ServiceImpl<FieldDefinitionMappe
     }
 
     @Override
+    public boolean isConfigured(String billId) {
+        if (billId == null || billId.trim().isEmpty()) return false;
+        List<FieldDefinition> fields = getByFormId(billId);
+        if (fields == null || fields.isEmpty()) return false;
+        return fields.stream().anyMatch(f -> f != null
+            && (f.getIsUsed() == null || f.getIsUsed() != 0)
+            && (f.getStatus() == null || f.getStatus() != 0)
+            && ((f.getFieldName() != null && !f.getFieldName().trim().isEmpty())
+                || (f.getFieldLabel() != null && !f.getFieldLabel().trim().isEmpty())));
+    }
+
+    @Override
     public List<FieldDefinition> getByFormIdIncludeDeleted(String billId) {
         // 包含所有字段（用于管理后台）
         LambdaQueryWrapper<FieldDefinition> wrapper = new LambdaQueryWrapper<>();

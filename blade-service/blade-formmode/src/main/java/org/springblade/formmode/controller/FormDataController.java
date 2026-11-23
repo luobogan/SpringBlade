@@ -13,6 +13,7 @@ import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.formmode.dto.FieldDefinitionDTO;
 import org.springblade.formmode.dto.FormDataDTO;
 import org.springblade.formmode.dto.FormDataSaveDTO;
+import org.springblade.formmode.service.IFieldDefinitionService;
 import org.springblade.formmode.service.IFormDataService;
 import org.springblade.formmode.enums.RightType;
 import org.springblade.formmode.service.IFormModeService;
@@ -45,6 +46,7 @@ public class FormDataController extends BladeController {
     private final IFormDataService formDataService;
     private final IFormModeService formModeService;
     private final IFormRightService formRightService;
+    private final IFieldDefinitionService fieldDefinitionService;
 
     // ── 模块权限校验开关（非流程场景，对标 E9 moderightinfo 的 7 种 righttype）──
     // 写操作默认强制：checkRight 在「该模块未配置任何权限」时放行，故默认开启对无配置模块零影响；
@@ -96,6 +98,13 @@ public class FormDataController extends BladeController {
             modeId, type, SecureUtil.getUserId());
     }
 
+    /** 字段配置完成校验：未配置字段时禁止新增/编辑/单元格写入 */
+    private void assertFieldConfigured(Long formId) {
+        if (formId == null || !fieldDefinitionService.isConfigured(String.valueOf(formId))) {
+            throw new ServiceException("请先完成字段配置，再进行数据编辑操作");
+        }
+    }
+
     /**
      * 保存表单数据（新建/编辑）
      */
@@ -140,6 +149,7 @@ public class FormDataController extends BladeController {
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Long> createByForm(@PathVariable Long formId,
                                 @RequestBody Map<String, Object> fieldValues) {
+        assertFieldConfigured(formId);
         assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.CREATE, writeRightEnforce);
         FormDataSaveDTO dto = new FormDataSaveDTO();
         dto.setFormId(formId);
@@ -159,6 +169,7 @@ public class FormDataController extends BladeController {
     public R<Long> updateByForm(@PathVariable Long formId,
                                 @PathVariable Long dataId,
                                 @RequestBody Map<String, Object> fieldValues) {
+        assertFieldConfigured(formId);
         assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.EDIT, writeRightEnforce);
         FormDataSaveDTO dto = new FormDataSaveDTO();
         dto.setFormId(formId);
@@ -183,6 +194,7 @@ public class FormDataController extends BladeController {
                                        @PathVariable Long dataId,
                                        @RequestBody Map<String, Object> payload,
                                        @RequestParam(required = false) String resourceCode) {
+        assertFieldConfigured(formId);
         assertModeRight(formRightService.resolveModeIdByFormId(formId), RightType.EDIT, writeRightEnforce);
         if (payload == null) {
             throw new ServiceException("请求体不能为空");

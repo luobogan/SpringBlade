@@ -19,6 +19,13 @@ public interface IFieldDefinitionService extends IService<FieldDefinition> {
     List<FieldDefinition> getByFormId(String billId);
 
     /**
+     * 判断表单是否已完成字段配置。
+     *
+     * <p>口径：至少存在一个未删除、状态正常、且有有效字段名/标签的主表字段。</p>
+     */
+    boolean isConfigured(String billId);
+
+    /**
      * 根据表单ID获取字段列表（包含已删除的字段，用于管理后台）
      */
     List<FieldDefinition> getByFormIdIncludeDeleted(String billId);
