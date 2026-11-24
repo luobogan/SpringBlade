@@ -25,6 +25,7 @@ import org.springblade.formmode.service.IDataScopeService;
 import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
+import org.springblade.formmode.vo.RuntimeFieldPermVO;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -761,6 +762,68 @@ public class FormRightServiceImpl implements IFormRightService {
             // 按字段归属派生作用域：主表 main / 明细表 dt{idx}，与审批态 scope 回退链对齐
             result.add(new FieldPermVO(scopeOfField(def), def.getFieldname(), visible, editable, null));
         });
+        return result;
+    }
+
+    @Override
+    public RuntimeFieldPermVO getRuntimeFieldPermByForm(Long formId, Integer layoutType) {
+        RuntimeFieldPermVO result = new RuntimeFieldPermVO();
+        int type = layoutType == null ? 0 : layoutType;
+        result.setLayoutType(type);
+        result.setFieldPerms(new ArrayList<>());
+        if (formId == null) return result;
+
+        Long modeId = resolveModeIdByFormId(formId);
+        if (modeId == null) modeId = formId;
+        result.setFieldPerms(listFieldPerm(modeId));
+
+        try {
+            BladeUser user = AuthUtil.getUser();
+            // 管理员不收窄字段权限，也没有命中组概念 → 使用表单级通用布局
+            if (subjectResolver.isAdmin(user)) return result;
+            Long uid = user == null ? null : user.getUserId();
+            Set<Long> roleIds = parseIds(user == null ? null : user.getRoleId());
+            Set<Long> deptIds = parseIds(user == null ? null : user.getDeptId());
+            Set<Long> postIds = subjectResolver.resolvePostIds(uid);
+            Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
+            Set<Long> matchedGroupIds = resolveMatchedFieldGroupIds(modeId, currentTenant(), uid, roleIds, deptIds, postIds, subcompanyIds);
+            if (matchedGroupIds == null || matchedGroupIds.isEmpty()) return result;
+
+            String marks = matchedGroupIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+            List<Map<String, Object>> groups = jdbcTemplate.queryForList(
+                "SELECT id, group_key, group_name FROM mode_field_auth_group "
+                    + "WHERE modeid=? AND tenant_id=? AND id IN (" + marks + ") ORDER BY id",
+                modeId, currentTenant());
+            if (groups == null || groups.isEmpty()) return result;
+
+            // 多组命中时，优先选择已经配置了目标布局类型的组；否则按组ID顺序取第一个。
+            String fallbackKey = null;
+            String fallbackName = null;
+            for (Map<String, Object> g : groups) {
+                Object idObj = g.get("id");
+                if (!(idObj instanceof Number)) continue;
+                long gid = ((Number) idObj).longValue();
+                String key = g.get("group_key") == null || String.valueOf(g.get("group_key")).trim().isEmpty()
+                    ? "group-" + gid : String.valueOf(g.get("group_key")).trim();
+                String name = g.get("group_name") == null ? "" : String.valueOf(g.get("group_name"));
+                if (fallbackKey == null) {
+                    fallbackKey = key;
+                    fallbackName = name;
+                }
+                Long count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM form_layout WHERE form_id=? AND node_key=? AND layout_type=? AND status=1",
+                    Long.class, formId, key, type);
+                if (count != null && count > 0) {
+                    result.setLayoutNodeKey(key);
+                    result.setLayoutGroupName(name);
+                    return result;
+                }
+            }
+            result.setLayoutNodeKey(fallbackKey);
+            result.setLayoutGroupName(fallbackName);
+        } catch (Exception e) {
+            log.warn("[formmode] 解析运行期布局组失败. formId={}, layoutType={}, err={}", formId, layoutType, e.getMessage());
+        }
         return result;
     }
 

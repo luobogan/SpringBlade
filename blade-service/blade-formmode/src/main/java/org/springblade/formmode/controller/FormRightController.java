@@ -15,6 +15,7 @@ import org.springblade.formmode.entity.ModeRightInfo;
 import org.springblade.formmode.service.IDataScopeService;
 import org.springblade.formmode.service.IFormRightService;
 import org.springblade.formmode.vo.FieldPermVO;
+import org.springblade.formmode.vo.RuntimeFieldPermVO;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
@@ -142,6 +143,18 @@ public class FormRightController extends BladeController {
             modeId = formId;
         }
         return R.data(formRightService.listFieldPerm(modeId));
+    }
+
+    /**
+     * 运行期字段权限 + 当前用户命中组的 Univer 布局标识。
+     *
+     * <p>layoutType=0 编辑/新增，layoutType=1 显示/查看。</p>
+     */
+    @GetMapping("/runtime/field-perm/by-form/{formId}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    public R<RuntimeFieldPermVO> runtimeFieldPermByForm(@PathVariable Long formId,
+                                                        @RequestParam(required = false, defaultValue = "0") Integer layoutType) {
+        return R.data(formRightService.getRuntimeFieldPermByForm(formId, layoutType));
     }
 
     /**

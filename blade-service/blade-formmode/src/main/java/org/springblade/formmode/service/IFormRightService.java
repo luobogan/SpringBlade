@@ -6,6 +6,7 @@ import org.springblade.formmode.entity.ModeRightInfo;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
 import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
+import org.springblade.formmode.vo.RuntimeFieldPermVO;
 
 import java.util.List;
 import java.util.Map;
@@ -107,6 +108,14 @@ public interface IFormRightService {
      * @return 字段权限列表；无配置 / 查询异常返回空列表（不返回 null）
      */
     List<FieldPermVO> listFieldPerm(Long modeId);
+
+    /**
+     * 运行期字段权限 + 当前用户命中组的布局标识。
+     *
+     * @param formId     表单ID（workflow_bill.id）
+     * @param layoutType 0编辑/新增 1显示
+     */
+    RuntimeFieldPermVO getRuntimeFieldPermByForm(Long formId, Integer layoutType);
 
     /**
      * 解析「当前用户」对某模块的<b>数据范围</b>（行级数据权限，对应 modedatasharerule）。
