@@ -1,6 +1,7 @@
 package org.springblade.formmode.service;
 
 import org.springblade.formmode.dto.FieldSubjectSaveDTO;
+import org.springblade.formmode.dto.MenuShareDTO;
 import org.springblade.formmode.dto.ModeRightBatchDTO;
 import org.springblade.formmode.entity.ModeRightInfo;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
@@ -60,6 +61,9 @@ public interface IFormRightService {
 
     /** 查询字段权限授权对象组（一组对象共享一份字段权限） */
     List<Map<String, Object>> getFieldAuthGroups(Long modeId);
+
+    /** 查询表单数据菜单的多主体可见范围 */
+    List<MenuShareDTO> getFormMenuShares(Long modeId);
 
     /**
      * 按授权主体查询字段权限（跨模块）。

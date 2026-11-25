@@ -568,6 +568,42 @@ public class FormRightServiceImpl implements IFormRightService {
         }
     }
 
+    @Override
+    public List<org.springblade.formmode.dto.MenuShareDTO> getFormMenuShares(Long modeId) {
+        java.util.List<org.springblade.formmode.dto.MenuShareDTO> result = new java.util.ArrayList<>();
+        if (modeId == null) return result;
+        try {
+            String tenant = currentTenant();
+            List<Long> billIds = jdbcTemplate.queryForList(
+                "SELECT billid FROM modeinfo WHERE id=?", Long.class, modeId);
+            // 兼容未建 modeinfo 的表单：保存侧以 formId 作为 modeId，读取侧同样兜底
+            Long billId = (billIds == null || billIds.isEmpty() || billIds.get(0) == null) ? modeId : billIds.get(0);
+            String code = "formdata_view_" + billId;
+            List<Long> menuIds = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_menu WHERE code=? AND is_deleted=0", Long.class, code);
+            if (menuIds == null || menuIds.isEmpty()) return result;
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id,menu_id,share_type,share_id,include_sub,showlevel,showlevel2 FROM blade_menu_share "
+                    + "WHERE menu_id=? AND tenant_id=? AND status=1 AND is_deleted=0 ORDER BY id",
+                menuIds.get(0), tenant);
+            if (rows == null) return result;
+            for (Map<String, Object> row : rows) {
+                org.springblade.formmode.dto.MenuShareDTO s = new org.springblade.formmode.dto.MenuShareDTO();
+                if (row.get("id") instanceof Number) s.setId(((Number) row.get("id")).longValue());
+                if (row.get("menu_id") instanceof Number) s.setMenuId(((Number) row.get("menu_id")).longValue());
+                if (row.get("share_type") instanceof Number) s.setShareType(((Number) row.get("share_type")).intValue());
+                if (row.get("share_id") instanceof Number) s.setShareId(((Number) row.get("share_id")).longValue());
+                if (row.get("include_sub") instanceof Number) s.setIncludeSub(((Number) row.get("include_sub")).intValue());
+                if (row.get("showlevel") instanceof Number) s.setShowlevel(((Number) row.get("showlevel")).intValue());
+                if (row.get("showlevel2") instanceof Number) s.setShowlevel2(((Number) row.get("showlevel2")).intValue());
+                result.add(s);
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 查询表单菜单可见范围失败. modeId={}, err={}", modeId, e.getMessage());
+        }
+        return result;
+    }
+
     /** 当前用户命中的字段权限组ID */
     private Set<Long> resolveMatchedFieldGroupIds(Long modeId, String tenant, Long uid,
                                                    Set<Long> roleIds, Set<Long> deptIds,
@@ -779,8 +815,8 @@ public class FormRightServiceImpl implements IFormRightService {
 
         try {
             BladeUser user = AuthUtil.getUser();
-            // 管理员不收窄字段权限，也没有命中组概念 → 使用表单级通用布局
-            if (subjectResolver.isAdmin(user)) return result;
+            // 管理员的字段权限不收窄（listFieldPerm 已返回空），但布局仍按命中组解析：
+            // 否则角色名含 admin 的用户永远拿不到组级 Univer 设计布局。
             Long uid = user == null ? null : user.getUserId();
             Set<Long> roleIds = parseIds(user == null ? null : user.getRoleId());
             Set<Long> deptIds = parseIds(user == null ? null : user.getDeptId());
@@ -796,9 +832,8 @@ public class FormRightServiceImpl implements IFormRightService {
                 modeId, currentTenant());
             if (groups == null || groups.isEmpty()) return result;
 
-            // 多组命中时，优先选择已经配置了目标布局类型的组；否则按组ID顺序取第一个。
-            String fallbackKey = null;
-            String fallbackName = null;
+            // 多组命中时，只选择已经配置了目标布局类型的组；
+            // 没有对应布局时不返回 nodeKey，前端显示「没有相应的布局」，不做表单级兜底。
             for (Map<String, Object> g : groups) {
                 Object idObj = g.get("id");
                 if (!(idObj instanceof Number)) continue;
@@ -806,10 +841,6 @@ public class FormRightServiceImpl implements IFormRightService {
                 String key = g.get("group_key") == null || String.valueOf(g.get("group_key")).trim().isEmpty()
                     ? "group-" + gid : String.valueOf(g.get("group_key")).trim();
                 String name = g.get("group_name") == null ? "" : String.valueOf(g.get("group_name"));
-                if (fallbackKey == null) {
-                    fallbackKey = key;
-                    fallbackName = name;
-                }
                 Long count = jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM form_layout WHERE form_id=? AND node_key=? AND layout_type=? AND status=1",
                     Long.class, formId, key, type);
@@ -819,8 +850,6 @@ public class FormRightServiceImpl implements IFormRightService {
                     return result;
                 }
             }
-            result.setLayoutNodeKey(fallbackKey);
-            result.setLayoutGroupName(fallbackName);
         } catch (Exception e) {
             log.warn("[formmode] 解析运行期布局组失败. formId={}, layoutType={}, err={}", formId, layoutType, e.getMessage());
         }
@@ -1247,30 +1276,74 @@ public class FormRightServiceImpl implements IFormRightService {
                 jdbcTemplate.update("UPDATE blade_menu SET name=?, path=?, parent_id=? WHERE id=?",
                     menuName, path, parentId, menuId);
             }
-            // 3) 目标角色（objtype=1）
-            java.util.Set<Long> roleIds = new java.util.LinkedHashSet<>();
-            if (batch.getRights() != null) {
-                for (ModeRightInfo r : batch.getRights()) {
-                    if (r == null || r.getObjtype() == null || r.getObjid() == null || r.getObjtype() != 1) continue;
-                    long rid = r.getObjid();
-                    if (rid == 0L) {
-                        // objid=0 = 全部角色
-                        List<Long> allRoles = jdbcTemplate.queryForList(
-                            "SELECT id FROM blade_role WHERE is_deleted=0", Long.class);
-                        if (allRoles != null) roleIds.addAll(allRoles);
-                    } else if (rid > 0) {
-                        roleIds.add(rid);
+            // 2.1) 该表单的 AAE 组件页：查看/编辑/新增按钮跳转这里，必须随列表菜单一起授权
+            String aaeCode = "formdata_aae_" + formId;
+            long aaeMenuId;
+            List<Long> aaeMenuIds = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_menu WHERE code=? AND is_deleted=0", Long.class, aaeCode);
+            if (aaeMenuIds == null || aaeMenuIds.isEmpty()) {
+                Long maxAae = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_menu", Long.class);
+                aaeMenuId = (maxAae == null ? 0L : maxAae) + 1;
+                jdbcTemplate.update(
+                    "INSERT INTO blade_menu (id,parent_id,code,name,alias,path,source,sort,category,action,is_open,is_component,component_type,is_deleted,tenant_id) "
+                        + "VALUES (?,?,?,?,?,?,'api',5,2,0,1,1,'bundled',0,?)",
+                    aaeMenuId, menuId, aaeCode, "表单新增编辑页", "formdata_aae_" + formId,
+                    "/formmode/formview/aae", tenantId);
+            } else {
+                aaeMenuId = aaeMenuIds.get(0);
+                jdbcTemplate.update("UPDATE blade_menu SET parent_id=?, path=? WHERE id=?",
+                    menuId, "/formmode/formview/aae", aaeMenuId);
+            }
+
+            // 3) 菜单可见范围：优先用提交的多主体共享；旧调用方缺省时回退为模块权限中的角色
+            java.util.List<org.springblade.formmode.dto.MenuShareDTO> shares = batch.getMenuShares();
+            if (shares == null) {
+                shares = new java.util.ArrayList<>();
+                if (batch.getRights() != null) {
+                    for (ModeRightInfo r : batch.getRights()) {
+                        if (r == null || r.getObjtype() == null || r.getObjid() == null || r.getObjtype() != 1) continue;
+                        org.springblade.formmode.dto.MenuShareDTO s = new org.springblade.formmode.dto.MenuShareDTO();
+                        s.setMenuId(menuId);
+                        s.setShareType(1);
+                        s.setShareId(r.getObjid());
+                        s.setIncludeSub(0);
+                        shares.add(s);
                     }
                 }
             }
-            // 4) 重置该菜单的角色授权（建模权限为该菜单的唯一授权源）
-            jdbcTemplate.update("DELETE FROM blade_role_menu WHERE menu_id=?", menuId);
+            // 4) 全量重置列表菜单 + AAE 组件页的多主体可见范围
+            java.util.List<Long> menuIdsToShare = java.util.Arrays.asList(menuId, aaeMenuId);
+            for (Long mid : menuIdsToShare) {
+                jdbcTemplate.update("DELETE FROM blade_menu_share WHERE menu_id=? AND tenant_id=?", mid, tenantId);
+            }
+            Long maxShare = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_menu_share", Long.class);
+            long nextShare = (maxShare == null ? 0L : maxShare) + 1;
+            java.util.Set<Long> roleIds = new java.util.LinkedHashSet<>();
+            for (org.springblade.formmode.dto.MenuShareDTO s : shares) {
+                if (s == null || s.getShareType() == null) continue;
+                int type = s.getShareType();
+                if (type < 1 || type > 7) continue;
+                for (Long mid : menuIdsToShare) {
+                    jdbcTemplate.update(
+                        "INSERT INTO blade_menu_share (id,tenant_id,menu_id,share_type,share_id,include_sub,showlevel,showlevel2,status,is_deleted,create_user,create_time,update_user,update_time) "
+                            + "VALUES (?,?,?,?,?,?,?,?,1,0,?,NOW(),?,NOW())",
+                        nextShare++, tenantId, mid, type, s.getShareId(), s.getIncludeSub() == null ? 0 : s.getIncludeSub(),
+                        s.getShowlevel(), s.getShowlevel2(), SecureUtil.getUserId(), SecureUtil.getUserId());
+                }
+                if (type == 1 && s.getShareId() != null && s.getShareId() > 0) roleIds.add(s.getShareId());
+            }
+            // 5) 兼容旧链路：继续同步角色菜单（列表菜单 + AAE 组件页）
+            for (Long mid : menuIdsToShare) {
+                jdbcTemplate.update("DELETE FROM blade_role_menu WHERE menu_id=?", mid);
+            }
             Long maxRm = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(id),0) FROM blade_role_menu", Long.class);
             long nextRm = (maxRm == null ? 0L : maxRm) + 1;
             for (Long rid : roleIds) {
-                jdbcTemplate.update("INSERT INTO blade_role_menu (id,role_id,menu_id) VALUES (?,?,?)", nextRm++, rid, menuId);
+                for (Long mid : menuIdsToShare) {
+                    jdbcTemplate.update("INSERT INTO blade_role_menu (id,role_id,menu_id) VALUES (?,?,?)", nextRm++, rid, mid);
+                }
             }
-            // 5) 重置角色级显示名（只保留本次提交且非空的值）
+            // 6) 角色级显示名（只保留本次提交且非空的值）
             jdbcTemplate.update("DELETE FROM blade_role_menu_name WHERE menu_id=?", menuId);
             Map<String, String> roleNames = batch.getRoleMenuNames();
             if (roleNames != null && !roleNames.isEmpty()) {
@@ -1286,9 +1359,9 @@ public class FormRightServiceImpl implements IFormRightService {
                         nextRn++, rid, menuId, e.getValue().trim(), tenantId);
                 }
             }
-            log.info("[formmode][AUDIT] 方案C表单菜单维护. modeId={}, formId={}, menuId={}, name={}, path={}, roles={}",
-                modeId, formId, menuId, menuName, path, roleIds);
-            return roleIds.size();
+            log.info("[formmode][AUDIT] 方案C表单菜单维护. modeId={}, formId={}, menuId={}, name={}, path={}, shares={}, roles={}",
+                modeId, formId, menuId, menuName, path, shares.size(), roleIds);
+            return shares.size();
         } catch (Exception e) {
             log.warn("[formmode][MENU] 方案C表单菜单维护失败（不影响权限三表保存）. modeId={}, err={}", modeId, e.getMessage());
             return 0;

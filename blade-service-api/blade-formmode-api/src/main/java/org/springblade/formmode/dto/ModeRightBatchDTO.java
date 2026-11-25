@@ -64,4 +64,8 @@ public class ModeRightBatchDTO implements Serializable {
     /** 角色级菜单显示名：roleId字符串 -> 该角色下菜单名（空串=删除别名） */
     @Schema(description = "角色级菜单显示名")
     private java.util.Map<String, String> roleMenuNames;
+
+    /** 表单数据菜单可见范围（多主体） */
+    @Schema(description = "表单数据菜单可见范围")
+    private java.util.List<MenuShareDTO> menuShares;
 }

@@ -85,11 +85,13 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 
 	@Override
 	public List<MenuVO> routes(String roleId, Long topMenuId) {
-		if (StringUtil.isBlank(roleId)) {
-			log.warn("[Menu#routes] roleId 为空，返回 null");
+		final String currentTenantId = TenantUtil.getTenantId();
+		BladeUser currentUser = SecureUtil.getUser();
+		Set<Long> sharedMenuIds = resolveSharedMenuIds(currentTenantId, roleId, currentUser);
+		if (StringUtil.isBlank(roleId) && sharedMenuIds.isEmpty()) {
+			log.warn("[Menu#routes] roleId 为空且无菜单共享授权，返回 null");
 			return null;
 		}
-		final String currentTenantId = TenantUtil.getTenantId();
 
 		// 步骤1: 查询全部菜单
 		List<Menu> allMenus = baseMapper.allMenu();
@@ -104,20 +106,24 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 		log.info("[Menu#routes] ②filteredAllMenus(本租户菜单): 数量={}", filteredAllMenus.size());
 
 		List<Menu> roleMenus;
-		if (Func.isEmpty(topMenuId)) {
-			List<Menu> roleIdMenus = baseMapper.roleMenuByRoleId(Func.toLongList(roleId));
-			log.info("[Menu#routes] ③roleMenuByRoleId(roleId={}): 数量={}", roleId, roleIdMenus.size());
-			if (roleIdMenus.isEmpty()) {
-				log.warn("[Menu#routes] ⚠️ 角色没有关联任何菜单！roleId={}, tenantId={}", roleId, currentTenantId);
+		List<Menu> roleIdMenus = StringUtil.isBlank(roleId)
+			? new LinkedList<>() : baseMapper.roleMenuByRoleId(Func.toLongList(roleId));
+		if (!sharedMenuIds.isEmpty()) {
+			Set<Long> known = roleIdMenus.stream().filter(Objects::nonNull).map(Menu::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+			for (Long menuId : sharedMenuIds) {
+				if (known.contains(menuId)) continue;
+				filteredAllMenus.stream().filter(m -> m.getId() != null && menuId.equals(m.getId())).findFirst().ifPresent(roleIdMenus::add);
 			}
-			List<Menu> routes = new LinkedList<>(roleIdMenus);
-			roleIdMenus.forEach(roleMenu -> recursion(filteredAllMenus, routes, roleMenu));
-			roleMenus = routes;
-			log.info("[Menu#routes] ④递归父级后: 数量={}", roleMenus.size());
-		} else {
-			List<Menu> roleIdMenus = baseMapper.roleMenuByRoleId(Func.toLongList(roleId));
-			List<Menu> routes = new LinkedList<>(roleIdMenus);
-			roleIdMenus.forEach(roleMenu -> recursion(filteredAllMenus, routes, roleMenu));
+		}
+		log.info("[Menu#routes] ③roleMenuByRoleId+share(roleId={}): 数量={}", roleId, roleIdMenus.size());
+		if (roleIdMenus.isEmpty()) {
+			log.warn("[Menu#routes] ⚠️ 角色和共享授权均未关联菜单！roleId={}, tenantId={}", roleId, currentTenantId);
+		}
+		List<Menu> routes = new LinkedList<>(roleIdMenus);
+		roleIdMenus.forEach(roleMenu -> recursion(filteredAllMenus, routes, roleMenu));
+		roleMenus = routes;
+		log.info("[Menu#routes] ④递归父级后: 数量={}", roleMenus.size());
+		if (Func.isNotEmpty(topMenuId)) {
 			List<Menu> topIdMenus = baseMapper.roleMenuByTopMenuId(topMenuId);
 			roleMenus = topIdMenus.stream()
 				.filter(x -> routes.stream().anyMatch(route -> route.getId().longValue() == x.getId().longValue()))
@@ -145,6 +151,128 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 
 		log.info("[Menu#routes] 最终结果: tenantId={}, roleId={}, 菜单数={}", currentTenantId, roleId, roleMenus.size());
 		return buildRoutes(filteredAllMenus, roleMenus);
+	}
+
+	/**
+	 * 解析当前用户命中的菜单共享。
+	 *
+	 * <p>share_type：1角色 2人员 3部门 4分部 5岗位 6安全级别 7全员。</p>
+	 */
+	private Set<Long> resolveSharedMenuIds(String tenantId, String roleId, BladeUser user) {
+		Set<Long> result = new LinkedHashSet<>();
+		try {
+			List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+				"SELECT menu_id,share_type,share_id,include_sub,showlevel,showlevel2 FROM blade_menu_share "
+					+ "WHERE tenant_id=? AND status=1 AND is_deleted=0", tenantId);
+			if (rows == null || rows.isEmpty()) return result;
+			Long userId = user == null ? null : user.getUserId();
+			Set<Long> roleIds = parseIds(roleId);
+			roleIds.addAll(parseIds(user == null ? null : user.getRoleId()));
+			Set<Long> deptIds = parseIds(user == null ? null : user.getDeptId());
+			Set<Long> deptAncestors = new LinkedHashSet<>(deptIds);
+			for (Long deptId : deptIds) resolveDeptAncestors(deptId, deptAncestors);
+			Long branchId = resolveBranchId(deptAncestors);
+			Set<Long> postIds = resolveUserPostIds(userId);
+			Integer seclevel = resolveUserSeclevel(userId);
+			for (Map<String, Object> row : rows) {
+				Object menuObj = row.get("menu_id"), typeObj = row.get("share_type");
+				if (!(menuObj instanceof Number) || !(typeObj instanceof Number)) continue;
+				int type = ((Number) typeObj).intValue();
+				boolean hit = false;
+				if (type == 7) {
+					hit = true;
+				} else if (row.get("share_id") instanceof Number) {
+					long shareId = ((Number) row.get("share_id")).longValue();
+					if (type == 1) hit = roleIds.contains(shareId);
+					else if (type == 2) hit = userId != null && userId == shareId;
+					else if (type == 3) {
+						int includeSub = row.get("include_sub") instanceof Number ? ((Number) row.get("include_sub")).intValue() : 0;
+						hit = deptIds.contains(shareId) || (includeSub == 1 && deptAncestors.contains(shareId));
+					} else if (type == 4) hit = branchId != null && branchId == shareId;
+					else if (type == 5) hit = postIds.contains(shareId);
+				} else if (type == 6 && seclevel != null) {
+					int lower = row.get("showlevel") instanceof Number ? ((Number) row.get("showlevel")).intValue() : 0;
+					int upper = row.get("showlevel2") instanceof Number ? ((Number) row.get("showlevel2")).intValue() : Integer.MAX_VALUE;
+					hit = seclevel >= lower && seclevel <= upper;
+				}
+				if (hit) result.add(((Number) menuObj).longValue());
+			}
+		} catch (Exception e) {
+			log.warn("[Menu#resolveSharedMenuIds] 查询菜单共享失败，按无共享处理. tenantId={}, err={}", tenantId, e.getMessage());
+		}
+		return result;
+	}
+
+	private Set<Long> parseIds(String csv) {
+		Set<Long> result = new LinkedHashSet<>();
+		if (StringUtil.isBlank(csv)) return result;
+		for (String part : csv.split(",")) {
+			if (StringUtil.isBlank(part)) continue;
+			try { result.add(Long.parseLong(part.trim())); } catch (NumberFormatException ignored) { }
+		}
+		return result;
+	}
+
+	private void resolveDeptAncestors(Long deptId, Set<Long> result) {
+		if (deptId == null || deptId <= 0 || !result.add(deptId)) return;
+		try {
+			List<Long> parents = jdbcTemplate.queryForList(
+				"SELECT parent_id FROM blade_dept WHERE id=? AND is_deleted=0", Long.class, deptId);
+			if (parents != null && !parents.isEmpty() && parents.get(0) != null) {
+				resolveDeptAncestors(parents.get(0), result);
+			}
+		} catch (Exception e) {
+			log.warn("[Menu#resolveDeptAncestors] 查询部门父级失败. deptId={}, err={}", deptId, e.getMessage());
+		}
+	}
+
+	/** SpringBlade 无独立分部表：用部门树最浅非零祖先作为分部口径 */
+	private Long resolveBranchId(Set<Long> deptIds) {
+		Long branch = null;
+		int minDepth = Integer.MAX_VALUE;
+		for (Long deptId : deptIds) {
+			if (deptId == null || deptId <= 0) continue;
+			List<Long> chain = new ArrayList<>();
+			Long current = deptId;
+			while (current != null && current > 0 && chain.size() < 50) {
+				chain.add(current);
+				try {
+					List<Long> parents = jdbcTemplate.queryForList(
+						"SELECT parent_id FROM blade_dept WHERE id=? AND is_deleted=0", Long.class, current);
+					current = (parents == null || parents.isEmpty()) ? null : parents.get(0);
+				} catch (Exception e) {
+					current = null;
+				}
+			}
+			Long candidate = chain.isEmpty() ? null : chain.get(chain.size() - 1);
+			if (candidate != null && chain.size() < minDepth) {
+				branch = candidate;
+				minDepth = chain.size();
+			}
+		}
+		return branch;
+	}
+
+	private Set<Long> resolveUserPostIds(Long userId) {
+		if (userId == null) return new LinkedHashSet<>();
+		try {
+			List<String> rows = jdbcTemplate.queryForList(
+				"SELECT post_id FROM blade_user WHERE id=? AND is_deleted=0", String.class, userId);
+			return (rows == null || rows.isEmpty()) ? new LinkedHashSet<>() : parseIds(rows.get(0));
+		} catch (Exception e) {
+			return new LinkedHashSet<>();
+		}
+	}
+
+	private Integer resolveUserSeclevel(Long userId) {
+		if (userId == null) return null;
+		try {
+			List<Integer> rows = jdbcTemplate.queryForList(
+				"SELECT security_level FROM blade_user WHERE id=? AND is_deleted=0", Integer.class, userId);
+			return (rows == null || rows.isEmpty()) ? null : rows.get(0);
+		} catch (Exception e) {
+			return null;
+		}
 	}
 
 	/**
@@ -319,6 +447,15 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 	public List<MenuVO> buttons(String roleId) {
 		final String currentTenantId = TenantUtil.getTenantId();
 		List<Menu> buttons = baseMapper.buttons(Func.toLongList(roleId));
+		// 菜单共享：把当前用户命中的菜单（含 AAE 组件页）并入按钮数据，
+		// 前端 loopMenuItem 才能按 parentId 找到组件页并注册 /formmode/formview/aae 路由。
+		Set<Long> sharedMenuIds = resolveSharedMenuIds(currentTenantId, roleId, SecureUtil.getUser());
+		if (!sharedMenuIds.isEmpty()) {
+			Set<Long> exists = buttons.stream().filter(Objects::nonNull).map(Menu::getId).filter(Objects::nonNull).collect(Collectors.toSet());
+			for (Menu menu : baseMapper.selectBatchIds(sharedMenuIds)) {
+				if (menu != null && menu.getId() != null && !exists.contains(menu.getId())) buttons.add(menu);
+			}
+		}
 		log.info("[Menu#buttons] ①buttons(roleId={}): 原始数量={}, tenantId={}", roleId, buttons.size(), currentTenantId);
 
 		if (buttons.isEmpty()) {

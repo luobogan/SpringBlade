@@ -89,6 +89,13 @@ public class FormRightController extends BladeController {
         return R.data(formRightService.saveFieldAuthorizesBySubject(batch), "字段权限按主体保存成功");
     }
 
+    /** 查询表单数据菜单可见范围（管理端） */
+    @GetMapping("/menu-shares/{modeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<?> getFormMenuShares(@PathVariable Long modeId) {
+        return R.data(formRightService.getFormMenuShares(modeId));
+    }
+
     /** 查询字段权限授权对象组（管理端） */
     @GetMapping("/field/groups/{modeId}")
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)

@@ -208,14 +208,14 @@ public class FormLayoutController extends BladeController {
 
             List<FormLayout> targets = new ArrayList<>();
             for (String node : targetNodes) {
-                FormLayout exists = formLayoutService.getByFormId(formId, dto.getSourceLayoutType(), node, false);
-                if (exists != null && !overwrite) continue;
-                targets.add(copyLayout(source, formId, dto.getSourceLayoutType(), node, exists == null ? null : exists.getId()));
+                Long existsId = findExactLayoutId(formId, dto.getSourceLayoutType(), node);
+                if (existsId != null && !overwrite) continue;
+                targets.add(copyLayout(source, formId, dto.getSourceLayoutType(), node, existsId));
             }
             for (Integer type : targetTypes) {
-                FormLayout exists = formLayoutService.getByFormId(formId, type, sourceNode, false);
-                if (exists != null && !overwrite) continue;
-                targets.add(copyLayout(source, formId, type, sourceNode, exists == null ? null : exists.getId()));
+                Long existsId = findExactLayoutId(formId, type, sourceNode);
+                if (existsId != null && !overwrite) continue;
+                targets.add(copyLayout(source, formId, type, sourceNode, existsId));
             }
             if (targets.isEmpty()) return R.data(0);
             for (FormLayout target : targets) formLayoutService.saveFormLayout(target);
@@ -226,6 +226,19 @@ public class FormLayoutController extends BladeController {
             log.error("同步表单布局失败. dto={}, err={}", dto, e.getMessage());
             return R.fail("同步失败：" + e.getMessage());
         }
+    }
+
+    /** 精确查找目标布局，避免 getByFormId 的“默认布局类型回退”把编辑布局误当作显示布局覆盖。 */
+    private Long findExactLayoutId(Long formId, Integer layoutType, String nodeKey) {
+        String node = normalizeNodeKey(nodeKey);
+        List<Long> ids = node == null
+            ? jdbcTemplate.queryForList(
+                "SELECT id FROM form_layout WHERE form_id=? AND layout_type=? AND (node_key IS NULL OR node_key='') AND status=1 LIMIT 1",
+                Long.class, formId, layoutType)
+            : jdbcTemplate.queryForList(
+                "SELECT id FROM form_layout WHERE form_id=? AND layout_type=? AND node_key=? AND status=1 LIMIT 1",
+                Long.class, formId, layoutType, node);
+        return (ids == null || ids.isEmpty()) ? null : ids.get(0);
     }
 
     private static FormLayout copyLayout(FormLayout source, Long formId, Integer layoutType, String nodeKey, Long targetId) {
