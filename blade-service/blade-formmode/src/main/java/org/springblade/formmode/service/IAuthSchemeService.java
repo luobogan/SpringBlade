@@ -12,6 +12,9 @@ public interface IAuthSchemeService {
 
     Long save(ModeAuthSchemeDTO dto);
 
+    /** 批量保存授权方案（同一事务，任一失败全部回滚） */
+    List<Long> saveBatch(List<ModeAuthSchemeDTO> dtos);
+
     Long copy(Long schemeId);
 
     boolean delete(Long schemeId);

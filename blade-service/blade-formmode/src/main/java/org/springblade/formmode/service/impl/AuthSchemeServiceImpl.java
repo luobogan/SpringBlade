@@ -238,6 +238,16 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
+    public List<Long> saveBatch(List<ModeAuthSchemeDTO> dtos) {
+        if (dtos == null || dtos.isEmpty()) return Collections.emptyList();
+        List<Long> ids = new ArrayList<>();
+        for (ModeAuthSchemeDTO dto : dtos) ids.add(save(dto));
+        return ids;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public Long copy(Long schemeId) {
         AuthSchemeVO src = get(schemeId);
         if (src == null) throw new IllegalArgumentException("授权方案不存在");

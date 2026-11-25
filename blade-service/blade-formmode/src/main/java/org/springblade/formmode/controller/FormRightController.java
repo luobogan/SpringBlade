@@ -56,6 +56,12 @@ public class FormRightController extends BladeController {
         return R.data(authSchemeService.save(dto), "授权方案保存成功");
     }
 
+    @PostMapping("/scheme/save-batch")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<List<Long>> saveSchemes(@RequestBody List<ModeAuthSchemeDTO> dtos) {
+        return R.data(authSchemeService.saveBatch(dtos), "授权方案批量保存成功");
+    }
+
     @PostMapping("/scheme/copy/{schemeId}")
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<Long> copyScheme(@PathVariable Long schemeId) {
