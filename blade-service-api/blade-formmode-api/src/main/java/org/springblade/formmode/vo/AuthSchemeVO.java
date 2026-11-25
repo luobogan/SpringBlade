@@ -84,7 +84,14 @@ public class AuthSchemeVO implements Serializable {
 
     @Data
     public static class MenuItem implements Serializable {
+        private Long menuId;
         private String formMenuName;
+        private Long parentId;
+        private String menuPath;
+        private String menuIcon;
+        private String menuAlias;
+        private Integer menuSort;
+        private Integer menuStatus;
         private List<MenuShareItem> menuShares;
         private java.util.Map<String, String> roleMenuNames;
     }

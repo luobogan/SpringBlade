@@ -625,22 +625,30 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 			return 0;
 		}
 
-		int deletedCount = 0;
+		// 选中菜单 + 全部子孙菜单
+		List<Long> merged = new ArrayList<>(new LinkedHashSet<>(ids));
+		merged.addAll(getAllChildMenuIds(ids));
+		final List<Long> allMenuIds = new ArrayList<>(new LinkedHashSet<>(merged));
+		if (allMenuIds.isEmpty()) return 0;
 
-		// 递归获取所有子菜单ID
-		List<Long> allMenuIds = getAllChildMenuIds(ids);
+		String marks = String.join(",", Collections.nCopies(allMenuIds.size(), "?"));
+		TenantUtil.ignore(() -> {
+			roleMenuService.remove(Wrappers.<RoleMenu>query().lambda().in(RoleMenu::getMenuId, allMenuIds));
+			try {
+				List<Object> args = new ArrayList<>(allMenuIds);
+				jdbcTemplate.update("DELETE FROM blade_role_menu_name WHERE menu_id IN (" + marks + ")", args.toArray());
+			} catch (Exception ignored) { }
+			try {
+				List<Object> args = new ArrayList<>(allMenuIds);
+				jdbcTemplate.update("DELETE FROM blade_menu_share WHERE menu_id IN (" + marks + ")", args.toArray());
+			} catch (Exception ignored) { }
+			try {
+				List<Object> args = new ArrayList<>(allMenuIds);
+				jdbcTemplate.update("UPDATE blade_menu SET parent_id=0 WHERE parent_id IN (" + marks + ")", args.toArray());
+			} catch (Exception ignored) { }
+		});
 
-		if (!allMenuIds.isEmpty()) {
-			// 删除角色菜单关联
-			TenantUtil.ignore(() -> {
-				roleMenuService.remove(Wrappers.<RoleMenu>query().lambda().in(RoleMenu::getMenuId, allMenuIds));
-			});
-
-			// 删除菜单
-			deletedCount = baseMapper.deleteBatchIds(allMenuIds);
-		}
-
-		return deletedCount;
+		return baseMapper.deleteBatchIds(allMenuIds);
 	}
 
 	/**

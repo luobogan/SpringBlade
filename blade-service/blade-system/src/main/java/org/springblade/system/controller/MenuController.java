@@ -142,6 +142,16 @@ public class MenuController extends BladeController {
 	}
 
 	/**
+	 * 递归删除菜单及子菜单
+	 */
+	@PostMapping("/remove-recursive")
+	@PreAuth(RoleConstant.HAS_ROLE_ADMIN)
+	@Operation(summary = "递归删除", description = "删除选中菜单及其全部子菜单")
+	public R<Integer> removeRecursive(@Parameter(description = "主键集合", required = true) @RequestParam String ids) {
+		return R.data(menuService.removeRecursive(Func.toLongList(ids)));
+	}
+
+	/**
 	 * 前端菜单数据
 	 */
 	@GetMapping("/routes")

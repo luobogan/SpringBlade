@@ -31,7 +31,7 @@ public final class DataScopeRuleUtil {
             if (p == null || p.isBlank()) continue;
             try {
                 int v = Integer.parseInt(p.trim());
-                if (v >= 1 && v <= 5 && !out.contains(v)) out.add(v);
+                if (v >= 1 && v <= 4 && !out.contains(v)) out.add(v);
             } catch (Exception ignored) { }
         }
         return out;

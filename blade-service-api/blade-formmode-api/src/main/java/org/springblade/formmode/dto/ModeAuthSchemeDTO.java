@@ -83,7 +83,20 @@ public class ModeAuthSchemeDTO implements Serializable {
     @Data
     @Schema(description = "菜单设置")
     public static class MenuSettingDTO implements Serializable {
+        private Long menuId;
         private String formMenuName;
+        /** 上级菜单ID；0=顶层 */
+        private Long parentId;
+        /** 路由地址；动态表单固定为 /formmode/formview/{formId} */
+        private String menuPath;
+        /** 菜单图标（blade_menu.source） */
+        private String menuIcon;
+        /** 菜单别名 */
+        private String menuAlias;
+        /** 同级排序 */
+        private Integer menuSort;
+        /** 显示状态：1显示 0隐藏 */
+        private Integer menuStatus;
         private List<MenuShareDTO> menuShares;
         private java.util.Map<String, String> roleMenuNames;
     }

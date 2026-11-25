@@ -127,6 +127,20 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         v.setDataScopes(scopes);
 
         AuthSchemeVO.MenuItem menu = new AuthSchemeVO.MenuItem();
+        List<Map<String, Object>> menuRows = jdbcTemplate.queryForList(
+            "SELECT id,parent_id,name,alias,path,source,sort,status FROM blade_menu WHERE tenant_id=? AND code=? AND is_deleted=0 ORDER BY id LIMIT 1",
+            t, "formdata_view_" + v.getFormId());
+        if (!menuRows.isEmpty()) {
+            Map<String, Object> m = menuRows.get(0);
+            menu.setMenuId(n(m.get("id")));
+            menu.setFormMenuName(s(m.get("name")));
+            menu.setParentId(n(m.get("parent_id")));
+            menu.setMenuPath(s(m.get("path")));
+            menu.setMenuIcon(s(m.get("source")));
+            menu.setMenuAlias(s(m.get("alias")));
+            menu.setMenuSort(i(m.get("sort")));
+            menu.setMenuStatus(i(m.get("status")));
+        }
         List<Map<String, Object>> shares = jdbcTemplate.queryForList(
             "SELECT id,share_type,share_id,include_sub,showlevel,showlevel2 FROM blade_menu_share WHERE tenant_id=? AND scheme_id=? ORDER BY id", t, id);
         List<AuthSchemeVO.MenuShareItem> ms = new ArrayList<>();
@@ -304,9 +318,26 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     private void saveMenu(ModeAuthSchemeDTO dto, long schemeId, long formId, int type, long subjectId) {
         String t = tenant();
-        String menuName = Func.isBlank(dto.getMenu().getFormMenuName()) ? "表单数据" : dto.getMenu().getFormMenuName().trim();
-        long parentMenuId = ensureMenu("formdata_view_" + formId, "/formmode/formview/" + formId, menuName, 0L, 1, 0, t);
-        ensureMenu("formdata_aae_" + formId, "/formmode/formview/aae", "表单新增编辑页", parentMenuId, 2, 1, t);
+        ModeAuthSchemeDTO.MenuSettingDTO setting = dto.getMenu() == null ? new ModeAuthSchemeDTO.MenuSettingDTO() : dto.getMenu();
+        String code = "formdata_view_" + formId;
+        long viewMenuId = ensureMenuId(code, t);
+        long parentMenuId = setting.getParentId() == null ? 0L : setting.getParentId();
+        validateMenuParent(viewMenuId, parentMenuId, t);
+
+        String menuName = Func.isBlank(setting.getFormMenuName()) ? "表单数据" : setting.getFormMenuName().trim();
+        String defaultPath = "/formmode/formview/" + formId;
+        if (Func.isNotBlank(setting.getMenuPath()) && !defaultPath.equals(setting.getMenuPath().trim())) {
+            throw new IllegalArgumentException("表单数据菜单路径必须为 " + defaultPath);
+        }
+        String menuPath = defaultPath;
+        String menuIcon = Func.isBlank(setting.getMenuIcon()) ? "file-text" : setting.getMenuIcon().trim();
+        String menuAlias = Func.isBlank(setting.getMenuAlias()) ? menuName : setting.getMenuAlias().trim();
+        int menuSort = setting.getMenuSort() == null ? 5 : setting.getMenuSort();
+        int menuStatus = setting.getMenuStatus() == null ? 1 : setting.getMenuStatus();
+
+        parentMenuId = ensureMenu(code, menuPath, menuName, menuAlias, menuIcon, parentMenuId, 1, 0, menuSort, menuStatus, t);
+        ensureMenu("formdata_aae_" + formId, "/formmode/formview/aae", "表单新增编辑页", "表单新增编辑页",
+            "edit", parentMenuId, 2, 1, menuSort + 1, menuStatus, t);
         List<Long> menuIds = Arrays.asList(parentMenuId, ensureMenuId("formdata_aae_" + formId, t));
         int shareType = menuShareType(type);
         jdbcTemplate.update("DELETE FROM blade_menu_share WHERE tenant_id=? AND scheme_id=?", t, schemeId);
@@ -327,10 +358,31 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         }
     }
 
-    private long ensureMenu(String code, String path, String name, long parent, int category, int component, String t) {
+    private long ensureMenu(String code, String path, String name, String alias, String icon,
+                            long parent, int category, int component, int sort, int status, String t) {
         long id = ensureMenuId(code, t);
-        jdbcTemplate.update("UPDATE blade_menu SET name=?,path=?,parent_id=?,category=?,is_component=?,is_open=1,source='api',is_deleted=0 WHERE id=?", name, path, parent, category, component, id);
+        jdbcTemplate.update("UPDATE blade_menu SET name=?,alias=?,path=?,parent_id=?,category=?,is_component=?,is_open=1,source=?,sort=?,status=?,is_deleted=0 WHERE id=?",
+            name, alias, path, parent, category, component, icon, sort, status, id);
         return id;
+    }
+
+    private void validateMenuParent(long menuId, long parentId, String t) {
+        if (parentId == 0L) return;
+        if (parentId == menuId) throw new IllegalArgumentException("上级菜单不能是当前菜单");
+        List<Long> parents = jdbcTemplate.queryForList(
+            "SELECT id FROM blade_menu WHERE tenant_id=? AND id=? AND category=1 AND is_deleted=0", Long.class, t, parentId);
+        if (parents.isEmpty()) throw new IllegalArgumentException("上级菜单不存在或不是普通菜单");
+
+        Set<Long> visited = new HashSet<>();
+        long current = parentId;
+        while (current != 0L) {
+            if (current == menuId) throw new IllegalArgumentException("上级菜单不能是当前菜单的子菜单");
+            if (!visited.add(current)) throw new IllegalArgumentException("上级菜单存在循环引用");
+            List<Long> next = jdbcTemplate.queryForList("SELECT parent_id FROM blade_menu WHERE tenant_id=? AND id=? AND is_deleted=0",
+                Long.class, t, current);
+            if (next.isEmpty()) break;
+            current = next.get(0) == null ? 0L : next.get(0);
+        }
     }
 
     private long ensureMenuId(String code, String t) {
@@ -361,6 +413,11 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
     private void validateScopes(ModeAuthSchemeDTO dto) {
         if (dto.getDataScopes() == null) return;
         for (ModeAuthSchemeDTO.ModeDataShareRuleDTO r : dto.getDataScopes()) {
+            if (r.getRightTypes() != null) {
+                for (Integer right : r.getRightTypes()) {
+                    if (right == null || right < 1 || right > 4) throw new IllegalArgumentException("数据范围权限类型非法");
+                }
+            }
             Integer st = r.getScopeType();
             if (st == null) continue;
             if (st < 1 || st > 5) throw new IllegalArgumentException("数据范围类型非法");

@@ -970,9 +970,9 @@ public class FormRightServiceImpl implements IFormRightService {
             List<Integer> rights = DataScopeRuleUtil.parseRightTypes(r.getRightTypes());
             if (rights.isEmpty()) {
                 int legacy = r.getType() == null ? 1 : r.getType();
-                rights = legacy == 2 ? java.util.Arrays.asList(1, 3, 4, 5) : java.util.Arrays.asList(1, 5);
+                rights = legacy == 2 ? java.util.Arrays.asList(1, 3, 4) : java.util.Arrays.asList(1);
             }
-            boolean canView = DataScopeRuleUtil.containsAny(rights, 1, 5);
+            boolean canView = DataScopeRuleUtil.containsAny(rights, 1);
             boolean canEdit = DataScopeRuleUtil.containsAny(rights, 2, 3);
             boolean canDelete = DataScopeRuleUtil.containsAny(rights, 4);
             if (!canView && !canEdit && !canDelete) continue;
