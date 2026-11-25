@@ -34,6 +34,8 @@ public class ModeAuthSchemeDTO implements Serializable {
     private List<FieldAuthGroupDTO> fieldGroups;
     private List<ModeDataShareRuleDTO> dataScopes;
     private MenuSettingDTO menu;
+    /** 表单建模列表的数据范围（与动态列表第四步数据范围独立） */
+    private FormManageScopeDTO formManageScope;
 
     @Data
     @Schema(description = "模块权限行")
@@ -78,6 +80,15 @@ public class ModeAuthSchemeDTO implements Serializable {
         private Integer objtype;
         private Long objid;
         private Integer includeSub;
+    }
+
+    @Data
+    @Schema(description = "表单建模数据范围")
+    public static class FormManageScopeDTO implements Serializable {
+        /** 1全部表单 2本人创建 3指定表单 */
+        private Integer scopeType;
+        /** 指定表单ID，逗号分隔 */
+        private String scopeValue;
     }
 
     @Data

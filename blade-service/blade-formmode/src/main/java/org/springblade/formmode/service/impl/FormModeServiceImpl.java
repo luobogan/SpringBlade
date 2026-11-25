@@ -83,7 +83,7 @@ public class FormModeServiceImpl extends ServiceImpl<ModeInfoMapper, ModeInfo> i
         modeInfo.setModetype(0);
         modeInfo.setStatus(formModeDTO.getStatus() != null ? formModeDTO.getStatus() : 1);
         if (formModeDTO.getModeTreeField() != null) {
-            modeInfo.setModeTreeField(formModeDTO.getModeTreeField().intValue());
+            modeInfo.setModeTreeField(formModeDTO.getModeTreeField());
         }
         save(modeInfo);
 

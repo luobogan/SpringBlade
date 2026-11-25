@@ -28,6 +28,7 @@ public class AuthSchemeVO implements Serializable {
     private List<FieldGroupItem> fieldGroups;
     private List<ScopeItem> dataScopes;
     private MenuItem menu;
+    private FormManageScopeItem formManageScope;
 
     @Data
     public static class RightItem implements Serializable {
@@ -80,6 +81,12 @@ public class AuthSchemeVO implements Serializable {
         private Integer objtype;
         private Long objid;
         private Integer includeSub;
+    }
+
+    @Data
+    public static class FormManageScopeItem implements Serializable {
+        private Integer scopeType;
+        private String scopeValue;
     }
 
     @Data

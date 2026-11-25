@@ -32,6 +32,12 @@ public interface IFormRightService {
     java.util.List<Integer> listUserRightTypes(Long modeId, Long userId);
 
     /**
+     * 当前用户在表单建模列表可见的表单ID和可操作码。
+     * 来源：moderightinfo（模块权限）+ form_manage_auth_scope（表单建模数据范围）。
+     */
+    java.util.Map<String, Object> getFormManagePermission(Long userId);
+
+    /**
      * 模块是否配置了建模权限（moderightinfo/modefieldauthorize/modedatasharerule 任一有记录）。
      *
      * <p>供统一菜单列表决定权限优先级：配了建模权限 → 建模权限优先，不叠加 blade_scope 数据权限；

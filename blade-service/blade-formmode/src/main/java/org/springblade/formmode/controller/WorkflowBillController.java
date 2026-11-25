@@ -49,6 +49,19 @@ public class WorkflowBillController extends BladeController {
     @Autowired
     private IFieldDefinitionService fieldDefinitionService;
 
+    @Autowired
+    private org.springblade.formmode.service.IFormRightService formRightService;
+
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private org.springblade.formmode.service.IFormDirService formDirService;
+
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplateForDir() {
+        return jdbcTemplate;
+    }
+
     /**
      * 获取表单列表
      */
@@ -58,7 +71,8 @@ public class WorkflowBillController extends BladeController {
             @Parameter(description = "当前页") @RequestParam(defaultValue = "1") Integer current,
             @Parameter(description = "每页数量") @RequestParam(defaultValue = "10") Integer pageSize,
             @Parameter(description = "表单名称") @RequestParam(required = false) String formName,
-            @Parameter(description = "状态") @RequestParam(required = false) Integer status) {
+            @Parameter(description = "状态") @RequestParam(required = false) Integer status,
+            @Parameter(description = "模块目录ID") @RequestParam(required = false) Long dirId) {
 
         Page<WorkflowBill> page = new Page<>(current, pageSize);
         QueryWrapper<WorkflowBill> queryWrapper = new QueryWrapper<>();
@@ -68,6 +82,30 @@ public class WorkflowBillController extends BladeController {
         }
         if (status != null) {
             queryWrapper.eq("status", status);
+        }
+        if (dirId != null && !formDirService.canView(dirId)) {
+            queryWrapper.eq("id", -1L);
+        } else if (dirId != null) {
+            List<Long> formIds = jdbcTemplateForDir().queryForList(
+                "SELECT billid FROM modeinfo WHERE is_deleted=0 AND modeTreeField=?", Long.class, dirId);
+            formIds = formDirService.filterFormsByDirAuth(dirId, formIds);
+            queryWrapper.in("id", formIds.isEmpty() ? java.util.Collections.singletonList(-1L) : formIds);
+        }
+
+        Map<String, Object> permission = formRightService.getFormManagePermission(null);
+        if (!Boolean.TRUE.equals(permission.get("all"))) {
+            Object raw = permission.get("formIds");
+            List<Long> formIds = new ArrayList<>();
+            if (raw instanceof Iterable<?>) {
+                for (Object id : (Iterable<?>) raw) {
+                    if (id instanceof Number) formIds.add(((Number) id).longValue());
+                }
+            }
+            if (formIds.isEmpty()) {
+                queryWrapper.eq("id", -1L);
+            } else {
+                queryWrapper.in("id", formIds);
+            }
         }
 
         queryWrapper.orderByDesc("create_time");

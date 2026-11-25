@@ -233,6 +233,12 @@ public class FormRightController extends BladeController {
     /**
      * 获取数据范围规则（行级数据权限配置查看，对应 modedatasharerule）。
      */
+    @GetMapping("/form-manage-permission")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
+    public R<?> formManagePermission() {
+        return R.data(formRightService.getFormManagePermission(SecureUtil.getUserId()));
+    }
+
     @GetMapping("/scope/{modeId}")
     @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
     public R<List<ModeDataShareRule>> getModeDataScopes(@PathVariable Long modeId) {

@@ -152,11 +152,22 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         }
         menu.setMenuShares(ms);
         v.setMenu(menu);
+
+        List<Map<String, Object>> formScopeRows = jdbcTemplate.queryForList(
+            "SELECT scope_type,scope_value FROM form_manage_auth_scope WHERE tenant_id=? AND scheme_id=? AND is_deleted=0 ORDER BY id LIMIT 1",
+            t, id);
+        if (!formScopeRows.isEmpty()) {
+            AuthSchemeVO.FormManageScopeItem formScope = new AuthSchemeVO.FormManageScopeItem();
+            formScope.setScopeType(i(formScopeRows.get(0).get("scope_type")));
+            formScope.setScopeValue(s(formScopeRows.get(0).get("scope_value")));
+            v.setFormManageScope(formScope);
+        }
         return v;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public Long save(ModeAuthSchemeDTO dto) {
         if (dto == null || dto.getSubjectType() == null) throw new IllegalArgumentException("授权对象类型不能为空");
         int type = dto.getSubjectType();
@@ -192,6 +203,17 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
             "SELECT group_key FROM mode_field_auth_group WHERE tenant_id=? AND scheme_id=? AND group_key IS NOT NULL AND group_key<>''",
             String.class, t, schemeId);
         deleteSchemeChildren(schemeId, formId, false, false);
+
+        jdbcTemplate.update("UPDATE form_manage_auth_scope SET is_deleted=1 WHERE tenant_id=? AND scheme_id=?", t, schemeId);
+        if (dto.getFormManageScope() != null) {
+            int fsType = dto.getFormManageScope().getScopeType() == null ? 1 : dto.getFormManageScope().getScopeType();
+            if (fsType < 1 || fsType > 3) throw new IllegalArgumentException("表单建模数据范围类型非法");
+            String fsValue = Func.isBlank(dto.getFormManageScope().getScopeValue()) ? null : dto.getFormManageScope().getScopeValue().trim();
+            if (fsType == 3 && Func.isBlank(fsValue)) throw new IllegalArgumentException("指定表单不能为空");
+            jdbcTemplate.update("INSERT INTO form_manage_auth_scope(id,tenant_id,scheme_id,form_id,subject_type,subject_id,scope_type,scope_value,status,is_deleted,create_user,create_time,update_user,update_time) VALUES (?,?,?,?,?,?,?,?,1,0,?,NOW(),?,NOW())",
+                max("SELECT COALESCE(MAX(id),0) FROM form_manage_auth_scope") + 1, t, schemeId, formId, type, subjectId,
+                fsType, fsValue, SecureUtil.getUserId(), SecureUtil.getUserId());
+        }
 
         if (dto.getRights() != null) {
             long rid = max("SELECT COALESCE(MAX(id),0) FROM moderightinfo");
@@ -262,6 +284,7 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public Long copy(Long schemeId) {
         AuthSchemeVO src = get(schemeId);
         if (src == null) throw new IllegalArgumentException("授权方案不存在");
@@ -270,6 +293,12 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         dto.setSubjectType(src.getSubjectType()); dto.setSubjectId(src.getSubjectId()); dto.setSubjectName(src.getSubjectName());
         dto.setIncludeSub(src.getIncludeSub()); dto.setMatrixValueField(src.getMatrixValueField());
         dto.setShowlevel(src.getShowlevel()); dto.setShowlevel2(src.getShowlevel2()); dto.setPriority(src.getPriority() + 1);
+        if (src.getFormManageScope() != null) {
+            ModeAuthSchemeDTO.FormManageScopeDTO scope = new ModeAuthSchemeDTO.FormManageScopeDTO();
+            scope.setScopeType(src.getFormManageScope().getScopeType());
+            scope.setScopeValue(src.getFormManageScope().getScopeValue());
+            dto.setFormManageScope(scope);
+        }
         return save(dto);
     }
 
@@ -314,6 +343,7 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         jdbcTemplate.update("DELETE FROM moderightinfo WHERE tenant_id=? AND scheme_id=?", t, schemeId);
         jdbcTemplate.update("DELETE FROM modedatasharerule WHERE tenant_id=? AND scheme_id=?", t, schemeId);
         jdbcTemplate.update("DELETE FROM blade_menu_share WHERE tenant_id=? AND scheme_id=?", t, schemeId);
+        jdbcTemplate.update("DELETE FROM form_manage_auth_scope WHERE tenant_id=? AND scheme_id=?", t, schemeId);
     }
 
     private void saveMenu(ModeAuthSchemeDTO dto, long schemeId, long formId, int type, long subjectId) {

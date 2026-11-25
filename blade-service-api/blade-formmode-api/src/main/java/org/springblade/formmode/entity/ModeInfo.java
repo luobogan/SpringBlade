@@ -44,7 +44,7 @@ public class ModeInfo implements Serializable {
 
     @Schema(description = "应用分类ID")
     @TableField("modeTreeField")
-    private Integer modeTreeField;
+    private Long modeTreeField;
 
     @Schema(description = "状态：1启用 0禁用")
     private Integer status;

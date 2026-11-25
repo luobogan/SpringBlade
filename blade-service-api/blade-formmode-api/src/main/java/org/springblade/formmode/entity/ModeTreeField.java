@@ -11,7 +11,7 @@ import java.io.Serializable;
  * 模块树/应用分类实体（对应 modeTreeField 表）
  */
 @Data
-@TableName("modeTreeField")
+@TableName("modetreefield")
 @Schema(description = "模块树/应用分类")
 public class ModeTreeField implements Serializable {
 
@@ -39,5 +39,24 @@ public class ModeTreeField implements Serializable {
 
     @Schema(description = "租户ID")
     private String tenantId;
+
+    @Schema(description = "状态：1启用 0停用")
+    private Integer status;
+
+    @TableLogic
+    @Schema(description = "逻辑删除")
+    private Integer isDeleted;
+
+    @Schema(description = "创建人")
+    private Long createUser;
+
+    @Schema(description = "创建时间")
+    private java.time.LocalDateTime createTime;
+
+    @Schema(description = "更新人")
+    private Long updateUser;
+
+    @Schema(description = "更新时间")
+    private java.time.LocalDateTime updateTime;
 
 }

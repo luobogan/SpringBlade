@@ -8,6 +8,7 @@ import org.springblade.core.secure.utils.AuthUtil;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.utils.Func;
+import org.springblade.core.tool.utils.StringUtil;
 import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
 import org.springblade.formmode.entity.ModeInfo;
@@ -139,25 +140,108 @@ public class FormRightServiceImpl implements IFormRightService {
         try {
             List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
             if (schemeIds == null || schemeIds.isEmpty()) return result;
-            String marks = schemeIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-            List<ModeRightInfo> rights = modeRightInfoMapper.selectList(
-                new LambdaQueryWrapper<ModeRightInfo>()
-                    .eq(ModeRightInfo::getModeid, modeId)
-                    .in(ModeRightInfo::getRighttype, java.util.Arrays.asList(1, 2, 3, 4, 5))
-                    .in(ModeRightInfo::getSchemeId, schemeIds)
-                    .and(w -> w.eq(ModeRightInfo::getTenantId, currentTenant()).or().isNull(ModeRightInfo::getTenantId))
-            );
-            Set<Integer> hit = new LinkedHashSet<>();
-            if (rights != null) {
-                for (ModeRightInfo r : rights) if (r.getRighttype() != null) hit.add(r.getRighttype());
-            }
-            result.addAll(hit);
+            BladeUser current = AuthUtil.getUser();
+            Long uid = current == null ? userId : current.getUserId();
+            result.addAll(resolveDataScopeRightTypes(modeId, schemeIds, current, uid,
+                parseIds(current == null ? null : current.getRoleId()),
+                parseIds(current == null ? null : current.getDeptId()),
+                subjectResolver.resolvePostIds(uid),
+                subjectResolver.resolveSubcompanyIds(uid)));
             java.util.Collections.sort(result);
         } catch (Exception e) {
-            log.warn("[formmode] 查询方案模块权限码失败. modeId={}, err={}", modeId, e.getMessage());
+            log.warn("[formmode] 查询动态列表操作码失败. modeId={}, err={}", modeId, e.getMessage());
         }
         return result;
     }
+
+    @Override
+    public Map<String, Object> getFormManagePermission(Long userId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        Set<Long> visibleFormIds = new LinkedHashSet<>();
+        Set<Integer> rightTypes = new LinkedHashSet<>();
+        Map<Long, Set<Integer>> rightsByForm = new LinkedHashMap<>();
+        result.put("all", false);
+        result.put("formIds", new ArrayList<Long>());
+        result.put("rightTypes", new ArrayList<Integer>());
+        result.put("formRights", new LinkedHashMap<Long, List<Integer>>());
+        BladeUser user = AuthUtil.getUser();
+        if (subjectResolver.isAdmin(user)) {
+            result.put("all", true);
+            rightTypes.addAll(java.util.Arrays.asList(1, 2, 3, 4, 5, 6, 7));
+            result.put("rightTypes", new ArrayList<>(rightTypes));
+            Map<Long, List<Integer>> allByForm = new LinkedHashMap<>();
+            for (Object id : jdbcTemplate.queryForList("SELECT id FROM workflow_bill WHERE is_deleted=0", Long.class)) {
+                if (id != null) allByForm.put(((Number) id).longValue(), new ArrayList<>(rightTypes));
+            }
+            result.put("formRights", allByForm);
+            return result;
+        }
+        Long uid = (userId != null) ? userId : (user != null ? user.getUserId() : null);
+        Set<Long> roleIds = parseIds(user != null ? user.getRoleId() : null);
+        Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
+        Set<Long> postIds = subjectResolver.resolvePostIds(uid);
+        Set<Long> branchIds = subjectResolver.resolveSubcompanyIds(uid);
+        String tenant = currentTenant();
+        try {
+            List<Map<String, Object>> schemes = jdbcTemplate.queryForList(
+                "SELECT id,form_id,mode_id,subject_type,subject_id,include_sub FROM mode_auth_scheme WHERE tenant_id=? AND status=1",
+                tenant);
+            for (Map<String, Object> scheme : schemes) {
+                long schemeId = n(scheme.get("id"));
+                int subjectType = i(scheme.get("subject_type"));
+                long subjectId = n(scheme.get("subject_id"));
+                boolean hit = subjectType == 7
+                    || (subjectType == 4 && uid != null && uid == subjectId)
+                    || (subjectType == 1 && roleIds.contains(subjectId))
+                    || (subjectType == 2 && subjectResolver.matchDept(subjectId, deptIds, i(scheme.get("include_sub"))))
+                    || (subjectType == 3 && postIds.contains(subjectId))
+                    || (subjectType == 5 && branchIds.contains(subjectId));
+                if (!hit) continue;
+
+                List<Integer> schemeRights = jdbcTemplate.queryForList(
+                    "SELECT DISTINCT righttype FROM moderightinfo WHERE tenant_id=? AND scheme_id=? AND righttype IS NOT NULL",
+                    Integer.class, tenant, schemeId);
+                rightTypes.addAll(schemeRights);
+                long schemeFormId = n(scheme.get("form_id"));
+                rightsByForm.computeIfAbsent(schemeFormId, k -> new LinkedHashSet<>()).addAll(schemeRights);
+
+                List<Map<String, Object>> scopes = jdbcTemplate.queryForList(
+                    "SELECT scope_type,scope_value FROM form_manage_auth_scope WHERE tenant_id=? AND scheme_id=? AND is_deleted=0 ORDER BY id LIMIT 1",
+                    tenant, schemeId);
+                long formId = n(scheme.get("form_id"));
+                int scopeType = scopes.isEmpty() ? 1 : i(scopes.get(0).get("scope_type"));
+                String scopeValue = scopes.isEmpty() ? null : Func.toStr(scopes.get(0).get("scope_value"));
+                if (scopeType == 1) {
+                    result.put("all", true);
+                } else if (scopeType == 2) {
+                    if (uid != null) {
+                        for (Long id : jdbcTemplate.queryForList(
+                            "SELECT id FROM workflow_bill WHERE create_user=? AND is_deleted=0", Long.class, uid)) {
+                            if (id != null) visibleFormIds.add(id);
+                        }
+                    }
+                } else if (scopeType == 3 && !StringUtil.isBlank(scopeValue)) {
+                    for (String id : scopeValue.split(",")) {
+                        if (id.trim().matches("\\d+")) visibleFormIds.add(Long.valueOf(id.trim()));
+                    }
+                } else {
+                    visibleFormIds.add(formId);
+                }
+                if (schemeRights.contains(1)) visibleFormIds.add(formId);
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 查询表单建模列表权限失败. err={}", e.getMessage());
+        }
+        Map<Long, List<Integer>> formRights = new LinkedHashMap<>();
+        rightsByForm.forEach((formId, rights) -> formRights.put(formId, new ArrayList<>(rights)));
+        result.put("formIds", new ArrayList<>(visibleFormIds));
+        result.put("rightTypes", new ArrayList<>(rightTypes));
+        result.put("formRights", formRights);
+        return result;
+    }
+
+    private static long n(Object v) { return v instanceof Number ? ((Number) v).longValue() : 0L; }
+    private static int i(Object v) { return v instanceof Number ? ((Number) v).intValue() : 0; }
 
     @Override
     public boolean hasModelRightConfig(Long modeId) {
@@ -213,89 +297,42 @@ public class FormRightServiceImpl implements IFormRightService {
         key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + #rightType + ':' + #userId",
         unless = "#result == null")
     public boolean checkRight(Long modeId, Integer rightType, Long userId) {
-        String tenant = currentTenant();
         List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
         if (schemeIds == null || schemeIds.isEmpty()) return false;
-        List<ModeRightInfo> rights = modeRightInfoMapper.selectList(
-            new LambdaQueryWrapper<ModeRightInfo>()
-                .eq(ModeRightInfo::getModeid, modeId)
-                .eq(ModeRightInfo::getRighttype, rightType)
-                .in(ModeRightInfo::getSchemeId, schemeIds)
-                .and(w -> w.eq(ModeRightInfo::getTenantId, tenant).or().isNull(ModeRightInfo::getTenantId))
-        );
-        // 该 righttype 未配置：
-        // - 整个模块都没配任何操作权限 → 默认放行（兼容语义）
-        // - 模块已配其它操作权限但该操作未配 → strict 档位拒绝（与 listUserRightTypes 显式授权口径一致，
-        //   避免"前端隐藏编辑按钮但直连 update 接口可编辑"）；compat 档位仍放行
-        if (rights == null || rights.isEmpty()) {
-            if (!fieldPermFailClosed && !maintainScopeStrict) {
-                return true; // compat：保持既有语义
-            }
-            try {
-                Long any = modeRightInfoMapper.selectCount(new LambdaQueryWrapper<ModeRightInfo>()
-                    .eq(ModeRightInfo::getModeid, modeId)
-                    .and(w -> w.eq(ModeRightInfo::getTenantId, tenant).or().isNull(ModeRightInfo::getTenantId)));
-                return any == null || any == 0; // 模块有其它权限配置 → 拒绝
-            } catch (Exception e) {
-                log.warn("[formmode] 模块权限存在性判定失败. modeId={}, err={}", modeId, e.getMessage());
-                return false; // strict 语义下异常拒绝
-            }
-        }
-
-        // 解析当前用户授权维度（角色/部门来自登录态 BladeUser；岗位另查 blade_user.post_id）
         BladeUser user = AuthUtil.getUser();
-        // 管理员豁免：与 DataScopeValueResolver 同源，拥有全部模块权限
-        if (subjectResolver.isAdmin(user)) {
-            return true;
-        }
+        if (subjectResolver.isAdmin(user)) return true;
         Long uid = (userId != null) ? userId : (user != null ? user.getUserId() : null);
-        Set<Long> roleIds = parseIds(user != null ? user.getRoleId() : null);
-        Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
-        Set<Long> postIds = subjectResolver.resolvePostIds(uid);
-        Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
+        Set<Integer> scopeRights = resolveDataScopeRightTypes(modeId, schemeIds, user, uid,
+            parseIds(user != null ? user.getRoleId() : null),
+            parseIds(user != null ? user.getDeptId() : null),
+            subjectResolver.resolvePostIds(uid),
+            subjectResolver.resolveSubcompanyIds(uid));
+        int target = (rightType == null || rightType == 5) ? 1 : rightType;
+        return scopeRights.contains(target);
+    }
 
-        for (ModeRightInfo r : rights) {
-            Integer objType = r.getObjtype();
-            Long objId = (r.getObjid() == null) ? null : r.getObjid().longValue();
-            if (objType == null || objId == null) {
-                continue;
+    /** 当前用户命中方案的数据范围操作码（1查看 2新增 3编辑 4删除） */
+    private Set<Integer> resolveDataScopeRightTypes(Long modeId, List<Long> schemeIds, BladeUser user, Long uid,
+                                                    Set<Long> roleIds, Set<Long> deptIds, Set<Long> postIds,
+                                                    Set<Long> branchIds) {
+        Set<Integer> result = new LinkedHashSet<>();
+        if (modeId == null || schemeIds == null || schemeIds.isEmpty()) return result;
+        try {
+            for (ModeDataShareRule r : dataScopeService.listRules(modeId)) {
+                if (r == null || r.getSchemeId() == null || !schemeIds.contains(r.getSchemeId())) continue;
+                if (!scopeRuleSubjectHit(r, user, uid, roleIds, deptIds, postIds, branchIds)) continue;
+                if (!seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid)) continue;
+                List<Integer> rights = DataScopeRuleUtil.parseRightTypes(r.getRightTypes());
+                if (rights.isEmpty()) {
+                    int legacy = r.getType() == null ? 1 : r.getType();
+                    rights = legacy == 2 ? java.util.Arrays.asList(1, 3, 4) : java.util.Arrays.asList(1);
+                }
+                result.addAll(rights);
             }
-            // 0 约定为「全部」
-            if (objId == OBJ_ID_ALL) {
-                return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
-            }
-            switch (objType) {
-                case 4: // 人员
-                    if (uid != null && uid.equals(objId)) {
-                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
-                    }
-                    break;
-                case 1: // 角色
-                    if (roleIds.contains(objId)) {
-                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
-                    }
-                    break;
-                case 2: // 部门：includesub=1 时展开子孙部门
-                    if (subjectResolver.matchDept(objId, deptIds, r.getIncludesub())) {
-                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
-                    }
-                    break;
-                case 3: // 岗位：由 blade_user.post_id 解析
-                    if (postIds.contains(objId)) {
-                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
-                    }
-                    break;
-                case 5: // 分部：由用户部门反查 blade_dept.subcompany_id（对标 E9 rolelevel=1）
-                    if (subcompanyIds.contains(objId)) {
-                        return seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid);
-                    }
-                    break;
-                default:
-                    break;
-            }
+        } catch (Exception e) {
+            log.warn("[formmode] 查询数据范围操作码失败. modeId={}, err={}", modeId, e.getMessage());
         }
-        // 已配置权限但当前用户未命中任何一条 → 无权限
-        return false;
+        return result;
     }
 
     /**

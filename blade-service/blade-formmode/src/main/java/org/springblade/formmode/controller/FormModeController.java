@@ -30,6 +30,7 @@ public class FormModeController extends BladeController {
 
     private final IFormModeService formModeService;
     private final ModeTreeFieldMapper modeTreeFieldMapper;
+    private final org.springblade.formmode.service.IFormDirService formDirService;
 
     /**
      * 创建表单模块
@@ -88,6 +89,55 @@ public class FormModeController extends BladeController {
     public R<List<ModeTreeField>> getTreeFields() {
         List<ModeTreeField> list = modeTreeFieldMapper.selectList(null);
         return R.data(list);
+    }
+
+    @GetMapping("/dir/tree")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<List<ModeTreeField>> dirTree() {
+        return R.data(formDirService.tree());
+    }
+
+    @PostMapping("/dir/save")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> saveDir(@RequestBody ModeTreeField dir) {
+        return R.data(formDirService.save(dir), "目录保存成功");
+    }
+
+    @DeleteMapping("/dir/{id}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> deleteDir(@PathVariable Long id) {
+        return R.data(formDirService.delete(id), "目录删除成功");
+    }
+
+    @GetMapping("/dir/auth/{dirId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<List<org.springblade.formmode.entity.FormDirAuth>> dirAuth(@PathVariable Long dirId) {
+        return R.data(formDirService.listAuth(dirId));
+    }
+
+    @PostMapping("/dir/auth/{dirId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> saveDirAuth(@PathVariable Long dirId,
+                                  @RequestBody List<org.springblade.formmode.entity.FormDirAuth> auths) {
+        return R.data(formDirService.saveAuth(dirId, auths), "目录权限保存成功");
+    }
+
+    @GetMapping("/dir/form/{formId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> formDir(@PathVariable Long formId) {
+        return R.data(formDirService.getFormDir(formId));
+    }
+
+    @PostMapping("/dir/move-form")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> moveForm(@RequestParam Long formId, @RequestParam(required = false) Long dirId) {
+        return R.data(formDirService.moveForm(formId, dirId), "表单目录已更新");
+    }
+
+    @PostMapping("/dir/move-forms")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> moveForms(@RequestParam List<Long> formIds, @RequestParam(required = false) Long dirId) {
+        return R.data(formDirService.moveForms(formIds, dirId), "批量移动目录成功");
     }
 
 }
