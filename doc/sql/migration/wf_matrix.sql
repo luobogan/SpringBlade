@@ -39,7 +39,7 @@ USE blade;
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `wf_matrix`
 (
-    `id`           BIGINT       NOT NULL COMMENT '主键（雪花）',
+    `id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键（自增）',
     `tenant_id`    VARCHAR(50)  NOT NULL COMMENT '租户ID',
     `matrix_name`  VARCHAR(100) NOT NULL COMMENT '矩阵名称',
     `matrix_desc`  VARCHAR(500) NULL COMMENT '矩阵描述',

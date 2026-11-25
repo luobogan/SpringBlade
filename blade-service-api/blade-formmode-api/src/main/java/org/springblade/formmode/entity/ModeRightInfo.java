@@ -53,6 +53,9 @@ public class ModeRightInfo implements Serializable {
     @Schema(description = "密级上限（E9 showlevel2，NULL=不封顶）")
     private Integer showlevel2;
 
+    @Schema(description = "授权方案ID")
+    private Long schemeId;
+
     @Schema(description = "租户ID")
     private String tenantId;
 

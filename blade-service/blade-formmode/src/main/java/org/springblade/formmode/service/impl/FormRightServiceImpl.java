@@ -8,6 +8,7 @@ import org.springblade.core.secure.utils.AuthUtil;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.log.exception.ServiceException;
 import org.springblade.core.tool.utils.Func;
+import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
 import org.springblade.formmode.entity.ModeInfo;
 import org.springblade.formmode.entity.ModeRightInfo;
@@ -22,10 +23,12 @@ import org.springblade.formmode.mapper.WorkflowBillFieldMapper;
 import org.springblade.formmode.mapper.WorkflowBillMapper;
 import org.springblade.formmode.service.IFormRightService;
 import org.springblade.formmode.service.IDataScopeService;
+import org.springblade.formmode.utils.DataScopeRuleUtil;
 import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.DataScope;
 import org.springblade.formmode.vo.FieldPermVO;
 import org.springblade.formmode.vo.RuntimeFieldPermVO;
+import org.springblade.system.datascope.DataScopeValueResolver;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -73,6 +76,7 @@ public class FormRightServiceImpl implements IFormRightService {
     private final ModeDataShareSingleMapper modeDataShareSingleMapper;
     private final StringRedisTemplate redisTemplate;
     private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private final org.springblade.formmode.service.IAuthSchemeService authSchemeService;
 
     /**
      * 字段权限查询异常时是否 fail-closed（默认 false）。
@@ -126,45 +130,31 @@ public class FormRightServiceImpl implements IFormRightService {
         key = "T(org.springblade.formmode.service.impl.FormRightServiceImpl).currentTenant() + ':' + #modeId + ':' + #userId")
     public List<Integer> listUserRightTypes(Long modeId, Long userId) {
         List<Integer> result = new ArrayList<>();
-        if (modeId == null) {
-            return result;
-        }
+        if (modeId == null) return result;
         BladeUser user = AuthUtil.getUser();
-        // 管理员：拥有全部操作（与 checkRight 豁免口径一致）
         if (subjectResolver.isAdmin(user)) {
             result.addAll(java.util.Arrays.asList(1, 2, 3, 4, 5));
             return result;
         }
         try {
-            // 只取「明确配置且当前用户命中」的权限码；未配置的 righttype 不返回
-            // （与 checkRight 的 fail-open 语义不同：按钮驱动需要"显式授权"口径，否则收窄失效）
+            List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
+            if (schemeIds == null || schemeIds.isEmpty()) return result;
+            String marks = schemeIds.stream().map(String::valueOf).collect(Collectors.joining(","));
             List<ModeRightInfo> rights = modeRightInfoMapper.selectList(
                 new LambdaQueryWrapper<ModeRightInfo>()
                     .eq(ModeRightInfo::getModeid, modeId)
                     .in(ModeRightInfo::getRighttype, java.util.Arrays.asList(1, 2, 3, 4, 5))
+                    .in(ModeRightInfo::getSchemeId, schemeIds)
                     .and(w -> w.eq(ModeRightInfo::getTenantId, currentTenant()).or().isNull(ModeRightInfo::getTenantId))
             );
-            if (rights == null || rights.isEmpty()) {
-                return result; // 未配置 → 空，前端 fail-open
-            }
-            Long uid = (userId != null) ? userId : (user != null ? user.getUserId() : null);
-            Set<Long> roleIds = parseIds(user != null ? user.getRoleId() : null);
-            Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
-            Set<Long> postIds = subjectResolver.resolvePostIds(uid);
-            Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
-            Set<Integer> hit = new java.util.LinkedHashSet<>();
-            for (ModeRightInfo r : rights) {
-                Integer rt = r.getRighttype();
-                if (rt == null || hit.contains(rt)) continue;
-                if (matchModeRightSubject(r, uid, roleIds, deptIds, postIds, subcompanyIds)) {
-                    hit.add(rt);
-                }
+            Set<Integer> hit = new LinkedHashSet<>();
+            if (rights != null) {
+                for (ModeRightInfo r : rights) if (r.getRighttype() != null) hit.add(r.getRighttype());
             }
             result.addAll(hit);
             java.util.Collections.sort(result);
         } catch (Exception e) {
-            log.warn("[formmode] 查询用户模块权限码失败. modeId={}, err={}", modeId, e.getMessage());
-            return new ArrayList<>(); // 失败空 → 前端 fail-open
+            log.warn("[formmode] 查询方案模块权限码失败. modeId={}, err={}", modeId, e.getMessage());
         }
         return result;
     }
@@ -173,6 +163,10 @@ public class FormRightServiceImpl implements IFormRightService {
     public boolean hasModelRightConfig(Long modeId) {
         if (modeId == null) return false;
         try {
+            Long schemeCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mode_auth_scheme WHERE tenant_id=? AND mode_id=? AND status=1",
+                Long.class, currentTenant(), modeId);
+            if (schemeCount != null && schemeCount > 0) return true;
             Long r = modeRightInfoMapper.selectCount(new LambdaQueryWrapper<ModeRightInfo>()
                 .eq(ModeRightInfo::getModeid, modeId));
             if (r != null && r > 0) return true;
@@ -220,10 +214,13 @@ public class FormRightServiceImpl implements IFormRightService {
         unless = "#result == null")
     public boolean checkRight(Long modeId, Integer rightType, Long userId) {
         String tenant = currentTenant();
+        List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
+        if (schemeIds == null || schemeIds.isEmpty()) return false;
         List<ModeRightInfo> rights = modeRightInfoMapper.selectList(
             new LambdaQueryWrapper<ModeRightInfo>()
                 .eq(ModeRightInfo::getModeid, modeId)
                 .eq(ModeRightInfo::getRighttype, rightType)
+                .in(ModeRightInfo::getSchemeId, schemeIds)
                 .and(w -> w.eq(ModeRightInfo::getTenantId, tenant).or().isNull(ModeRightInfo::getTenantId))
         );
         // 该 righttype 未配置：
@@ -610,10 +607,13 @@ public class FormRightServiceImpl implements IFormRightService {
                                                    Set<Long> postIds, Set<Long> subcompanyIds) {
         Set<Long> result = new LinkedHashSet<>();
         try {
+            List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
+            if (schemeIds == null || schemeIds.isEmpty()) return result;
+            String marks = schemeIds.stream().map(String::valueOf).collect(Collectors.joining(","));
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT s.group_id,s.objtype,s.objid,s.includesub FROM mode_field_auth_subject s "
                     + "JOIN mode_field_auth_group g ON g.id=s.group_id "
-                    + "WHERE g.modeid=? AND g.tenant_id=? AND s.tenant_id=?",
+                    + "WHERE g.modeid=? AND g.tenant_id=? AND s.tenant_id=? AND g.scheme_id IN (" + marks + ")",
                 modeId, tenant, tenant);
             if (rows == null) return result;
             for (Map<String, Object> row : rows) {
@@ -733,8 +733,11 @@ public class FormRightServiceImpl implements IFormRightService {
         List<ModeFieldAuthorize> auths;
         String tenant = currentTenant();
         try {
+            List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
+            if (schemeIds == null || schemeIds.isEmpty()) return new ArrayList<>();
             auths = modeFieldAuthorizeMapper.selectList(new LambdaQueryWrapper<ModeFieldAuthorize>()
                 .eq(ModeFieldAuthorize::getModeid, modeId)
+                .in(ModeFieldAuthorize::getSchemeId, schemeIds)
                 .and(w -> w.eq(ModeFieldAuthorize::getTenantId, tenant).or().isNull(ModeFieldAuthorize::getTenantId)));
         } catch (Exception e) {
             // 默认 fail-open：避免权限组件故障导致表单全空白；
@@ -879,7 +882,7 @@ public class FormRightServiceImpl implements IFormRightService {
         Set<Long> deptIds = parseIds(user != null ? user.getDeptId() : null);
         Set<Long> postIds = subjectResolver.resolvePostIds(uid);
         Long primaryDept = deptIds.isEmpty() ? null : deptIds.iterator().next();
-        DataScope scope = dataScopeService.resolve(modeId, uid, primaryDept, new ArrayList<>(roleIds), new ArrayList<>(postIds));
+        DataScope scope = resolveSchemeDataScope(modeId, user, uid, primaryDept);
         // 单条共享：查询共享给当前用户（人员/角色/部门/岗位）的数据行 ID。
         // sharedDataIds 同时用于列表过滤（creator OR id IN sharedIds）、详情读取与行级写校验。
         try {
@@ -919,6 +922,150 @@ public class FormRightServiceImpl implements IFormRightService {
         return scope;
     }
 
+    /** 命中方案的数据范围规则：五档 OR 合并，全部可见优先。 */
+    private DataScope resolveSchemeDataScope(Long modeId, BladeUser user, Long uid, Long deptId) {
+        DataScope scope = new DataScope();
+        scope.setCanViewAll(false);
+        scope.setCreatorId(uid);
+        List<Long> schemeIds = authSchemeService.resolveMatchedSchemeIds(modeId);
+        if (schemeIds == null || schemeIds.isEmpty()) return scope;
+        String marks = schemeIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        Set<Long> roleIds = parseIds(user == null ? null : user.getRoleId());
+        Set<Long> deptIds = parseIds(user == null ? null : user.getDeptId());
+        Set<Long> postIds = subjectResolver.resolvePostIds(uid);
+        Set<Long> branchIds = subjectResolver.resolveSubcompanyIds(uid);
+        scope.setRowScopes(new ArrayList<>());
+        scope.setEditableRowScopes(new ArrayList<>());
+        scope.setDeletableRowScopes(new ArrayList<>());
+        List<ModeDataShareRule> rules = dataScopeService.listRules(modeId).stream()
+            .filter(r -> r != null && r.getSchemeId() != null && schemeIds.contains(r.getSchemeId()))
+            .collect(Collectors.toList());
+        for (ModeDataShareRule r : rules) {
+            if (!scopeRuleSubjectHit(r, user, uid, roleIds, deptIds, postIds, branchIds)) continue;
+            if (!seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid)) continue;
+            List<Integer> rights = DataScopeRuleUtil.parseRightTypes(r.getRightTypes());
+            if (rights.isEmpty()) {
+                int legacy = r.getType() == null ? 1 : r.getType();
+                rights = legacy == 2 ? java.util.Arrays.asList(1, 3, 4, 5) : java.util.Arrays.asList(1, 5);
+            }
+            boolean canView = DataScopeRuleUtil.containsAny(rights, 1, 5);
+            boolean canEdit = DataScopeRuleUtil.containsAny(rights, 2, 3);
+            boolean canDelete = DataScopeRuleUtil.containsAny(rights, 4);
+            if (!canView && !canEdit && !canDelete) continue;
+
+            Integer st = r.getScopeType();
+            if (st == null) continue;
+            boolean all = (st == 6 || st == 7);
+            if (all) {
+                if (canView) scope.setCanViewAll(true);
+                if (canEdit) scope.setCanEditAll(true);
+                if (canDelete) scope.setCanDeleteAll(true);
+                continue;
+            }
+            DataScopeValueResolver.ScopeValue value = DataScopeValueResolver.resolve(
+                st, r.getScopeColumn(), r.getScopeValue(), user,
+                deptId == null ? null : this::queryChildDeptIds);
+            if (value.isRejected()) continue;
+            if (value.isUnrestricted()) {
+                if (canView) scope.setCanViewAll(true);
+                if (canEdit) scope.setCanEditAll(true);
+                if (canDelete) scope.setCanDeleteAll(true);
+            } else if (value.isRestricted()) {
+                if (canView) mergeRowScope(scope.getRowScopes(), value.getColumn(), value.getIds());
+                if (canEdit) mergeRowScope(scope.getEditableRowScopes(), value.getColumn(), value.getIds());
+                if (canDelete) mergeRowScope(scope.getDeletableRowScopes(), value.getColumn(), value.getIds());
+            }
+        }
+        if (scope.isCanViewAll()) scope.setRowScopes(new ArrayList<>());
+        if (scope.isCanEditAll()) scope.setEditableRowScopes(new ArrayList<>());
+        if (scope.isCanDeleteAll()) scope.setDeletableRowScopes(new ArrayList<>());
+        return scope;
+    }
+
+    /** 数据范围规则上的多授权对象是否命中当前用户 */
+    private boolean scopeRuleSubjectHit(ModeDataShareRule r, BladeUser user, Long uid,
+                                        Set<Long> roleIds, Set<Long> deptIds, Set<Long> postIds, Set<Long> branchIds) {
+        List<DataScopeRuleUtil.ScopeSubject> subjects = DataScopeRuleUtil.parseSubjects(r.getScopeSubjects());
+        if (subjects.isEmpty()) return true;
+        for (DataScopeRuleUtil.ScopeSubject s : subjects) {
+            if (s == null || s.getObjtype() == null) continue;
+            int type = s.getObjtype();
+            long id = s.getObjid() == null ? 0L : s.getObjid();
+            if (type == 7) return true;
+            if (type == 4 && uid != null && uid == id) return true;
+            if (type == 1 && roleIds.contains(id)) return true;
+            if (type == 2 && subjectResolver.matchDept(id, deptIds, s.getIncludeSub() == null ? 0 : s.getIncludeSub())) return true;
+            if (type == 3 && postIds.contains(id)) return true;
+            if (type == 5 && branchIds.contains(id)) return true;
+        }
+        return false;
+    }
+
+    private void mergeRowScope(List<DataScope.RowScope> target, String column, List<Long> ids) {
+        if (target == null || column == null || ids == null || ids.isEmpty()) return;
+        for (DataScope.RowScope rs : target) {
+            if (column.equals(rs.getColumn())) {
+                for (Long id : ids) if (!rs.getIds().contains(id)) rs.getIds().add(id);
+                return;
+            }
+        }
+        DataScope.RowScope rs = new DataScope.RowScope();
+        rs.setColumn(column);
+        rs.setIds(new ArrayList<>(ids));
+        target.add(rs);
+    }
+
+    /** 判断单行是否命中任一 RowScope：用于详情/编辑，不依赖列表 SQL。 */
+    private boolean rowMatchesScopes(Long modeId, Long dataId, DataScope scope) {
+        return rowMatchesScopes(modeId, dataId, scope, scope.getRowScopes());
+    }
+
+    private boolean rowMatchesScopes(Long modeId, Long dataId, DataScope scope, List<DataScope.RowScope> rowScopes) {
+        if (dataId == null || scope.getRowScopes() == null || scope.getRowScopes().isEmpty()) return false;
+        try {
+            List<Long> billIds = jdbcTemplate.queryForList("SELECT billid FROM modeinfo WHERE id=?", Long.class, modeId);
+            Long formId = (billIds == null || billIds.isEmpty()) ? modeId : billIds.get(0);
+            List<String> tables = jdbcTemplate.queryForList(
+                "SELECT tablename FROM workflow_bill WHERE id=?", String.class, formId);
+            if (tables == null || tables.isEmpty() || tables.get(0) == null) return false;
+            String table = tables.get(0).replace("`", "");
+            if (rowScopes == null) return false;
+            for (DataScope.RowScope rs : rowScopes) {
+                String col = rs.getColumn() == null ? "" : rs.getColumn().replace("`", "");
+                if (!col.matches("^[A-Za-z_][A-Za-z0-9_$]*$")) continue;
+                List<Object> vals = jdbcTemplate.queryForList(
+                    "SELECT `" + col + "` FROM `" + table + "` WHERE id=?", Object.class, dataId);
+                if (vals == null || vals.isEmpty() || !(vals.get(0) instanceof Number)) continue;
+                long value = ((Number) vals.get(0)).longValue();
+                if (rs.getIds() != null && rs.getIds().contains(value)) return true;
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 行范围校验失败. modeId={}, dataId={}, err={}", modeId, dataId, e.getMessage());
+        }
+        return false;
+    }
+
+    private List<Long> queryChildDeptIds(Long deptId) {
+        List<Long> out = new ArrayList<>();
+        if (deptId == null) return out;
+        java.util.Deque<Long> stack = new java.util.ArrayDeque<>();
+        stack.push(deptId);
+        while (!stack.isEmpty()) {
+            Long cur = stack.pop();
+            if (out.contains(cur)) continue;
+            out.add(cur);
+            try {
+                List<Long> children = jdbcTemplate.queryForList(
+                    "SELECT id FROM blade_dept WHERE parent_id=? AND is_deleted=0", Long.class, cur);
+                if (children != null) children.forEach(stack::push);
+            } catch (Exception e) {
+                log.warn("[formmode] 查询子部门失败. deptId={}, err={}", cur, e.getMessage());
+            }
+        }
+        out.remove(deptId);
+        return out;
+    }
+
     /**
      * 判断某行数据（创建人 creatorIdOfRow）是否在当前用户数据范围内（供详情/单条读取用）。
      */
@@ -931,6 +1078,10 @@ public class FormRightServiceImpl implements IFormRightService {
     public boolean inDataScope(Long modeId, Long creatorIdOfRow, Long dataId) {
         DataScope scope = resolveDataScope(modeId);
         if (scope.isCanViewAll()) {
+            return true;
+        }
+        if (dataId != null && scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()
+            && rowMatchesScopes(modeId, dataId, scope)) {
             return true;
         }
         if (Objects.equals(creatorIdOfRow, scope.getCreatorId())) {
@@ -949,6 +1100,13 @@ public class FormRightServiceImpl implements IFormRightService {
         }
         if (dataId != null && scope.getEditableSharedDataIds() != null
             && scope.getEditableSharedDataIds().contains(dataId)) {
+            return true;
+        }
+        if (scope.isCanEditAll()) {
+            return true;
+        }
+        if (dataId != null && scope.getEditableRowScopes() != null && !scope.getEditableRowScopes().isEmpty()
+            && rowMatchesScopes(modeId, dataId, scope, scope.getEditableRowScopes())) {
             return true;
         }
         if (!scope.isCanViewAll()) {

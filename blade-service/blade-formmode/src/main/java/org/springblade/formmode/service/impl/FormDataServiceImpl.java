@@ -681,6 +681,32 @@ public class FormDataServiceImpl implements IFormDataService {
         }
     }
 
+    /** 五档数据范围：多个 RowScope 之间 OR；同列 ids 已由权限服务合并。 */
+    private void appendRowScopes(DataScope scope, Set<String> tableCols,
+                                 StringBuilder countSql, StringBuilder dataSql, List<Object> params) {
+        List<DataScope.RowScope> scopes = scope.getRowScopes();
+        StringBuilder or = new StringBuilder();
+        boolean appended = false;
+        for (DataScope.RowScope rs : scopes) {
+            String col = rs.getColumn() == null ? "" : rs.getColumn().trim().toLowerCase();
+            if (!SAFE_COLUMN.matcher(col).matches() || !tableCols.contains(col)
+                || rs.getIds() == null || rs.getIds().isEmpty()) continue;
+            if (appended) or.append(" OR ");
+            String marks = String.join(",", java.util.Collections.nCopies(rs.getIds().size(), "?"));
+            or.append('`').append(col).append("` IN (").append(marks).append(')');
+            params.addAll(rs.getIds());
+            appended = true;
+        }
+        if (!appended) {
+            countSql.append(" AND 1=0");
+            dataSql.append(" AND 1=0");
+        } else {
+            String clause = " AND (" + or + ")";
+            countSql.append(clause);
+            dataSql.append(clause);
+        }
+    }
+
     /**
      * 条件化授权：把结构化行条件安全拼入 SQL（字段名白名单 + 操作符枚举 + 值参数化）。
      *
@@ -1114,9 +1140,13 @@ public class FormDataServiceImpl implements IFormDataService {
             StringBuilder dataSql = new StringBuilder("SELECT * FROM `" + mainTableName + "` WHERE 1=1");
             List<Object> queryParams = new ArrayList<>();
 
-            // 数据范围：非全量可见 → 本人创建 OR 单条共享给我的行（都无则 1=0 安全空结果）
+            // 数据范围：五档行范围优先；未配置五档时回退本人创建 OR 单条共享
             if (!scope.isCanViewAll()) {
-                appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
+                if (scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()) {
+                    appendRowScopes(scope, tableCols, countSql, dataSql, queryParams);
+                } else {
+                    appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
+                }
             }
             // 条件化授权：命中共享规则时行还需满足结构化条件（与范围过滤 AND 叠加）
             appendRowCondition(scope, tableCols, countSql, dataSql, queryParams);
@@ -1214,9 +1244,13 @@ public class FormDataServiceImpl implements IFormDataService {
             StringBuilder dataSql = new StringBuilder("SELECT " + selectCols + " FROM `" + table + "` WHERE 1=1");
             List<Object> queryParams = new ArrayList<>();
 
-            // ① formmode 行级范围：非全量可见 → 本人创建 OR 单条共享给我的行
+            // ① formmode 行级范围：五档行范围优先；未配置时回退本人创建 OR 单条共享
             if (!scope.isCanViewAll()) {
-                appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
+                if (scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()) {
+                    appendRowScopes(scope, tableCols, countSql, dataSql, queryParams);
+                } else {
+                    appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
+                }
             }
 
             // ①-b 条件化授权：命中共享规则时行还需满足结构化条件

@@ -41,6 +41,29 @@ public class DataScope {
     /** 单条共享中「可编辑」（shareLevel>=2）的数据行 ID 集合 */
     private List<Long> editableSharedDataIds;
 
+    /** 五档数据范围产生的行过滤：同一项内 ids 为 IN，多个项之间 OR */
+    private List<RowScope> rowScopes;
+
+    /** 多选权限=编辑：可编辑行范围 */
+    private List<RowScope> editableRowScopes;
+
+    /** 多选权限=删除：可删除行范围 */
+    private List<RowScope> deletableRowScopes;
+
+    /** 是否可编辑全部行（多选权限包含编辑且值为全部可见） */
+    private boolean canEditAll;
+
+    /** 是否可删除全部行（多选权限包含删除且值为全部可见） */
+    private boolean canDeleteAll;
+
+    /** 五档数据范围的行过滤项 */
+    @Data
+    @Schema(description = "行范围过滤项")
+    public static class RowScope {
+        private String column;
+        private List<Long> ids;
+    }
+
     /** 行级条件项 */
     @Data
     @Schema(description = "行级数据条件")

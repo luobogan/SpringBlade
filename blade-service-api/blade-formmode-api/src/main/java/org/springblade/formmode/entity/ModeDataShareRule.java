@@ -69,6 +69,24 @@ public class ModeDataShareRule implements Serializable {
     /** 密级上限（E9 showlevel2，NULL=不封顶） */
     private Integer showlevel2;
 
+    @Schema(description = "授权方案ID")
+    private Long schemeId;
+
+    @Schema(description = "多选权限类型CSV：1查看 2新增 3编辑 4删除 5详情")
+    private String rightTypes;
+
+    @Schema(description = "多授权对象JSON数组")
+    private String scopeSubjects;
+
+    @Schema(description = "数据范围类型：1全部 2本人 3所在机构 4所在机构及子级 5自定义")
+    private Integer scopeType;
+
+    @Schema(description = "数据范围过滤列")
+    private String scopeColumn;
+
+    @Schema(description = "自定义权限值域")
+    private String scopeValue;
+
     @Schema(description = "租户ID")
     private String tenantId;
 

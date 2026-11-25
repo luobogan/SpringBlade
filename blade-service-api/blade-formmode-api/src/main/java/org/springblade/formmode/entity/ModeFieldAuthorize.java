@@ -51,6 +51,9 @@ public class ModeFieldAuthorize implements Serializable {
     @Schema(description = "权限：1可见 2可编辑")
     private Integer rightvalue;
 
+    @Schema(description = "授权方案ID")
+    private Long schemeId;
+
     @Schema(description = "租户ID")
     private String tenantId;
 

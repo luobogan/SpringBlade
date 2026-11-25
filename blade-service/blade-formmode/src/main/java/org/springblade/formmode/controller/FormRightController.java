@@ -8,12 +8,14 @@ import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.api.R;
 import org.springblade.workflow.constant.WorkflowConstant;
 import org.springblade.formmode.dto.FieldSubjectSaveDTO;
+import org.springblade.formmode.dto.ModeAuthSchemeDTO;
 import org.springblade.formmode.dto.ModeRightBatchDTO;
 import org.springblade.formmode.entity.ModeDataShareRule;
 import org.springblade.formmode.entity.ModeFieldAuthorize;
 import org.springblade.formmode.entity.ModeRightInfo;
 import org.springblade.formmode.service.IDataScopeService;
 import org.springblade.formmode.service.IFormRightService;
+import org.springblade.formmode.vo.AuthSchemeVO;
 import org.springblade.formmode.vo.FieldPermVO;
 import org.springblade.formmode.vo.RuntimeFieldPermVO;
 import org.springframework.web.bind.annotation.*;
@@ -34,6 +36,37 @@ public class FormRightController extends BladeController {
 
     private final IFormRightService formRightService;
     private final IDataScopeService dataScopeService;
+    private final org.springblade.formmode.service.IAuthSchemeService authSchemeService;
+
+    @GetMapping("/schemes/{formId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<List<AuthSchemeVO>> listSchemes(@PathVariable Long formId) {
+        return R.data(authSchemeService.listByForm(formId));
+    }
+
+    @GetMapping("/scheme/{schemeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<AuthSchemeVO> getScheme(@PathVariable Long schemeId) {
+        return R.data(authSchemeService.get(schemeId));
+    }
+
+    @PostMapping("/scheme/save")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> saveScheme(@RequestBody ModeAuthSchemeDTO dto) {
+        return R.data(authSchemeService.save(dto), "授权方案保存成功");
+    }
+
+    @PostMapping("/scheme/copy/{schemeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Long> copyScheme(@PathVariable Long schemeId) {
+        return R.data(authSchemeService.copy(schemeId), "授权方案复制成功");
+    }
+
+    @DeleteMapping("/scheme/{schemeId}")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Boolean> deleteScheme(@PathVariable Long schemeId) {
+        return R.data(authSchemeService.delete(schemeId), "授权方案删除成功");
+    }
 
     /**
      * 获取模块权限

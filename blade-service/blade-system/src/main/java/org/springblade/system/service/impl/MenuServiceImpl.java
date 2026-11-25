@@ -190,10 +190,19 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 						hit = deptIds.contains(shareId) || (includeSub == 1 && deptAncestors.contains(shareId));
 					} else if (type == 4) hit = branchId != null && branchId == shareId;
 					else if (type == 5) hit = postIds.contains(shareId);
+					else if (type == 8) hit = userId != null && matrixContainsUser(shareId, null, userId);
 				} else if (type == 6 && seclevel != null) {
 					int lower = row.get("showlevel") instanceof Number ? ((Number) row.get("showlevel")).intValue() : 0;
 					int upper = row.get("showlevel2") instanceof Number ? ((Number) row.get("showlevel2")).intValue() : Integer.MAX_VALUE;
 					hit = seclevel >= lower && seclevel <= upper;
+				}
+				if (hit && (row.get("showlevel") != null || row.get("showlevel2") != null)) {
+					if (seclevel == null) hit = false;
+					else {
+						int lower = row.get("showlevel") instanceof Number ? ((Number) row.get("showlevel")).intValue() : 0;
+						int upper = row.get("showlevel2") instanceof Number ? ((Number) row.get("showlevel2")).intValue() : Integer.MAX_VALUE;
+						hit = seclevel >= lower && seclevel <= upper;
+					}
 				}
 				if (hit) result.add(((Number) menuObj).longValue());
 			}
@@ -201,6 +210,22 @@ public class MenuServiceImpl extends ServiceImpl<MenuMapper, Menu> implements IM
 			log.warn("[Menu#resolveSharedMenuIds] 查询菜单共享失败，按无共享处理. tenantId={}, err={}", tenantId, e.getMessage());
 		}
 		return result;
+	}
+
+	/** 判断当前用户是否出现在矩阵结果字段中（用于菜单共享的矩阵主体）。 */
+	private boolean matrixContainsUser(Long matrixId, String valueField, Long userId) {
+		if (matrixId == null || userId == null) return false;
+		try {
+			List<String> rows = jdbcTemplate.queryForList(
+				"SELECT data_json FROM wf_matrix_data WHERE matrix_id=? AND is_deleted=0", String.class, matrixId);
+			String needle = "," + userId + ",";
+			for (String json : rows) {
+				if (json != null && json.contains(String.valueOf(userId))) return true;
+			}
+			return false;
+		} catch (Exception e) {
+			return false;
+		}
 	}
 
 	private Set<Long> parseIds(String csv) {
