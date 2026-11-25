@@ -16,6 +16,9 @@ public interface IAuthSchemeService {
 
     boolean delete(Long schemeId);
 
+    /** 批量删除授权方案（同一事务） */
+    int deleteBatch(List<Long> schemeIds);
+
     /** 当前用户命中的授权方案ID（已过滤安全级别） */
     List<Long> resolveMatchedSchemeIds(Long modeId);
 }

@@ -68,6 +68,12 @@ public class FormRightController extends BladeController {
         return R.data(authSchemeService.delete(schemeId), "授权方案删除成功");
     }
 
+    @PostMapping("/scheme/delete-batch")
+    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    public R<Integer> deleteSchemes(@RequestBody List<Long> schemeIds) {
+        return R.data(authSchemeService.deleteBatch(schemeIds), "授权方案批量删除成功");
+    }
+
     /**
      * 获取模块权限
      */

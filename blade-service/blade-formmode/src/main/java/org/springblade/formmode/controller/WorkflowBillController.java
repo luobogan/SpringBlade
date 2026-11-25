@@ -79,6 +79,7 @@ public class WorkflowBillController extends BladeController {
      * 获取所有表单（不分页）
      */
     @GetMapping("/all")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "获取所有表单", description = "获取所有表单定义不分页")
     public R<List<WorkflowBill>> getAll() {
         List<WorkflowBill> list = workflowBillService.list();
@@ -89,6 +90,7 @@ public class WorkflowBillController extends BladeController {
      * 获取表单详情
      */
     @GetMapping("/{id}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "获取表单详情", description = "根据ID获取表单定义详情")
     public R<WorkflowBill> getById(
             @Parameter(description = "表单ID") @PathVariable String id) {

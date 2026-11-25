@@ -229,7 +229,7 @@ public class FormDataController extends BladeController {
      * 获取数据详情
      */
     @GetMapping("/{modeId}/{dataId}")
-    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     public R<FormDataVO> detail(@PathVariable Long modeId, @PathVariable Long dataId) {
         assertModeRight(modeId, RightType.DETAIL, readRightEnforce);
         FormDataVO result = formDataService.getFormDataById(modeId, dataId);
@@ -240,7 +240,7 @@ public class FormDataController extends BladeController {
      * 分页查询数据
      */
     @PostMapping("/page/{modeId}")
-    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     public R<Page<Map<String, Object>>> page(@PathVariable Long modeId,
                                               @RequestParam(defaultValue = "1") long current,
                                               @RequestParam(defaultValue = "10") long size,
@@ -268,7 +268,7 @@ public class FormDataController extends BladeController {
      * @param params       过滤条件（字段名 → 值，LIKE 模糊）
      */
     @PostMapping("/page-scope/{modeId}")
-    @PreAuth(WorkflowConstant.HAS_ROLE_WORKFLOW)
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     public R<Page<Map<String, Object>>> pageByScope(@PathVariable Long modeId,
                                                     @RequestParam(defaultValue = "1") long current,
                                                     @RequestParam(defaultValue = "10") long size,
@@ -314,9 +314,24 @@ public class FormDataController extends BladeController {
     @GetMapping("/by-form")
     @PreAuth(WorkflowConstant.HAS_AUTH)
     public R<FormDataVO> getByForm(@RequestParam("formId") Long formId,
-                                   @RequestParam("dataId") Long dataId) {
+                                   @RequestParam("dataId") String dataIdStr) {
+        Long dataId = parseOptionalLong(dataIdStr);
+        if (dataId == null) {
+            return R.fail("数据ID非法");
+        }
         FormDataVO result = formDataService.getFormDataById(formId, dataId);
         return result != null ? R.data(result) : R.fail("数据不存在");
+    }
+
+    private Long parseOptionalLong(String value) {
+        if (value == null || !value.matches("\\d+")) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**

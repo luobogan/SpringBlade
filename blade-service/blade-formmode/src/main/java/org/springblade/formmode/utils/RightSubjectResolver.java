@@ -16,6 +16,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 建模权限「授权主体」统一解析器。
@@ -23,7 +24,8 @@ import java.util.Set;
  * <p>把此前散落在 {@code FormRightServiceImpl} / {@code ModeDataShareRuleServiceImpl}
  * 中「未实现」的三个维度收敛到一处，供模块权限 / 字段权限 / 数据范围共用：</p>
  * <ul>
- *   <li><b>管理员豁免</b>：roleName 含 admin → 拥有全部权限（与 DataScopeValueResolver 同源）；</li>
+ *   <li><b>管理员豁免</b>：真实角色 ID 命中 administrator/admin → 拥有全部权限；
+ *       不信任 token 中可能残留的 roleName；</li>
  *   <li><b>子部门展开</b>：部门授权带 includesub 时，展开当前部门 + 全部子孙部门；</li>
  *   <li><b>岗位维度</b>：从 blade_user.post_id 解析当前用户岗位（BladeUser 不承载 postId）。</li>
  * </ul>
@@ -95,9 +97,53 @@ public class RightSubjectResolver {
         return userSeclevel >= lower && userSeclevel <= upper;
     }
 
-    /** 当前用户是否为管理员（与 {@code DataScopeValueResolver#resolve} 的判定一致） */
+    /**
+     * 当前用户是否为管理员。
+     *
+     * <p>只认真实角色 ID：token 的 roleName 可能保留历史角色名（例如 yjl 的 role_id 为空，
+     * 但 roleName 仍含 administrator/admin），如果继续按角色名放行，会导致字段权限/
+     * 数据范围被错误跳过。roleId 为空时再查一次 blade_user，避免 token 裁剪导致误判。</p>
+     */
     public boolean isAdmin(BladeUser user) {
-        return user != null && StringUtil.containsAny(user.getRoleName(), RoleConstant.ADMIN);
+        if (user == null) return false;
+        Set<Long> roleIds = parseRoleIds(user.getRoleId());
+        if (roleIds.isEmpty() && user.getUserId() != null) {
+            try {
+                List<String> rows = jdbcTemplate.queryForList(
+                    "SELECT role_id FROM blade_user WHERE id=? AND is_deleted=0", String.class, user.getUserId());
+                if (rows != null && !rows.isEmpty()) {
+                    roleIds = parseRoleIds(rows.get(0));
+                }
+            } catch (Exception e) {
+                log.warn("[formmode] 管理员角色反查失败，按非管理员处理. userId={}, err={}", user.getUserId(), e.getMessage());
+                return false;
+            }
+        }
+        if (roleIds.isEmpty()) return false;
+        String marks = roleIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        try {
+            List<String> aliases = jdbcTemplate.queryForList(
+                "SELECT role_alias FROM blade_role WHERE is_deleted=0 AND id IN (" + marks + ")", String.class);
+            return aliases != null && aliases.stream().anyMatch(a ->
+                RoleConstant.ADMIN.equalsIgnoreCase(a) || "admin".equalsIgnoreCase(a));
+        } catch (Exception e) {
+            log.warn("[formmode] 管理员角色校验失败，按非管理员处理. roleIds={}, err={}", marks, e.getMessage());
+            return false;
+        }
+    }
+
+    private Set<Long> parseRoleIds(String csv) {
+        Set<Long> ids = new HashSet<>();
+        if (StringUtil.isBlank(csv)) return ids;
+        for (String part : csv.split(",")) {
+            String v = part == null ? null : part.trim();
+            if (v == null || v.isEmpty()) continue;
+            try {
+                ids.add(Long.valueOf(v));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return ids;
     }
 
     /**

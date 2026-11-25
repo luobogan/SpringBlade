@@ -140,6 +140,7 @@ public class FieldDefinitionController {
      * 根据表单ID获取字段列表（前端调用）
      */
     @GetMapping("/by-form/{formId}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "根据表单ID获取字段", description = "根据表单ID获取字段定义列表")
     public R<List<FieldDefinition>> getByFormId(
             @Parameter(description = "表单ID") @PathVariable String formId) {
@@ -158,6 +159,7 @@ public class FieldDefinitionController {
      * <p>数据编辑界面的操作按钮显示、新增/编辑/单元格更新写接口均以此口径为准。</p>
      */
     @GetMapping("/configured/{formId}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "判断字段配置是否完成", description = "至少存在一个可用字段定义")
     public R<Boolean> configured(@PathVariable String formId) {
         try {
@@ -172,6 +174,7 @@ public class FieldDefinitionController {
      * 根据表单ID和是否主表字段获取字段列表
      */
     @GetMapping("/by-form/{formId}/is-main/{isMain}")
+    @PreAuth(WorkflowConstant.HAS_AUTH)
     @Operation(summary = "根据表单ID和isMain获取字段", description = "根据表单ID和是否主表字段获取字段定义列表")
     public R<List<FieldDefinition>> getByFormIdAndIsMain(
             @Parameter(description = "表单ID") @PathVariable String formId,

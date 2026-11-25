@@ -1742,8 +1742,8 @@ public class FormDataServiceImpl implements IFormDataService {
         }
         for (Map<String, Object> row : records) {
             if (row == null) continue;
-            // 用迭代器按实际 key 大小写移除，避免大小写不匹配
-            row.keySet().removeIf(k -> k != null && invisibleCols.contains(k.toLowerCase()));
+            // 主键永远保留：列表行选择、查看/编辑链接都依赖它；字段权限只控制业务列。
+            row.keySet().removeIf(k -> k != null && !"id".equalsIgnoreCase(k) && invisibleCols.contains(k.toLowerCase()));
         }
         log.info("[formmode][AUDIT] 读路径字段脱敏. formId={}, userId={}, maskedCols={}, rows={}",
             formId, userId, invisibleCols, records.size());

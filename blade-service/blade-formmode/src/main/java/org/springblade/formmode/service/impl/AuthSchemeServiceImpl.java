@@ -14,6 +14,7 @@ import org.springblade.formmode.utils.DataScopeRuleUtil;
 import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.AuthSchemeVO;
 import org.springblade.system.datascope.DataScopeValueResolver;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -256,6 +257,19 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         deleteSchemeChildren(schemeId, vo.getFormId(), true, true);
         jdbcTemplate.update("DELETE FROM mode_auth_scheme WHERE tenant_id=? AND id=?", tenant(), schemeId);
         return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
+    public int deleteBatch(List<Long> schemeIds) {
+        if (schemeIds == null || schemeIds.isEmpty()) return 0;
+        int deleted = 0;
+        for (Long schemeId : new LinkedHashSet<>(schemeIds)) {
+            if (schemeId == null) continue;
+            if (delete(schemeId)) deleted++;
+        }
+        return deleted;
     }
 
     private void deleteSchemeChildren(long schemeId, Long formId, boolean includeSchemeMenu, boolean deleteLayouts) {

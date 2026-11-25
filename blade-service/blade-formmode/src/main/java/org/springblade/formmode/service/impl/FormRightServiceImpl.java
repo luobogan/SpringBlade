@@ -794,6 +794,10 @@ public class FormRightServiceImpl implements IFormRightService {
             if (def == null || def.getFieldname() == null || def.getFieldname().isEmpty()) {
                 return; // 字段已删/查不到 → 跳过（与「幽灵字段」处理一致）
             }
+            // 系统列不参与业务字段权限：它们若被标成隐藏，会导致列表响应丢主键、行无法查看/编辑。
+            if (isRuntimeSystemField(def)) {
+                return;
+            }
             // 未命中授权的字段 → visible=false（拒绝）。命中授权的按 rightvalue 派生三态。
             Integer rv = fieldRight.get(fid);
             boolean visible = rv != null && rv >= 1;
@@ -802,6 +806,26 @@ public class FormRightServiceImpl implements IFormRightService {
             result.add(new FieldPermVO(scopeOfField(def), def.getFieldname(), visible, editable, null));
         });
         return result;
+    }
+
+    /** 是否运行期系统列（不参与字段权限，也不能被响应脱敏） */
+    private boolean isRuntimeSystemField(WorkflowBillField def) {
+        if (def == null) return false;
+        return isRuntimeSystemColumn(def.getFieldname()) || isRuntimeSystemColumn(def.getFielddbname());
+    }
+
+    private boolean isRuntimeSystemColumn(String name) {
+        if (name == null || name.trim().isEmpty()) return false;
+        String n = name.trim().toLowerCase();
+        if (n.startsWith("modedata") || n.startsWith("lastmod") || n.startsWith("create_") || n.startsWith("update_")) {
+            return true;
+        }
+        return "id".equals(n)
+            || "main_id".equals(n)
+            || "request_id".equals(n)
+            || "mode_uuid".equals(n)
+            || "is_deleted".equals(n)
+            || "tenant_id".equals(n);
     }
 
     @Override
