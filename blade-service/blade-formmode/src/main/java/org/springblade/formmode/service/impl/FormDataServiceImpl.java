@@ -271,6 +271,20 @@ public class FormDataServiceImpl implements IFormDataService {
         if (isCreate) {
             appendAuditColumn(columns, placeholders, values, tableCols,
                 new String[]{"modedatacreator", "modedatacreater"}, userId);
+            // 建模权限的数据范围可能用 create_user / create_dept 作为权限列：
+            // 新建时必须由服务端按当前登录用户写入，不能依赖前端传值。
+            appendAuditColumn(columns, placeholders, values, tableCols,
+                new String[]{"create_user"}, userId);
+            Long deptId = currentPrimaryDeptId();
+            if (deptId != null) {
+                appendAuditColumn(columns, placeholders, values, tableCols,
+                    new String[]{"create_dept"}, deptId);
+            }
+            Long tenantId = currentTenantId();
+            if (tenantId != null) {
+                appendAuditColumn(columns, placeholders, values, tableCols,
+                    new String[]{"tenant_id"}, tenantId);
+            }
             appendAuditColumn(columns, placeholders, values, tableCols,
                 new String[]{"modedatacreatedate"}, currentDate);
             appendAuditColumn(columns, placeholders, values, tableCols,
@@ -496,7 +510,15 @@ public class FormDataServiceImpl implements IFormDataService {
             if (realModeId == null) {
                 realModeId = formId;
             }
-            if (!formRightService.canEditDataRow(realModeId, creatorId, dataId)) {
+            // 数据范围权限列（如 create_user）可能与 modedatacreator 不一致：
+            // 列表/详情已按 RowScope 放行，写链路也必须按同一行范围判断，
+            // 否则会出现「列表看得到、详情进得去、保存却提示他人数据」。
+            DataScope currentScope = formRightService.resolveDataScope(realModeId);
+            boolean inEditableScope = currentScope != null
+                && currentScope.getEditableRowScopes() != null
+                && !currentScope.getEditableRowScopes().isEmpty()
+                && rowMatchesScopes(currentScope, tableName, dataId, currentScope.getEditableRowScopes());
+            if (!inEditableScope && !formRightService.canEditDataRow(realModeId, creatorId, dataId)) {
                 throw new ServiceException("无权编辑他人创建的数据（仅查看共享）");
             }
             // 数据权限优先级：仅「未配建模权限」时回退套 blade_scope 行规则；
@@ -767,6 +789,41 @@ public class FormDataServiceImpl implements IFormDataService {
         }
     }
 
+    /** 按表名 + 数据ID 判断当前行是否命中指定行范围（写链路没有完整 row map 时使用） */
+    private boolean rowMatchesScopes(DataScope scope, String tableName, Long dataId,
+                                     List<DataScope.RowScope> rowScopes) {
+        if (scope == null || rowScopes == null || rowScopes.isEmpty() || dataId == null) return false;
+        try {
+            for (DataScope.RowScope rs : rowScopes) {
+                String col = rs.getColumn() == null ? "" : rs.getColumn().trim().toLowerCase();
+                if (!SAFE_COLUMN.matcher(col).matches() || rs.getIds() == null || rs.getIds().isEmpty()) continue;
+                List<Object> vals = jdbcTemplate.queryForList(
+                    "SELECT `" + col + "` FROM `" + tableName + "` WHERE id = ?", Object.class, dataId);
+                if (!vals.isEmpty() && vals.get(0) instanceof Number
+                    && rs.getIds().contains(((Number) vals.get(0)).longValue())) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 写链路行范围校验失败. table={}, dataId={}, err={}", tableName, dataId, e.getMessage());
+        }
+        return false;
+    }
+
+    /** 判断当前行是否命中第五步数据范围（与 appendRowScopes 的 SQL 同口径） */
+    private boolean matchesRowScopes(DataScope scope, Map<String, Object> rowLower) {
+        if (scope == null || scope.getRowScopes() == null || scope.getRowScopes().isEmpty()) return false;
+        for (DataScope.RowScope rs : scope.getRowScopes()) {
+            String col = rs.getColumn() == null ? "" : rs.getColumn().trim().toLowerCase();
+            if (!SAFE_COLUMN.matcher(col).matches() || rs.getIds() == null || rs.getIds().isEmpty()) continue;
+            Object actual = rowLower.get(col);
+            if (!(actual instanceof Number)) continue;
+            long value = ((Number) actual).longValue();
+            if (rs.getIds().contains(value)) return true;
+        }
+        return false;
+    }
+
     /**
      * 条件化授权：判断单行是否满足结构化条件（供单条详情读取用，与 SQL 过滤同口径）。
      *
@@ -973,6 +1030,40 @@ public class FormDataServiceImpl implements IFormDataService {
         }
     }
 
+    private Long currentPrimaryDeptId() {
+        try {
+            String deptId = AuthUtil.getUser() == null ? null : AuthUtil.getUser().getDeptId();
+            if (StringUtil.isBlank(deptId)) return null;
+            String first = deptId.split(",")[0].trim();
+            return first.matches("\\d+") ? Long.valueOf(first) : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Long currentTenantId() {
+        try {
+            // 优先取创建人在 blade_user 中的租户，确保业务行归属创建人租户；
+            // 用户查不到时再回退当前请求租户。
+            Long userId = currentUserId();
+            if (userId != null) {
+                List<String> rows = jdbcTemplate.queryForList(
+                    "SELECT tenant_id FROM blade_user WHERE id=? AND is_deleted=0", String.class, userId);
+                if (!rows.isEmpty()) {
+                    String userTenant = rows.get(0);
+                    if (!StringUtil.isBlank(userTenant)) {
+                        String normalized = userTenant.trim();
+                        return normalized.matches("\\d+") ? Long.valueOf(normalized) : null;
+                    }
+                }
+            }
+            String tenantId = Func.toStr(SecureUtil.getTenantId(), "");
+            return tenantId.matches("\\d+") ? Long.valueOf(tenantId) : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     /**
      * 审计列（INSERT 分支）：目标表存在该列（候选名任一命中，大小写不敏感）才追加。
      * 兼容 modedatacreator(ecology 迁移命名) / modedatacreater / lastMod* 等历史差异。
@@ -1066,16 +1157,24 @@ public class FormDataServiceImpl implements IFormDataService {
 
             Map<String, Object> row = rows.get(0);
 
-            // 数据范围：非全量可见且非本人创建 → 检查常规共享 / 矩阵共享，否则无权限
+            // 数据范围：与动态列表 SQL 同口径——先判断第五步配置的行范围
+            // （scopeColumn/scopeValue），再回退本人创建 / 单条共享 / 矩阵共享。
+            // 旧逻辑只按 modedatacreator 判断本人，配置 create_user 等权限列时会出现
+            // 「列表看得到，点详情报数据不存在」。
             if (!scope.isCanViewAll()) {
+                if (scope.isNoData()) {
+                    return null;
+                }
                 Long creatorOfRow = parseRowCreator(row);
+                boolean inRowScope = false;
                 boolean selfCreated = Objects.equals(creatorOfRow, scope.getCreatorId());
                 boolean shared = scope.getSharedDataIds() != null && scope.getSharedDataIds().contains(dataId);
                 Map<String, Object> rowLower = new LinkedHashMap<>();
                 row.forEach((k, v) -> rowLower.put(k.toLowerCase(), v));
-                boolean matrixShared = (!selfCreated && !shared)
+                inRowScope = matchesRowScopes(scope, rowLower);
+                boolean matrixShared = (!inRowScope && !selfCreated && !shared)
                     && matrixRowShared(realModeId, dataId, rowLower, currentUserId());
-                if (!selfCreated && !shared && !matrixShared) {
+                if (!inRowScope && !selfCreated && !shared && !matrixShared) {
                     return null;
                 }
             }
@@ -1140,9 +1239,13 @@ public class FormDataServiceImpl implements IFormDataService {
             StringBuilder dataSql = new StringBuilder("SELECT * FROM `" + mainTableName + "` WHERE 1=1");
             List<Object> queryParams = new ArrayList<>();
 
-            // 数据范围：五档行范围优先；未配置五档时回退本人创建 OR 单条共享
+            // 数据范围：命中方案但未配规则 → 无可见数据；五档行范围优先；
+            // 完全未命中方案时才回退本人创建 OR 单条共享。
             if (!scope.isCanViewAll()) {
-                if (scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()) {
+                if (scope.isNoData()) {
+                    countSql.append(" AND 1=0");
+                    dataSql.append(" AND 1=0");
+                } else if (scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()) {
                     appendRowScopes(scope, tableCols, countSql, dataSql, queryParams);
                 } else {
                     appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
@@ -1244,9 +1347,13 @@ public class FormDataServiceImpl implements IFormDataService {
             StringBuilder dataSql = new StringBuilder("SELECT " + selectCols + " FROM `" + table + "` WHERE 1=1");
             List<Object> queryParams = new ArrayList<>();
 
-            // ① formmode 行级范围：五档行范围优先；未配置时回退本人创建 OR 单条共享
+            // ① formmode 行级范围：命中方案但未配规则 → 无可见数据；五档行范围优先；
+            //    完全未命中方案时才回退本人创建 OR 单条共享。
             if (!scope.isCanViewAll()) {
-                if (scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()) {
+                if (scope.isNoData()) {
+                    countSql.append(" AND 1=0");
+                    dataSql.append(" AND 1=0");
+                } else if (scope.getRowScopes() != null && !scope.getRowScopes().isEmpty()) {
                     appendRowScopes(scope, tableCols, countSql, dataSql, queryParams);
                 } else {
                     appendCreatorAndSharedFilter(scope, tableCols, countSql, dataSql, queryParams);
@@ -1898,6 +2005,14 @@ public class FormDataServiceImpl implements IFormDataService {
         // 审计列：只写目标表存在的那些（兼容 modedatacreator / modedatacreater / lastMod* 多种命名）
         putIfColumn(row, columns, "modedatacreator", userId);
         putIfColumn(row, columns, "modedatacreater", userId);
+        if (create) {
+            // 数据范围权限列服务端写入，防止前端注入，也保证新建行对「本人可见」立即可见。
+            putIfColumn(row, columns, "create_user", userId);
+            Long deptId = currentPrimaryDeptId();
+            if (deptId != null) putIfColumn(row, columns, "create_dept", deptId);
+            Long tenantId = currentTenantId();
+            if (tenantId != null) putIfColumn(row, columns, "tenant_id", tenantId);
+        }
         putIfColumn(row, columns, "modedatacreatedate", today);
         putIfColumn(row, columns, "modedatacreatetime", now);
         putIfColumn(row, columns, "modedatamodifier", userId);

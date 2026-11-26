@@ -784,10 +784,6 @@ public class FormRightServiceImpl implements IFormRightService {
                 modeId, fieldPermFailClosed, e.getMessage(), e);
             return fieldPermFailClosed ? denyAllFieldPerm(modeId) : new ArrayList<>();
         }
-        // 空 = 未配置字段授权：调用方按字段定义默认渲染（与流程侧「无节点权限」一致）
-        if (auths == null || auths.isEmpty()) {
-            return new ArrayList<>();
-        }
 
         // 当前用户授权维度（与 checkRight 同源；Feign 透传 token 时由登录态保证）
         BladeUser user = AuthUtil.getUser();
@@ -801,6 +797,12 @@ public class FormRightServiceImpl implements IFormRightService {
         Set<Long> postIds = subjectResolver.resolvePostIds(uid);
         Set<Long> subcompanyIds = subjectResolver.resolveSubcompanyIds(uid);
         Set<Long> matchedGroupIds = resolveMatchedFieldGroupIds(modeId, tenant, uid, roleIds, deptIds, postIds, subcompanyIds);
+
+        // 用户命中了字段组但一条字段都没勾 → 显式“无可见字段”，不能回退成全部字段。
+        // 完全没有字段组 / 没命中任何字段组，才按未配置处理（空 = 前端默认全量）。
+        if (auths == null || auths.isEmpty()) {
+            return matchedGroupIds.isEmpty() ? new ArrayList<>() : denyAllFieldPerm(modeId);
+        }
         // 命中用户的授权 → fieldId → rightvalue（多条命中取最宽松：可编辑 > 可见）
         Map<Integer, Integer> fieldRight = new LinkedHashMap<>();
         for (ModeFieldAuthorize a : auths) {
@@ -816,8 +818,10 @@ public class FormRightServiceImpl implements IFormRightService {
             if (!hit) continue;
             fieldRight.merge(a.getFieldid(), a.getRightvalue(), Math::max);
         }
-        // 兼容档位（默认）：保持既有语义——只返回命中字段，无命中则返回空（调用方按默认渲染）。
-        if (fieldRight.isEmpty() && !fieldPermFailClosed && !maintainScopeStrict) {
+        // 兼容档位（默认）：仅「没有命中字段组」才按未配置放行；
+        // 命中字段组但组内没有可用字段时，下面会返回全部字段 + hidden，避免显示全量。
+        if (fieldRight.isEmpty() && matchedGroupIds.isEmpty()
+            && !fieldPermFailClosed && !maintainScopeStrict) {
             return new ArrayList<>();
         }
         // 严格档位：模块配置了字段授权但当前用户未命中 → 必须返回全部字段 + hidden，
@@ -1002,6 +1006,13 @@ public class FormRightServiceImpl implements IFormRightService {
         List<ModeDataShareRule> rules = dataScopeService.listRules(modeId).stream()
             .filter(r -> r != null && r.getSchemeId() != null && schemeIds.contains(r.getSchemeId()))
             .collect(Collectors.toList());
+        // 命中权限方案但第四步没配置任何数据范围：不能回退成“本人可见”，
+        // 否则会出现“数据范围没配置却能看到本人创建的数据”。
+        if (rules.isEmpty()) {
+            scope.setNoData(true);
+            scope.setCreatorId(null);
+            return scope;
+        }
         for (ModeDataShareRule r : rules) {
             if (!scopeRuleSubjectHit(r, user, uid, roleIds, deptIds, postIds, branchIds)) continue;
             if (!seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid)) continue;
@@ -1157,6 +1168,9 @@ public class FormRightServiceImpl implements IFormRightService {
     @Override
     public boolean canEditDataRow(Long modeId, Long creatorIdOfRow, Long dataId) {
         DataScope scope = resolveDataScope(modeId);
+        if (scope.isNoData()) {
+            return false;
+        }
         // 创建人天然完全控制；单条共享仅 level>=2（可编辑）允许写
         if (Objects.equals(creatorIdOfRow, scope.getCreatorId())) {
             return true;
@@ -1374,22 +1388,15 @@ public class FormRightServiceImpl implements IFormRightService {
             return deny;
         }
         try {
-            ModeInfo mi = modeInfoMapper.selectById(modeId);
-            Long billId = mi == null ? null : mi.getBillid();
-            if (billId == null) {
+            // 不用 workflowBillFieldMapper.selectByBillId：历史表里 fielddbtype 可能是字符串
+            // （如 'varchar'），实体按数字映射会抛 SQLDataException，导致 fail-closed 被清空。
+            // loadFieldDefs 使用 JdbcTemplate 只取需要的列，兼容历史字段定义。
+            Map<Integer, WorkflowBillField> defs = loadFieldDefs(loadAllFieldIds(modeId));
+            if (defs == null || defs.isEmpty()) {
                 return deny;
             }
-            List<WorkflowBillField> fields = workflowBillFieldMapper.selectByBillId(billId);
-            if (fields == null) {
-                return deny;
-            }
-            String tenant = currentTenant();
-            for (WorkflowBillField f : fields) {
+            for (WorkflowBillField f : defs.values()) {
                 if (f == null || f.getFieldname() == null || f.getFieldname().isEmpty()) {
-                    continue;
-                }
-                // 字段定义也做租户过滤，避免跨租户字段被纳入
-                if (f.getTenantId() != null && !f.getTenantId().equals(tenant)) {
                     continue;
                 }
                 deny.add(new FieldPermVO(scopeOfField(f), f.getFieldname(), false, false, null));

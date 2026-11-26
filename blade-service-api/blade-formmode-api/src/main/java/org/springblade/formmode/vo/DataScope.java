@@ -20,6 +20,9 @@ public class DataScope {
     @Schema(description = "是否可见该模块全部数据（命中共享规则）")
     private boolean canViewAll;
 
+    @Schema(description = "命中方案但未配置任何数据范围规则：显式无可见数据")
+    private boolean noData;
+
     @Schema(description = "仅本人创建可见时的创建人ID（canViewAll=false 时有效）")
     private Long creatorId;
 
