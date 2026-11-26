@@ -18,7 +18,7 @@ public class ModeTreeField implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    @TableId(value = "id", type = IdType.ASSIGN_ID)
+    @TableId(value = "id", type = IdType.AUTO)
     @Schema(description = "分类ID")
     private Long id;
 
