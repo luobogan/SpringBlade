@@ -114,7 +114,14 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
             it.setConditionEnabled(i(x.get("condition_enabled"))); it.setMatrixValueField(s(x.get("matrix_value_field")));
             it.setShowlevel(i(x.get("showlevel"))); it.setShowlevel2(i(x.get("showlevel2")));
             it.setScopeType(i(x.get("scope_type"))); it.setScopeColumn(s(x.get("scope_column"))); it.setScopeValue(s(x.get("scope_value")));
-            it.setRightTypes(DataScopeRuleUtil.parseRightTypes(s(x.get("right_types"))));
+            String rawRightTypes = s(x.get("right_types"));
+            List<Integer> parsedRightTypes = DataScopeRuleUtil.parseRightTypes(rawRightTypes);
+            if (!DataScopeRuleUtil.isExplicitNoRights(rawRightTypes)
+                && Func.isBlank(rawRightTypes) && parsedRightTypes.isEmpty()) {
+                int legacy = i(x.get("type")) == 2 ? 2 : 1;
+                parsedRightTypes = legacy == 2 ? java.util.Arrays.asList(1, 3, 4) : java.util.Arrays.asList(1);
+            }
+            it.setRightTypes(parsedRightTypes);
             List<AuthSchemeVO.ScopeSubjectItem> subjects = new ArrayList<>();
             for (DataScopeRuleUtil.ScopeSubject sub : DataScopeRuleUtil.parseSubjects(s(x.get("scope_subjects")))) {
                 AuthSchemeVO.ScopeSubjectItem si = new AuthSchemeVO.ScopeSubjectItem();

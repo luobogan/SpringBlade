@@ -37,10 +37,18 @@ public final class DataScopeRuleUtil {
         return out;
     }
 
+    /** 0 表示用户显式清空；null/空串表示历史未配置，由运行期补默认权限。 */
+    public static final String NO_RIGHT_TYPES = "0";
+
     public static String joinRightTypes(List<Integer> types) {
-        if (types == null || types.isEmpty()) return null;
+        if (types == null) return null;
+        if (types.isEmpty()) return NO_RIGHT_TYPES;
         Set<Integer> set = new LinkedHashSet<>(types);
         return String.join(",", set.stream().map(String::valueOf).toList());
+    }
+
+    public static boolean isExplicitNoRights(String csv) {
+        return NO_RIGHT_TYPES.equals(csv == null ? null : csv.trim());
     }
 
     public static List<ScopeSubject> parseSubjects(String json) {

@@ -322,8 +322,9 @@ public class FormRightServiceImpl implements IFormRightService {
                 if (r == null || r.getSchemeId() == null || !schemeIds.contains(r.getSchemeId())) continue;
                 if (!scopeRuleSubjectHit(r, user, uid, roleIds, deptIds, postIds, branchIds)) continue;
                 if (!seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid)) continue;
-                List<Integer> rights = DataScopeRuleUtil.parseRightTypes(r.getRightTypes());
-                if (rights.isEmpty()) {
+                String rawRights = r.getRightTypes();
+                List<Integer> rights = DataScopeRuleUtil.parseRightTypes(rawRights);
+                if (rights.isEmpty() && !DataScopeRuleUtil.isExplicitNoRights(rawRights) && StringUtil.isBlank(rawRights)) {
                     int legacy = r.getType() == null ? 1 : r.getType();
                     rights = legacy == 2 ? java.util.Arrays.asList(1, 3, 4) : java.util.Arrays.asList(1);
                 }
@@ -1004,8 +1005,9 @@ public class FormRightServiceImpl implements IFormRightService {
         for (ModeDataShareRule r : rules) {
             if (!scopeRuleSubjectHit(r, user, uid, roleIds, deptIds, postIds, branchIds)) continue;
             if (!seclevelAllows(r.getShowlevel(), r.getShowlevel2(), uid)) continue;
-            List<Integer> rights = DataScopeRuleUtil.parseRightTypes(r.getRightTypes());
-            if (rights.isEmpty()) {
+            String rawRights = r.getRightTypes();
+            List<Integer> rights = DataScopeRuleUtil.parseRightTypes(rawRights);
+            if (rights.isEmpty() && !DataScopeRuleUtil.isExplicitNoRights(rawRights) && StringUtil.isBlank(rawRights)) {
                 int legacy = r.getType() == null ? 1 : r.getType();
                 rights = legacy == 2 ? java.util.Arrays.asList(1, 3, 4) : java.util.Arrays.asList(1);
             }
