@@ -199,6 +199,19 @@ public final class DataScopeValueResolver {
 	 */
 	public static ScopeValue resolve(Integer scopeType, String scopeColumn, String scopeValue,
 									 BladeUser user, DeptDescendantProvider descendantProvider) {
+		return resolve(scopeType, scopeColumn, scopeValue, user, descendantProvider, true);
+	}
+
+	/**
+	 * 解析值域；{@code trustRoleName} 为 false 时不按 token 里的 roleName 放行管理员。
+	 *
+	 * <p>表单建模权限链路外层已按真实角色 ID 判定管理员，token 中可能残留历史
+	 * roleName（如 yjl 的 roleId 为空但 roleName 仍含 administrator），此处再按名称放行
+	 * 会导致所有数据范围被绕过。</p>
+	 */
+	public static ScopeValue resolve(Integer scopeType, String scopeColumn, String scopeValue,
+									 BladeUser user, DeptDescendantProvider descendantProvider,
+									 boolean trustRoleName) {
 		if (user == null) {
 			return ScopeValue.rejected("未获取到当前登录用户");
 		}
@@ -207,7 +220,7 @@ public final class DataScopeValueResolver {
 		if (type == DataScopeEnum.ALL) {
 			return ScopeValue.unrestricted();
 		}
-		if (StringUtil.containsAny(user.getRoleName(), RoleConstant.ADMIN)) {
+		if (trustRoleName && StringUtil.containsAny(user.getRoleName(), RoleConstant.ADMIN)) {
 			return ScopeValue.unrestricted();
 		}
 		if (type == DataScopeEnum.OWN) {

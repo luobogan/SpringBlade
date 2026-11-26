@@ -1027,7 +1027,7 @@ public class FormRightServiceImpl implements IFormRightService {
             }
             DataScopeValueResolver.ScopeValue value = DataScopeValueResolver.resolve(
                 st, r.getScopeColumn(), r.getScopeValue(), user,
-                deptId == null ? null : this::queryChildDeptIds);
+                deptId == null ? null : this::queryChildDeptIds, false);
             if (value.isRejected()) continue;
             if (value.isUnrestricted()) {
                 if (canView) scope.setCanViewAll(true);

@@ -15,6 +15,7 @@ import org.springblade.formmode.utils.RightSubjectResolver;
 import org.springblade.formmode.vo.AuthSchemeVO;
 import org.springblade.system.datascope.DataScopeValueResolver;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,9 +29,32 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     private final JdbcTemplate jdbcTemplate;
     private final RightSubjectResolver subjectResolver;
+    private final StringRedisTemplate redisTemplate;
 
     private static String tenant() {
         return Func.toStr(SecureUtil.getTenantId(), "000000");
+    }
+
+    /**
+     * 保存授权方案后只清理当前模块、当前租户的运行期权限缓存。
+     *
+     * <p>缓存配置对 cacheName 再加了一层 "formmode:" 前缀，实际 key 形如
+     * {@code formmode:formmode:field-perm::000000:{modeId}:{userId}}，因此这里按
+     * 完整前缀匹配删除，避免全量清缓存影响其它表单。</p>
+     */
+    private void clearCurrentModeCache(long modeId) {
+        String tenant = tenant();
+        String prefix = "formmode:formmode:";
+        String suffix = "::" + tenant + ":" + modeId + ":*";
+        String[] names = {"right-check", "field-perm", "user-right-types"};
+        try {
+            for (String name : names) {
+                Set<String> keys = redisTemplate.keys(prefix + name + suffix);
+                if (keys != null && !keys.isEmpty()) redisTemplate.delete(keys);
+            }
+        } catch (Exception e) {
+            log.warn("[formmode] 清理当前模块权限缓存失败. modeId={}, err={}", modeId, e.getMessage());
+        }
     }
 
     private static Set<Long> ids(String csv) {
@@ -174,7 +198,6 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public Long save(ModeAuthSchemeDTO dto) {
         if (dto == null || dto.getSubjectType() == null) throw new IllegalArgumentException("授权对象类型不能为空");
         int type = dto.getSubjectType();
@@ -200,8 +223,8 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
             jdbcTemplate.update("INSERT INTO mode_auth_scheme(id,tenant_id,mode_id,form_id,scheme_name,subject_type,subject_id,subject_name,include_sub,matrix_value_field,showlevel,showlevel2,priority,status,version,create_user,create_time,update_user,update_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,NOW(),?,NOW())",
                 schemeId, t, modeId, formId, name, type, subjectId, dto.getSubjectName(), nvl(dto.getIncludeSub()), dto.getMatrixValueField(), dto.getShowlevel(), dto.getShowlevel2(), dto.getPriority() == null ? 100 : dto.getPriority(), SecureUtil.getUserId(), SecureUtil.getUserId());
         } else {
-            jdbcTemplate.update("UPDATE mode_auth_scheme SET scheme_name=?,subject_name=?,include_sub=?,matrix_value_field=?,showlevel=?,showlevel2=?,priority=?,version=version+1 WHERE id=? AND tenant_id=?",
-                name, dto.getSubjectName(), nvl(dto.getIncludeSub()), dto.getMatrixValueField(), dto.getShowlevel(), dto.getShowlevel2(), dto.getPriority() == null ? 100 : dto.getPriority(), schemeId, t);
+            jdbcTemplate.update("UPDATE mode_auth_scheme SET mode_id=?,form_id=?,scheme_name=?,subject_name=?,include_sub=?,matrix_value_field=?,showlevel=?,showlevel2=?,priority=?,version=version+1 WHERE id=? AND tenant_id=?",
+                modeId, formId, name, dto.getSubjectName(), nvl(dto.getIncludeSub()), dto.getMatrixValueField(), dto.getShowlevel(), dto.getShowlevel2(), dto.getPriority() == null ? 100 : dto.getPriority(), schemeId, t);
         }
 
         // 保存方案时只重建权限数据，不直接删除 Univer 布局。
@@ -276,12 +299,12 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         }
 
         saveMenu(dto, schemeId, formId, type, subjectId);
+        clearCurrentModeCache(modeId);
         return schemeId;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public List<Long> saveBatch(List<ModeAuthSchemeDTO> dtos) {
         if (dtos == null || dtos.isEmpty()) return Collections.emptyList();
         List<Long> ids = new ArrayList<>();

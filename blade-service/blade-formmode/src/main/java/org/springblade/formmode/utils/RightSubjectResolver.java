@@ -106,6 +106,14 @@ public class RightSubjectResolver {
      */
     public boolean isAdmin(BladeUser user) {
         if (user == null) return false;
+        // 历史 token 的 roleId 可能带旧编号前缀，显式 admin 账号按超管处理，
+        // 否则管理员新建目录并配置权限后会被目录权限过滤掉。
+        if (user.getAccount() != null) {
+            String account = user.getAccount().trim().toLowerCase();
+            if ("admin".equals(account) || "senioradmin".equals(account)) {
+                return true;
+            }
+        }
         Set<Long> roleIds = parseRoleIds(user.getRoleId());
         if (roleIds.isEmpty() && user.getUserId() != null) {
             try {

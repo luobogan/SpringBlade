@@ -212,14 +212,28 @@ public class FormDirServiceImpl implements IFormDirService {
                 }
             } else if (scopeType == 5 && !StringUtil.isBlank(auth.getScopeValue())) {
                 String column = StringUtil.isBlank(auth.getScopeColumn()) ? "id" : auth.getScopeColumn().trim();
-                if (!java.util.Arrays.asList("id", "create_user", "status", "form_type", "detail_table_count").contains(column)) continue;
+                if ("detail_table_count".equals(column)) column = "detailtablecount";
+                Set<String> allowedColumns = new HashSet<>(java.util.Arrays.asList(
+                    "id", "form_name", "table_name", "form_type", "description", "status", "module_id",
+                    "create_user", "create_dept", "create_time", "update_user", "update_time",
+                    "tenant_id", "detailtablecount"));
+                if (!allowedColumns.contains(column)) continue;
                 java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+").matcher(auth.getScopeValue());
                 List<Long> values = new ArrayList<>();
                 while (matcher.find()) {
                     Long value = Long.valueOf(matcher.group());
                     if (!values.contains(value)) values.add(value);
                 }
-                if (!values.isEmpty()) {
+                if ("create_dept".equals(column)) {
+                    for (Long deptId : values) {
+                        for (Long id : jdbcTemplate.queryForList(
+                            "SELECT b.id FROM workflow_bill b JOIN blade_user u ON b.create_user=u.id " +
+                                "WHERE b.is_deleted=0 AND u.is_deleted=0 AND u.dept_id=?",
+                            Long.class, deptId)) {
+                            if (id != null && formIds.contains(id)) allowed.add(id);
+                        }
+                    }
+                } else if (!values.isEmpty()) {
                     String marks = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
                     for (Long id : jdbcTemplate.queryForList(
                         "SELECT id FROM workflow_bill WHERE is_deleted=0 AND `" + column + "` IN (" + marks + ")",
