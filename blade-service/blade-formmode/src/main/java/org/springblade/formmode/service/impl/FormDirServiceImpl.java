@@ -65,7 +65,6 @@ public class FormDirServiceImpl implements IFormDirService {
         if (dir.getDsporder() == null) dir.setDsporder(0);
         if (dir.getStatus() == null) dir.setStatus(1);
         if (dir.getId() == null) {
-            dir.setId(System.currentTimeMillis());
             dir.setCreateUser(SecureUtil.getUserId());
             dir.setCreateTime(java.time.LocalDateTime.now());
             modeTreeFieldMapper.insert(dir);
