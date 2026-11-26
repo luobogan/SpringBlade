@@ -16,6 +16,7 @@ import org.springblade.formmode.mapper.ModeInfoMapper;
 import org.springblade.formmode.mapper.ModeTreeFieldMapper;
 import org.springblade.formmode.service.IFormDirService;
 import org.springblade.formmode.utils.RightSubjectResolver;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +36,7 @@ public class FormDirServiceImpl implements IFormDirService {
     private final FormDirAuthMapper formDirAuthMapper;
     private final ModeInfoMapper modeInfoMapper;
     private final org.springblade.formmode.mapper.WorkflowBillMapper workflowBillMapper;
+    private final JdbcTemplate jdbcTemplate;
     private final RightSubjectResolver subjectResolver;
 
     @Override
@@ -97,7 +99,8 @@ public class FormDirServiceImpl implements IFormDirService {
         return formDirAuthMapper.selectList(new LambdaQueryWrapper<FormDirAuth>()
             .eq(FormDirAuth::getTenantId, tenant)
             .eq(FormDirAuth::getDirId, dirId)
-            .orderByAsc(FormDirAuth::getSubjectType, FormDirAuth::getSubjectId, FormDirAuth::getRightType));
+            .orderByAsc(FormDirAuth::getSchemeId, FormDirAuth::getPriority, FormDirAuth::getSubjectType,
+                FormDirAuth::getSubjectId, FormDirAuth::getRightType));
     }
 
     @Override
@@ -117,6 +120,12 @@ public class FormDirServiceImpl implements IFormDirService {
                 auth.setIncludeSub(auth.getIncludeSub() == null ? 0 : auth.getIncludeSub());
                 auth.setScopeType(auth.getScopeType() == null ? 1 : auth.getScopeType());
                 auth.setScopeValue(auth.getScopeValue());
+                auth.setSchemeId(auth.getSchemeId() == null ? auth.getId() : auth.getSchemeId());
+                auth.setSchemeName(StringUtil.isBlank(auth.getSchemeName()) ? ("目录权限方案-" + auth.getSchemeId()) : auth.getSchemeName().trim());
+                auth.setPriority(auth.getPriority() == null ? 100 : auth.getPriority());
+                auth.setShowlevel(auth.getShowlevel());
+                auth.setShowlevel2(auth.getShowlevel2());
+                auth.setScopeColumn(auth.getScopeColumn());
                 auth.setStatus(1);
                 formDirAuthMapper.insert(auth);
             }
@@ -151,7 +160,11 @@ public class FormDirServiceImpl implements IFormDirService {
                 case 5 -> branchIds.contains(oid);
                 default -> false;
             };
-            if (hit) return true;
+            if (!hit) continue;
+            if (a.getShowlevel() != null || a.getShowlevel2() != null) {
+                if (!subjectResolver.seclevelMatches(a.getShowlevel(), a.getShowlevel2(), subjectResolver.resolveSeclevel(uid))) continue;
+            }
+            return true;
         }
         return false;
     }
@@ -185,32 +198,46 @@ public class FormDirServiceImpl implements IFormDirService {
                 default -> false;
             };
             if (!hit) continue;
+            if (auth.getShowlevel() != null || auth.getShowlevel2() != null) {
+                if (!subjectResolver.seclevelMatches(auth.getShowlevel(), auth.getShowlevel2(), subjectResolver.resolveSeclevel(uid))) continue;
+            }
             int scopeType = auth.getScopeType() == null ? 1 : auth.getScopeType();
             if (scopeType == 1) {
                 allowed.addAll(formIds);
             } else if (scopeType == 2) {
                 if (uid != null) {
-                    for (Long id : workflowBillMapper.selectList(new LambdaQueryWrapper<WorkflowBill>()
+                    for (WorkflowBill bill : workflowBillMapper.selectList(new LambdaQueryWrapper<WorkflowBill>()
                         .select(WorkflowBill::getId).eq(WorkflowBill::getCreateUser, uid.intValue()))) {
-                        if (id != null && formIds.contains(id)) allowed.add(id);
+                        if (bill.getId() != null && formIds.contains(bill.getId())) allowed.add(bill.getId());
                     }
                 }
             } else if (scopeType == 5 && !StringUtil.isBlank(auth.getScopeValue())) {
-                for (String id : auth.getScopeValue().split(",")) {
-                    if (!id.trim().matches("\\d+")) continue;
-                    Long formId = Long.valueOf(id.trim());
-                    if (formIds.contains(formId)) allowed.add(formId);
+                String column = StringUtil.isBlank(auth.getScopeColumn()) ? "id" : auth.getScopeColumn().trim();
+                if (!java.util.Arrays.asList("id", "create_user", "status", "form_type", "detail_table_count").contains(column)) continue;
+                java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+").matcher(auth.getScopeValue());
+                List<Long> values = new ArrayList<>();
+                while (matcher.find()) {
+                    Long value = Long.valueOf(matcher.group());
+                    if (!values.contains(value)) values.add(value);
+                }
+                if (!values.isEmpty()) {
+                    String marks = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
+                    for (Long id : jdbcTemplate.queryForList(
+                        "SELECT id FROM workflow_bill WHERE is_deleted=0 AND `" + column + "` IN (" + marks + ")",
+                        Long.class, values.toArray())) {
+                        if (id != null && formIds.contains(id)) allowed.add(id);
+                    }
                 }
             } else if ((scopeType == 3 || scopeType == 4) && uid != null) {
                 Set<Long> scopeDepts = new HashSet<>(deptIds);
                 if (scopeType == 4) deptIds.forEach(d -> scopeDepts.addAll(subjectResolver.descendantDeptIds(d)));
                 if (!scopeDepts.isEmpty()) {
-                    for (Long id : workflowBillMapper.selectList(new LambdaQueryWrapper<WorkflowBill>()
+                    for (WorkflowBill bill : workflowBillMapper.selectList(new LambdaQueryWrapper<WorkflowBill>()
                         .select(WorkflowBill::getId)
                         .inSql(WorkflowBill::getCreateUser,
                             "SELECT id FROM blade_user WHERE is_deleted=0 AND dept_id IN (" +
                                 scopeDepts.stream().map(String::valueOf).reduce((a, b) -> a + "," + b).orElse("0") + ")"))) {
-                        if (id != null && formIds.contains(id)) allowed.add(id);
+                        if (bill.getId() != null && formIds.contains(bill.getId())) allowed.add(bill.getId());
                     }
                 }
             }

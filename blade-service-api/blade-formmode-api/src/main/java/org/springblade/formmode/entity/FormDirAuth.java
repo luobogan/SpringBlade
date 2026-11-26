@@ -46,4 +46,22 @@ public class FormDirAuth implements Serializable {
 
     @Schema(description = "自定义表单ID，逗号分隔")
     private String scopeValue;
+
+    @Schema(description = "方案ID")
+    private Long schemeId;
+
+    @Schema(description = "方案名称")
+    private String schemeName;
+
+    @Schema(description = "优先级")
+    private Integer priority;
+
+    @Schema(description = "密级下限")
+    private Integer showlevel;
+
+    @Schema(description = "密级上限")
+    private Integer showlevel2;
+
+    @Schema(description = "数据范围权限列")
+    private String scopeColumn;
 }
