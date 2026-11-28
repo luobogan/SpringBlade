@@ -15,6 +15,8 @@ public class ModeAuthSchemeDTO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private Long id;
+    /** 内部使用：复制方案时允许同授权对象存在多个方案 */
+    private Boolean allowDuplicate;
     /** 表单ID（workflow_bill.id），必填 */
     private Long formId;
     /** 模块ID；不传则按 formId 反查，无模块时用 formId */
@@ -98,7 +100,7 @@ public class ModeAuthSchemeDTO implements Serializable {
         private String formMenuName;
         /** 上级菜单ID；0=顶层 */
         private Long parentId;
-        /** 路由地址；动态表单固定为 /formmode/formview/{formId} */
+        /** 路由地址；按方案保存时由后端生成 /formmode/formview/{formId}/scheme/{schemeId} */
         private String menuPath;
         /** 菜单图标（blade_menu.source） */
         private String menuIcon;

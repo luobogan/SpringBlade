@@ -24,6 +24,9 @@ public class FieldAuthGroupDTO implements Serializable {
     @Schema(description = "稳定组标识（用于按组隔离Excel设计布局）")
     private String groupKey;
 
+    @Schema(description = "布局来源组标识（组内新增方案时从该组复制已有布局）")
+    private String sourceGroupKey;
+
     @Schema(description = "组内授权对象")
     private List<FieldAuthSubjectDTO> subjects;
 

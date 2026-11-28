@@ -7,6 +7,7 @@ import org.springblade.core.secure.utils.AuthUtil;
 import org.springblade.core.secure.utils.SecureUtil;
 import org.springblade.core.tool.utils.Func;
 import org.springblade.formmode.dto.FieldAuthGroupDTO;
+import org.springblade.formmode.dto.FieldSubjectItemDTO;
 import org.springblade.formmode.dto.MenuShareDTO;
 import org.springblade.formmode.dto.ModeAuthSchemeDTO;
 import org.springblade.formmode.service.IAuthSchemeService;
@@ -33,6 +34,23 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     private static String tenant() {
         return Func.toStr(SecureUtil.getTenantId(), "000000");
+    }
+
+    /** 每个授权方案独立一个菜单项；path 必须唯一，否则前端动态路由与菜单 key 会冲突。 */
+    private static String viewMenuCode(long formId, long schemeId) {
+        return "formdata_view_" + formId + "_scheme_" + schemeId;
+    }
+
+    private static String aaeMenuCode(long formId, long schemeId) {
+        return "formdata_aae_" + formId + "_scheme_" + schemeId;
+    }
+
+    private static String viewMenuPath(long formId, long schemeId) {
+        return "/formmode/formview/" + formId + "/scheme/" + schemeId;
+    }
+
+    private static String aaeMenuPath(long schemeId) {
+        return "/formmode/formview/aae/scheme/" + schemeId;
     }
 
     /**
@@ -160,7 +178,13 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         AuthSchemeVO.MenuItem menu = new AuthSchemeVO.MenuItem();
         List<Map<String, Object>> menuRows = jdbcTemplate.queryForList(
             "SELECT id,parent_id,name,alias,path,source,sort,status FROM blade_menu WHERE tenant_id=? AND code=? AND is_deleted=0 ORDER BY id LIMIT 1",
-            t, "formdata_view_" + v.getFormId());
+            t, viewMenuCode(v.getFormId(), id));
+        // 历史菜单是表单级共享的；尚未单独保存过的方案先回显旧菜单，保存时再迁移到方案专属菜单。
+        if (menuRows.isEmpty()) {
+            menuRows = jdbcTemplate.queryForList(
+                "SELECT id,parent_id,name,alias,path,source,sort,status FROM blade_menu WHERE tenant_id=? AND code=? AND is_deleted=0 ORDER BY id LIMIT 1",
+                t, "formdata_view_" + v.getFormId());
+        }
         if (!menuRows.isEmpty()) {
             Map<String, Object> m = menuRows.get(0);
             menu.setMenuId(n(m.get("id")));
@@ -212,12 +236,21 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         long formId = dto.getFormId();
         long modeId = dto.getModeId() == null ? resolveModeId(formId) : dto.getModeId();
         long schemeId = dto.getId() == null ? max("SELECT COALESCE(MAX(id),0) FROM mode_auth_scheme") + 1 : dto.getId();
+        // 过期页面可能仍持有已删除方案的 id；此时 update 影响 0 行，却继续写菜单，最终报出误导性的路径校验错误。
+        if (dto.getId() != null) {
+            Long exists = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM mode_auth_scheme WHERE tenant_id=? AND id=? AND status=1", Long.class, t, schemeId);
+            if (exists == null || exists == 0) throw new IllegalArgumentException("授权方案不存在或已被删除，请刷新后重试");
+        }
         String name = Func.isBlank(dto.getSchemeName()) ? ("授权方案-" + type + "-" + subjectId) : dto.getSchemeName().trim();
 
-        List<Map<String, Object>> dup = jdbcTemplate.queryForList(
-            "SELECT id FROM mode_auth_scheme WHERE tenant_id=? AND mode_id=? AND subject_type=? AND subject_id=? AND status=1 AND id<>?",
-            t, modeId, type, subjectId, schemeId);
-        if (!dup.isEmpty()) throw new IllegalArgumentException("同一授权对象只能存在一个有效方案");
+        boolean allowDuplicate = Boolean.TRUE.equals(dto.getAllowDuplicate());
+        if (!allowDuplicate) {
+            List<Map<String, Object>> dup = jdbcTemplate.queryForList(
+                "SELECT id FROM mode_auth_scheme WHERE tenant_id=? AND mode_id=? AND subject_type=? AND subject_id=? AND status=1 AND id<>?",
+                t, modeId, type, subjectId, schemeId);
+            if (!dup.isEmpty()) throw new IllegalArgumentException("同一授权对象只能存在一个有效方案");
+        }
 
         if (dto.getId() == null) {
             jdbcTemplate.update("INSERT INTO mode_auth_scheme(id,tenant_id,mode_id,form_id,scheme_name,subject_type,subject_id,subject_name,include_sub,matrix_value_field,showlevel,showlevel2,priority,status,version,create_user,create_time,update_user,update_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,NOW(),?,NOW())",
@@ -227,8 +260,8 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
                 modeId, formId, name, dto.getSubjectName(), nvl(dto.getIncludeSub()), dto.getMatrixValueField(), dto.getShowlevel(), dto.getShowlevel2(), dto.getPriority() == null ? 100 : dto.getPriority(), schemeId, t);
         }
 
-        // 保存方案时只重建权限数据，不直接删除 Univer 布局。
-        // 字段权限变化但 groupKey 不变时，已设计的布局必须保留。
+        // 保存方案时重建权限数据。Univer 布局按 groupKey 绑定，而编辑组内多方案时
+        // 非首个方案的 groupKey 可能变化，必须先记录旧 key，保存后把布局迁移到新 key。
         List<String> oldGroupKeys = jdbcTemplate.queryForList(
             "SELECT group_key FROM mode_field_auth_group WHERE tenant_id=? AND scheme_id=? AND group_key IS NOT NULL AND group_key<>''",
             String.class, t, schemeId);
@@ -273,6 +306,23 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
             }
         }
 
+        // 多方案组新增对象时，新方案会拿到独立 groupKey。若调用方给出布局来源组，
+        // 保存时把已有布局复制过去，避免新对象命中组后没有对应 Univer 布局。
+        if (dto.getFieldGroups() != null) {
+            for (FieldAuthGroupDTO g : dto.getFieldGroups()) {
+                String sourceKey = Func.isBlank(g.getSourceGroupKey()) ? null : g.getSourceGroupKey().trim();
+                String targetKey = Func.isBlank(g.getGroupKey()) ? null : g.getGroupKey().trim();
+                if (Func.isBlank(sourceKey) || Func.isBlank(targetKey) || sourceKey.equals(targetKey)) continue;
+                jdbcTemplate.update(
+                    "INSERT INTO form_layout (tenant_id,form_id,node_key,layout_type,layout_name,layout_json,layout_config,status,create_time,update_time) "
+                        + "SELECT ?,?,?,src.layout_type,src.layout_name,src.layout_json,src.layout_config,src.status,NOW(),NOW() "
+                        + "FROM form_layout src WHERE src.tenant_id=? AND src.node_key=? AND src.form_id=? "
+                        + "AND NOT EXISTS (SELECT 1 FROM form_layout dst WHERE dst.tenant_id=src.tenant_id "
+                        + "AND dst.node_key=? AND dst.form_id=src.form_id AND dst.layout_type=src.layout_type)",
+                    t, formId, targetKey, t, sourceKey, formId, targetKey);
+            }
+        }
+
         if (dto.getDataScopes() != null) {
             long scrollId = max("SELECT COALESCE(MAX(id),0) FROM modedatasharerule");
             for (ModeAuthSchemeDTO.ModeDataShareRuleDTO r : dto.getDataScopes()) {
@@ -285,7 +335,8 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
             }
         }
 
-        // 只删除本次不再使用的旧 groupKey 对应布局；字段配置变化但组不变时布局保留。
+        // groupKey 变化时迁移布局：先按旧 key 找到布局，复制到新 key，再删旧 key。
+        // 这样编辑组内多方案时，即使前端给非首个方案生成了新 key，已设计的布局也不会丢失。
         List<String> newGroupKeys = new ArrayList<>();
         if (dto.getFieldGroups() != null) {
             for (FieldAuthGroupDTO g : dto.getFieldGroups()) {
@@ -293,14 +344,41 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
             }
         }
         for (String oldKey : oldGroupKeys) {
-            if (oldKey != null && !newGroupKeys.contains(oldKey)) {
-                jdbcTemplate.update("DELETE FROM form_layout WHERE tenant_id=? AND node_key=?", t, oldKey);
+            if (oldKey == null || newGroupKeys.contains(oldKey)) continue;
+            String targetKey = newGroupKeys.isEmpty() ? null : newGroupKeys.get(0);
+            if (!Func.isBlank(targetKey)) {
+                jdbcTemplate.update(
+                    "INSERT INTO form_layout (tenant_id,form_id,node_key,layout_type,layout_name,layout_json,layout_config,status,create_time,update_time) "
+                        + "SELECT tenant_id,form_id,?,layout_type,layout_name,layout_json,layout_config,status,NOW(),NOW() "
+                        + "FROM form_layout WHERE tenant_id=? AND node_key=? AND form_id=?",
+                    targetKey, t, oldKey, formId);
             }
+            jdbcTemplate.update("DELETE FROM form_layout WHERE tenant_id=? AND node_key=?", t, oldKey);
         }
 
         saveMenu(dto, schemeId, formId, type, subjectId);
         clearCurrentModeCache(modeId);
         return schemeId;
+    }
+
+    /** 复制方案时找同类型未占用的授权对象；人员优先取 blade_user，其余取字典表 */
+    private Long findFreeSubject(Integer type, Long originalSubjectId, String tenant, long modeId) {
+        String table = null;
+        if (type == 1) table = "blade_role";
+        else if (type == 2) table = "blade_dept";
+        else if (type == 3 || type == 4) table = "blade_user";
+        else if (type == 5) table = "blade_dept";
+        if (table == null) return null;
+        String usedSql = "SELECT subject_id FROM mode_auth_scheme WHERE tenant_id=? AND mode_id=? AND status=1 AND subject_type=? AND subject_id IS NOT NULL";
+        Set<Long> used = new LinkedHashSet<>(jdbcTemplate.queryForList(usedSql, Long.class, tenant, modeId, type));
+        if (originalSubjectId != null) used.remove(originalSubjectId);
+        List<Long> candidates = jdbcTemplate.queryForList(
+            "SELECT id FROM " + table + " WHERE tenant_id=? AND is_deleted=0 ORDER BY id", Long.class, tenant);
+        for (Long id : candidates) {
+            if (id != null && !used.contains(id)) return id;
+        }
+        // 同类型对象全部被占用时，允许复制源对象之外的任意可用对象已被占用的情况失败
+        return null;
     }
 
     @Override
@@ -318,11 +396,98 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
     public Long copy(Long schemeId) {
         AuthSchemeVO src = get(schemeId);
         if (src == null) throw new IllegalArgumentException("授权方案不存在");
+        String t = tenant();
+        long modeId = resolveModeId(src.getFormId());
         ModeAuthSchemeDTO dto = new ModeAuthSchemeDTO();
+        dto.setAllowDuplicate(true);
+        dto.setFormId(src.getFormId());
         dto.setSchemeName(src.getSchemeName() + "（副本）");
-        dto.setSubjectType(src.getSubjectType()); dto.setSubjectId(src.getSubjectId()); dto.setSubjectName(src.getSubjectName());
+        // 数据库唯一索引禁止同租户/模块/授权对象重复；复制方案保留完整配置，
+        // 但复制出的方案必须换一个同类型授权对象。优先取同类型未占用对象；
+        // 找不到时不生成副本，避免静默创建不可用方案。
+        Long copySubjectId = findFreeSubject(src.getSubjectType(), src.getSubjectId(), t, modeId);
+        if (copySubjectId == null) throw new IllegalArgumentException("没有可用的同类型授权对象用于复制，请先复制其它方案或直接新建");
+        dto.setSubjectType(src.getSubjectType()); dto.setSubjectId(copySubjectId); dto.setSubjectName(null);
         dto.setIncludeSub(src.getIncludeSub()); dto.setMatrixValueField(src.getMatrixValueField());
-        dto.setShowlevel(src.getShowlevel()); dto.setShowlevel2(src.getShowlevel2()); dto.setPriority(src.getPriority() + 1);
+        dto.setShowlevel(src.getShowlevel()); dto.setShowlevel2(src.getShowlevel2()); dto.setPriority((src.getPriority() == null ? 100 : src.getPriority()) + 1);
+        if (src.getRights() != null) {
+            List<ModeAuthSchemeDTO.ModeRightInfoDTO> rights = new ArrayList<>();
+            for (AuthSchemeVO.RightItem r : src.getRights()) {
+                if (r == null) continue;
+                ModeAuthSchemeDTO.ModeRightInfoDTO x = new ModeAuthSchemeDTO.ModeRightInfoDTO();
+                x.setRighttype(r.getRighttype()); x.setObjname(r.getObjname()); x.setIncludesub(r.getIncludesub());
+                x.setShowlevel(r.getShowlevel()); x.setShowlevel2(r.getShowlevel2());
+                rights.add(x);
+            }
+            dto.setRights(rights);
+        }
+        if (src.getFieldGroups() != null) {
+            List<FieldAuthGroupDTO> groups = new ArrayList<>();
+            for (AuthSchemeVO.FieldGroupItem g : src.getFieldGroups()) {
+                if (g == null) continue;
+                FieldAuthGroupDTO x = new FieldAuthGroupDTO();
+                x.setGroupKey("scheme-group-" + System.currentTimeMillis() + "-" + g.getId());
+                x.setGroupName(g.getGroupName());
+                if (g.getFields() != null) {
+                    List<FieldSubjectItemDTO> items = new ArrayList<>();
+                    for (AuthSchemeVO.FieldItem f : g.getFields()) {
+                        if (f == null) continue;
+                        FieldSubjectItemDTO item = new FieldSubjectItemDTO();
+                        item.setFieldId(f.getFieldId()); item.setRightvalue(f.getRightvalue());
+                        items.add(item);
+                    }
+                    x.setFields(items);
+                }
+                groups.add(x);
+            }
+            dto.setFieldGroups(groups);
+        }
+        if (src.getDataScopes() != null) {
+            List<ModeAuthSchemeDTO.ModeDataShareRuleDTO> scopes = new ArrayList<>();
+            for (AuthSchemeVO.ScopeItem s : src.getDataScopes()) {
+                if (s == null) continue;
+                ModeAuthSchemeDTO.ModeDataShareRuleDTO x = new ModeAuthSchemeDTO.ModeDataShareRuleDTO();
+                x.setType(s.getType()); x.setObjtype(s.getObjtype()); x.setObjid(s.getObjid());
+                x.setIncludeSub(s.getIncludeSub()); x.setCreatorSelf(s.getCreatorSelf());
+                x.setConditionField(s.getConditionField()); x.setConditionOp(s.getConditionOp());
+                x.setConditionValue(s.getConditionValue()); x.setConditionEnabled(s.getConditionEnabled());
+                x.setMatrixValueField(s.getMatrixValueField()); x.setShowlevel(s.getShowlevel()); x.setShowlevel2(s.getShowlevel2());
+                x.setScopeType(s.getScopeType()); x.setScopeColumn(s.getScopeColumn()); x.setScopeValue(s.getScopeValue());
+                x.setRightTypes(s.getRightTypes());
+                if (s.getSubjects() != null) {
+                    List<ModeAuthSchemeDTO.ScopeSubjectDTO> subjects = new ArrayList<>();
+                    for (AuthSchemeVO.ScopeSubjectItem ss : s.getSubjects()) {
+                        if (ss == null) continue;
+                        ModeAuthSchemeDTO.ScopeSubjectDTO item = new ModeAuthSchemeDTO.ScopeSubjectDTO();
+                        item.setObjtype(ss.getObjtype()); item.setObjid(ss.getObjid()); item.setIncludeSub(ss.getIncludeSub());
+                        subjects.add(item);
+                    }
+                    x.setSubjects(subjects);
+                }
+                scopes.add(x);
+            }
+            dto.setDataScopes(scopes);
+        }
+        if (src.getMenu() != null) {
+            ModeAuthSchemeDTO.MenuSettingDTO menu = new ModeAuthSchemeDTO.MenuSettingDTO();
+            menu.setFormMenuName(src.getMenu().getFormMenuName()); menu.setParentId(src.getMenu().getParentId());
+            menu.setMenuPath(src.getMenu().getMenuPath()); menu.setMenuIcon(src.getMenu().getMenuIcon());
+            menu.setMenuAlias(src.getMenu().getMenuAlias()); menu.setMenuSort(src.getMenu().getMenuSort());
+            menu.setMenuStatus(src.getMenu().getMenuStatus());
+            if (src.getMenu().getMenuShares() != null) {
+                List<MenuShareDTO> shares = new ArrayList<>();
+                for (AuthSchemeVO.MenuShareItem ms : src.getMenu().getMenuShares()) {
+                    if (ms == null) continue;
+                    MenuShareDTO item = new MenuShareDTO();
+                    item.setId(ms.getId()); item.setShareType(ms.getShareType()); item.setShareId(ms.getShareId());
+                    item.setIncludeSub(ms.getIncludeSub()); item.setShowlevel(ms.getShowlevel()); item.setShowlevel2(ms.getShowlevel2());
+                    shares.add(item);
+                }
+                menu.setMenuShares(shares);
+            }
+            menu.setRoleMenuNames(src.getMenu().getRoleMenuNames());
+            dto.setMenu(menu);
+        }
         if (src.getFormManageScope() != null) {
             ModeAuthSchemeDTO.FormManageScopeDTO scope = new ModeAuthSchemeDTO.FormManageScopeDTO();
             scope.setScopeType(src.getFormManageScope().getScopeType());
@@ -334,6 +499,7 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheManager = "formmodeCacheManager", cacheNames = {"formmode:right-check", "formmode:field-perm", "formmode:user-right-types"}, allEntries = true)
     public boolean delete(Long schemeId) {
         AuthSchemeVO vo = get(schemeId);
         if (vo == null) return false;
@@ -374,20 +540,46 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         jdbcTemplate.update("DELETE FROM modedatasharerule WHERE tenant_id=? AND scheme_id=?", t, schemeId);
         jdbcTemplate.update("DELETE FROM blade_menu_share WHERE tenant_id=? AND scheme_id=?", t, schemeId);
         jdbcTemplate.update("DELETE FROM form_manage_auth_scope WHERE tenant_id=? AND scheme_id=?", t, schemeId);
+        if (includeSchemeMenu && formId != null) {
+            // 方案专属菜单按 code 精确识别：绝不能误删 formdata_view_{formId} 等历史共享菜单。
+            String viewCode = viewMenuCode(formId, schemeId);
+            String aaeCode = aaeMenuCode(formId, schemeId);
+            List<Long> menuIds = jdbcTemplate.queryForList(
+                "SELECT id FROM blade_menu WHERE tenant_id=? AND code IN (?,?) ORDER BY category DESC",
+                Long.class, t, viewCode, aaeCode);
+            if (!menuIds.isEmpty()) {
+                String marks = String.join(",", Collections.nCopies(menuIds.size(), "?"));
+                List<Object> refArgs = new ArrayList<Object>(menuIds);
+                List<Object> tenantArgs = new ArrayList<>();
+                tenantArgs.add(t);
+                tenantArgs.addAll(menuIds);
+                jdbcTemplate.update("DELETE FROM blade_role_menu WHERE menu_id IN (" + marks + ")", refArgs.toArray());
+                jdbcTemplate.update("DELETE FROM blade_menu_share WHERE tenant_id=? AND menu_id IN (" + marks + ")", tenantArgs.toArray());
+                jdbcTemplate.update("DELETE FROM blade_scope_data WHERE tenant_id=? AND menu_id IN (" + marks + ")", tenantArgs.toArray());
+                jdbcTemplate.update("DELETE FROM blade_scope_api WHERE menu_id IN (" + marks + ")", refArgs.toArray());
+                jdbcTemplate.update("DELETE FROM blade_top_menu_setting WHERE tenant_id=? AND menu_id IN (" + marks + ")", tenantArgs.toArray());
+                jdbcTemplate.update("DELETE FROM blade_menu WHERE tenant_id=? AND id IN (" + marks + ")", tenantArgs.toArray());
+            }
+        }
     }
 
     private void saveMenu(ModeAuthSchemeDTO dto, long schemeId, long formId, int type, long subjectId) {
         String t = tenant();
         ModeAuthSchemeDTO.MenuSettingDTO setting = dto.getMenu() == null ? new ModeAuthSchemeDTO.MenuSettingDTO() : dto.getMenu();
-        String code = "formdata_view_" + formId;
+        String code = viewMenuCode(formId, schemeId);
+        String aaeCode = aaeMenuCode(formId, schemeId);
         long viewMenuId = ensureMenuId(code, t);
         long parentMenuId = setting.getParentId() == null ? 0L : setting.getParentId();
         validateMenuParent(viewMenuId, parentMenuId, t);
 
         String menuName = Func.isBlank(setting.getFormMenuName()) ? "表单数据" : setting.getFormMenuName().trim();
-        String defaultPath = "/formmode/formview/" + formId;
-        if (Func.isNotBlank(setting.getMenuPath()) && !defaultPath.equals(setting.getMenuPath().trim())) {
-            throw new IllegalArgumentException("表单数据菜单路径必须为 " + defaultPath);
+        String defaultPath = viewMenuPath(formId, schemeId);
+        String legacyPath = "/formmode/formview/" + formId;
+        String requestedPath = Func.isBlank(setting.getMenuPath()) ? null : setting.getMenuPath().trim();
+        // 菜单路径由后端按 formId/schemeId 唯一确定，客户端（尤其是新增方案）无法预知新 schemeId；
+        // 旧请求里残留的 /scheme/{旧ID} 只记日志，不再拒绝保存。
+        if (Func.isNotBlank(requestedPath) && !defaultPath.equals(requestedPath) && !legacyPath.equals(requestedPath)) {
+            log.warn("[AuthScheme#saveMenu] 忽略客户端旧 menuPath={}，使用 {} formId={} schemeId={}", requestedPath, defaultPath, formId, schemeId);
         }
         String menuPath = defaultPath;
         String menuIcon = Func.isBlank(setting.getMenuIcon()) ? "file-text" : setting.getMenuIcon().trim();
@@ -396,9 +588,9 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
         int menuStatus = setting.getMenuStatus() == null ? 1 : setting.getMenuStatus();
 
         parentMenuId = ensureMenu(code, menuPath, menuName, menuAlias, menuIcon, parentMenuId, 1, 0, menuSort, menuStatus, t);
-        ensureMenu("formdata_aae_" + formId, "/formmode/formview/aae", "表单新增编辑页", "表单新增编辑页",
+        ensureMenu(aaeCode, aaeMenuPath(schemeId), "表单新增编辑页", "表单新增编辑页",
             "edit", parentMenuId, 2, 1, menuSort + 1, menuStatus, t);
-        List<Long> menuIds = Arrays.asList(parentMenuId, ensureMenuId("formdata_aae_" + formId, t));
+        List<Long> menuIds = Arrays.asList(parentMenuId, ensureMenuId(aaeCode, t));
         int shareType = menuShareType(type);
         jdbcTemplate.update("DELETE FROM blade_menu_share WHERE tenant_id=? AND scheme_id=?", t, schemeId);
         long shareId = max("SELECT COALESCE(MAX(id),0) FROM blade_menu_share");
@@ -446,8 +638,14 @@ public class AuthSchemeServiceImpl implements IAuthSchemeService {
     }
 
     private long ensureMenuId(String code, String t) {
-        List<Long> ids = jdbcTemplate.queryForList("SELECT id FROM blade_menu WHERE tenant_id=? AND code=? AND is_deleted=0", Long.class, t, code);
-        if (!ids.isEmpty()) return ids.get(0);
+        // 历史数据里可能有同 code 的软删除行；复活它而不是再插一条，避免 code 重复。
+        List<Long> ids = jdbcTemplate.queryForList(
+            "SELECT id FROM blade_menu WHERE tenant_id=? AND code=? ORDER BY is_deleted ASC,id ASC LIMIT 1", Long.class, t, code);
+        if (!ids.isEmpty()) {
+            long id = ids.get(0);
+            jdbcTemplate.update("UPDATE blade_menu SET is_deleted=0 WHERE tenant_id=? AND id=?", t, id);
+            return id;
+        }
         long id = max("SELECT COALESCE(MAX(id),0) FROM blade_menu") + 1;
         jdbcTemplate.update("INSERT INTO blade_menu(id,tenant_id,parent_id,code,name,path,category,action,is_open,is_component,source,sort,is_deleted) VALUES (?,?,0,?,?,?,?,0,1,?,'api',5,0)",
             id, t, code, code, "/", categoryPlaceholder(code), componentPlaceholder(code));
